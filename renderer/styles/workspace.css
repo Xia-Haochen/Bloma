@@ -29,7 +29,7 @@
   background: linear-gradient(112deg, #edf2eb, #f3f3ef 50%, #f1eef5);
   box-shadow: 0 18px 55px -35px #45334e38;
 }
-.workspace-topbar { margin: 8px 12px 9px; border: 1px solid #ffffffc9; border-radius: 12px; box-shadow: 0 4px 12px #56614e0a, inset 0 1px 0 #ffffffed; display: grid; grid-template-columns: auto minmax(230px, 1fr) auto; align-items: center; gap: 20px; min-width: 0; padding: 0 17px; background: #ffffffc9; }
+.workspace-topbar { margin: 8px 12px 9px; border: 1px solid #ffffffc9; border-radius: 12px; box-shadow: 0 4px 12px #56614e0a, inset 0 1px 0 #ffffffed; display: grid; grid-template-columns: minmax(0, 1fr) clamp(230px, calc(100vw - 500px), 490px) minmax(0, 1fr); align-items: center; gap: 20px; min-width: 0; padding: 0 17px; background: #ffffffc9; }
 .workspace-theatre .theatre-header[data-compact="true"] { display: flex; flex-direction: row; align-items: center; flex-wrap: nowrap; padding: 0; gap: 13px; }
 .workspace-theatre .workspace-home { display: block; padding: 0; background: transparent; cursor: pointer; }
 .workspace-theatre .studio-brand { padding: 0; gap: 6px; font: 29px Georgia, 'Times New Roman', serif; color: #424d3d; }
@@ -39,7 +39,7 @@
 .workspace-theatre .theatre-project h1 { margin: 0; font-size: 13px; line-height: 1.5; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .workspace-theatre .theatre-mode { padding: 0; font-size: 10px; white-space: nowrap; }
 .workspace-theatre .theatre-header > .theatre-tool { padding: 4px; margin: 0; }
-.workspace-project-tools { display: flex; gap: 1px; align-items: center; }
+.workspace-project-tools { justify-self: end; display: flex; gap: 1px; align-items: center; }
 .workspace-project-tools .theatre-tool { min-width: 29px; min-height: 29px; padding: 6px; }
 .workspace-theatre .studio-body { display: grid; grid-template-columns: minmax(0, 1fr) 0px minmax(280px, var(--studio-conversation-width)); grid-template-rows: minmax(0, 1fr); padding: 0; column-gap: 0; min-height: 0; overflow: hidden; }
 .workspace-theatre .theatre-stage { grid-column: 1; grid-row: 1; min-width: 0; min-height: 0; padding: 14px 16px 0; gap: 8px; overflow: hidden; background: linear-gradient(#f1f4ee, #f7f7f3); }
@@ -217,7 +217,7 @@
 .workspace-theatre .workspace-topbar .theatre-project { padding: 0; border: 0; width: 20px; }
 .workspace-theatre .workspace-topbar .theatre-project h1, .workspace-theatre .theatre-mode, .workspace-theatre .theatre-connection { display: none; }
 .workspace-theatre .workspace-topbar .studio-brand > svg { display: none; }
-.workspace-theatre .workspace-progress { justify-self: start; width: min(100%, 490px); }
+.workspace-theatre .workspace-progress { justify-self: center; width: 100%; }
 .workspace-theatre .workspace-project-tools .theatre-tool { font-size: 11px; gap: 5px; }
 .workspace-theatre .workspace-project-tools .theatre-tool svg { width: 13px; }
 .workspace-theatre .studio-conversation-resizer { width: 0; overflow: visible; z-index: 20; background: transparent; }
