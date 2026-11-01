@@ -125,17 +125,38 @@ export const WorkspaceShell: React.FC<WorkspaceShellProps> = (props) => {
     setLocalPanel(name === 'versions' || name === 'materials' || name === 'records' ? localPanel === name ? null : name : null)
     if (name === 'versions') setTimelineExpanded(true)
   }
+  const toolTrigger = React.useRef<HTMLElement | null>(null)
+  const panelOpen = documents || collaboration || Boolean(localPanel)
+  const wasPanelOpen = React.useRef(false)
+  React.useEffect(() => {
+    if (panelOpen && !wasPanelOpen.current) toolTrigger.current = document.activeElement as HTMLElement
+    if (!panelOpen && wasPanelOpen.current) toolTrigger.current?.focus()
+    wasPanelOpen.current = panelOpen
+  }, [panelOpen])
+  React.useEffect(() => {
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented || document.querySelector('[aria-modal="true"], .workspace-progress-popover')) return
+      if (panelOpen) {
+        event.preventDefault(); event.stopImmediatePropagation()
+        setDocuments(false); setCollaboration(false); setLocalPanel(null)
+      } else if (focused) {
+        event.preventDefault(); event.stopImmediatePropagation(); setFocused(false)
+        previewTarget.current?.querySelector<HTMLButtonElement>('.studio-control')?.focus()
+      }
+    }
+    document.addEventListener('keydown', escape)
+    return () => document.removeEventListener('keydown', escape)
+  }, [panelOpen, focused, setDocuments, setCollaboration])
   return (
     <div className="workspace-theatre" data-ai-id="workspace-theatre" data-mode={project?.mode ?? 'quick'} data-focused={focused} data-has-preview={Boolean(props.deliveryPanel || props.previewUrl || scopePending)} data-view={mobileView} data-resizing-conversation={conversation.resizing} style={{ '--studio-conversation-width': `${conversation.width}px` } as React.CSSProperties}>
       <div className="workspace-topbar">
         <WorkspaceHeader compact onAllProjects={props.onAllProjects} onOpenSettings={props.onOpenSettings} onUpgrade={props.onUpgrade} onHome={props.onHome} />
-        {project?.workflow_retirement&&<div role="status" style={{padding:'8px 16px',fontSize:'var(--font-size-sm)'}}>{project.workflow_retirement}</div>}
         <WorkspaceProgress steps={progress} liveDetail={liveDetail} onRecords={() => openTool('records')} />
         <nav className="workspace-project-tools" aria-label="项目资料">
-          <button type="button" className="theatre-tool" data-ai-id="docs-button" aria-label="文档" aria-pressed={documents} onClick={() => openTool('documents')}><FileText size={15} /></button>
-          <button type="button" className="theatre-tool" data-ai-id="materials-button" aria-label="材料" aria-pressed={localPanel === 'materials'} onClick={() => openTool('materials')}><Layers size={15} /></button>
-          <button type="button" className="theatre-tool" data-ai-id="versions-button" aria-label="版本" aria-pressed={localPanel === 'versions'} onClick={() => openTool('versions')}><History size={15} /></button>
-          <button type="button" className="theatre-tool" data-ai-id="collaboration-button" aria-label="协作" aria-pressed={collaboration} onClick={() => openTool('collaboration')}><Users size={15} /></button>
+          <button type="button" className="theatre-tool" data-ai-id="docs-button" aria-label="文档" title="文档" aria-pressed={documents} onClick={() => openTool('documents')}><FileText size={15} /></button>
+          <button type="button" className="theatre-tool" data-ai-id="materials-button" aria-label="材料" title="材料" aria-pressed={localPanel === 'materials'} onClick={() => openTool('materials')}><Layers size={15} /></button>
+          <button type="button" className="theatre-tool" data-ai-id="versions-button" aria-label="版本" title="版本" aria-pressed={localPanel === 'versions'} onClick={() => openTool('versions')}><History size={15} /></button>
+          <button type="button" className="theatre-tool" data-ai-id="collaboration-button" aria-label="协作" title="协作" aria-pressed={collaboration} onClick={() => openTool('collaboration')}><Users size={15} /></button>
         </nav>
       </div>
       <div className="studio-body" ref={conversation.containerRef}>
@@ -163,7 +184,7 @@ export const WorkspaceShell: React.FC<WorkspaceShellProps> = (props) => {
           onMarkComplete={props.onMarkComplete}
           />}
           </section>
-          {(documents || collaboration || localPanel) && <aside className="theatre-sidepanel" aria-label="项目资料面板">
+          {<aside hidden={!panelOpen} className="theatre-sidepanel" aria-label="项目资料面板">
             <DocumentPanel embedded />
             <CollaborationPanel embedded />
             {localPanel && <><div className="theatre-panel-heading"><h3>{localPanel === 'versions' ? '版本与回看' : localPanel === 'records' ? '工作记录' : '参考材料'}</h3><button type="button" className="theatre-tool" aria-label="关闭项目工具" onClick={() => setLocalPanel(null)}><X /></button></div>{localPanel === 'versions' ? <TimelinePanel onRollback={props.onRollback} /> : localPanel === 'records' ? <><DesktopStageBar /><WorkRecords />{artifacts.projectId === project?.project_id && <DesktopArtifactStrip />}</> : <HistoryAttachments onClose={() => setLocalPanel(null)} />}</>}
@@ -188,6 +209,7 @@ export const WorkspaceShell: React.FC<WorkspaceShellProps> = (props) => {
           onOpenSettings={props.onOpenSettings}
           onForkFromMessage={props.onForkFromMessage}
         />
+        {project?.workflow_retirement && <p className="studio-notice" role="status">{project.workflow_retirement}</p>}
         {props.notice && <p className="studio-notice" role="status">{props.notice}</p>}
       </section>
 

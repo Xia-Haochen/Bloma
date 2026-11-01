@@ -7,14 +7,14 @@ import { randomUUID } from 'node:crypto'
 import assert from 'node:assert/strict'
 
 const root = resolve('.')
-const folder = join(root, 'run-artifacts', 'workspace-ui-20261026')
+const folder = join(root, 'run-artifacts', process.env.BLOMA_UI_EVIDENCE || 'workspace-ui-20261101')
 mkdirSync(folder, { recursive: true })
 const home = mkdtempSync(join(tmpdir(), 'blui-'))
 const pid = randomUUID(), sid = randomUUID(), now = new Date().toISOString()
 const projectRoot = join(home, 'agent-workspaces', 'default-software-builder', 'generated-projects', pid)
 mkdirSync(join(projectRoot, '00_UX'), { recursive: true })
 writeFileSync(join(projectRoot, '00_UX', 'confirmed.html'), `<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;width:1280px;height:800px;box-sizing:border-box;font:18px/1.8 'Segoe UI',sans-serif;color:#525849;background:#fff}header{padding:20px 32px;border-bottom:1px solid #e4e9df}main{display:grid;grid-template-columns:190px 260px 1fr;height:700px}aside{padding:30px;background:#f3f5ef;border-right:1px solid #e5eadf}article{padding:35px}input,button{font:inherit;padding:8px;border:1px solid #d9e0d1;border-radius:6px}footer{height:20px;background:#78956f}h1{font-size:27px}</style></head><body><header>课程笔记 · 离线固定界面样例</header><main><aside>我的课程<br>组成原理<br>操作系统</aside><aside>最近笔记<br>虚拟存储器<br>指令流水线</aside><article><h1>虚拟存储器与地址转换</h1><p>这是平台布局验收固定草图，不是新模型产物。</p><input aria-label="草图输入" value="草图状态"><button id="count" onclick="this.textContent=++window.count">0</button></article></main><footer id="bottom"></footer><script>window.count=0;window.__fixtureReady=true</script></body></html>`)
-writeFileSync(join(home, 'projects.json'), JSON.stringify({ version: 1, projects: [{ project_id: pid, workspace_slug: 'default-software-builder', name: '课程笔记 · 离线验收', mode: 'quick', template_type: 'desktop_tool', status: 'active', current_stage: 'blocked_for_user_decision', desktop_phase: 'desktop-verify', ux_confirmation: { prd_fingerprint: 'fixture', design_hash: 'fixture', html_hash: 'fixture' }, desktop_blocked: { reason: 'user-stop', at: now }, root_path: projectRoot, last_session_id: sid, created_at: now, updated_at: now }] }))
+writeFileSync(join(home, 'projects.json'), JSON.stringify({ version: 1, projects: [{ project_id: pid, workspace_slug: 'default-software-builder', name: '课程笔记 · 离线验收', mode: 'quick', workflow_version: 'software-v1', template_type: 'desktop_tool', status: 'active', current_stage: 'blocked_for_user_decision', desktop_phase: 'desktop-verify', ux_confirmation: { prd_fingerprint: 'fixture', design_hash: 'fixture', html_hash: 'fixture' }, desktop_blocked: { reason: 'user-stop', at: now }, root_path: projectRoot, last_session_id: sid, created_at: now, updated_at: now }] }))
 mkdirSync(join(home, 'agent-sessions'), { recursive: true })
 writeFileSync(join(home, 'bloma-agent-sessions.json'), JSON.stringify({ version: 1, sessions: [{ session_id: sid, project_id: pid, status: 'completed', jsonl_path: join(home, 'agent-sessions', sid + '.jsonl'), created_at: now, updated_at: now }] }))
 const messages = [
@@ -33,16 +33,16 @@ try {
   const resize = async (width, height) => {
     await app.evaluate(({ BrowserWindow, screen }, [width, height]) => {
       const window = BrowserWindow.getAllWindows()[0]
-      window.setMinimumSize(200, 200)
+      window.unmaximize(); window.setMinimumSize(200, 200)
       window.webContents.setBackgroundThrottling(false)
       const edge = Math.max(...screen.getAllDisplays().map(display => display.bounds.x + display.bounds.width))
-      window.setPosition(edge + 1000, 0); window.setContentSize(width, height); window.showInactive()
+      window.setPosition(20, 20); window.setContentSize(width, height); window.showInactive()
     }, [width, height])
     // Windows can apply the non-client frame/DPI adjustment after the native call.
     // Correct against the actual renderer viewport rather than claiming requested sizes.
     let requestedWidth = width, requestedHeight = height
-    for (let attempt = 0; attempt < 4; attempt++) {
-      await page.waitForTimeout(140)
+    for (let attempt = 0; attempt < 8; attempt++) {
+      await page.waitForTimeout(350)
       const [actualWidth, actualHeight] = await page.evaluate(() => [innerWidth, innerHeight])
       if (Math.abs(actualWidth - width) <= 1 && Math.abs(actualHeight - height) <= 1) return
       requestedWidth += width - actualWidth; requestedHeight += height - actualHeight
@@ -95,7 +95,13 @@ try {
   await trigger.click(); await page.getByRole('dialog').getByRole('button', { name: '工作记录' }).click(); assert.equal(await page.getByRole('dialog').count(), 0)
   await page.getByRole('button', { name: '关闭项目工具' }).click()
   await page.getByRole('button', { name: '文档', exact: true }).click(); assert.equal(await page.getByRole('complementary', { name: '项目资料面板' }).isVisible(), true)
-  await page.getByRole('button', { name: '文档', exact: true }).click()
+  await page.keyboard.press('Escape'); assert.equal(await page.getByRole('complementary', { name: '项目资料面板' }).isVisible(), false)
+  await page.locator('[data-ai-id="progress-requirements"]').click()
+  await page.locator('[data-ai-id="progress-design"]').hover()
+  assert.equal(await page.getByRole('dialog', { name: '需求阶段详情' }).isVisible(), true)
+  await page.locator('[data-ai-id="progress-design"]').click()
+  assert.equal(await page.getByRole('dialog', { name: '界面阶段详情' }).isVisible(), true)
+  await page.keyboard.press('Escape')
   for (const stage of ['requirements', 'design', 'build', 'verify', 'deliver']) {
     await page.locator(`[data-ai-id="progress-${stage}"]`).hover()
     await page.getByRole('dialog').getByRole('img').evaluate(image => image.decode())
