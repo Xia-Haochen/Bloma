@@ -115,8 +115,25 @@ export const DeliveryPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
     void refresh()
   }
 
+  const inspectionRoot = React.useRef<HTMLDivElement>(null)
+  React.useEffect(() => {
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented || document.querySelector('[aria-modal="true"], .workspace-progress-popover')) return
+      const opened = inspectionRoot.current?.querySelector<HTMLDetailsElement>('details.workspace-delivery-inspector[open]')
+      if (opened) { event.preventDefault(); event.stopImmediatePropagation(); opened.open = false; opened.querySelector<HTMLElement>('summary')?.focus(); setShowCorrection(false) }
+    }
+    document.addEventListener('keydown', escape)
+    return () => document.removeEventListener('keydown', escape)
+  }, [])
+  const inspect = (event: React.MouseEvent<HTMLElement>) => {
+    inspectionRoot.current?.querySelectorAll<HTMLDetailsElement>('details.workspace-delivery-inspector[open]').forEach(details => { if (details !== event.currentTarget.parentElement) details.open = false })
+  }
+  const hasCanvas = Boolean(embedded && (liveUrl || data?.trial?.state === 'running' && data.trial.url || project?.current_stage !== 'completed' && data?.confirmed_sketch_url))
+  const Inspection = hasCanvas ? 'details' : 'div'
   return (
     <div
+      data-has-canvas={hasCanvas}
+      ref={inspectionRoot}
       data-ai-id="delivery-panel"
       className={embedded ? 'theatre-delivery-window' : undefined}
       style={{
@@ -130,10 +147,11 @@ export const DeliveryPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
       }}
     >
       <div className="theatre-program-bar" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderBottom: '1px solid var(--color-border)' }}>
-        {embedded && <LayoutTemplate size={14} />}
         <span style={{ fontSize: 'var(--font-size-sm)', fontWeight: 500 }}>{project?.name ?? '你的软件'}</span>
         <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>{data?.status_view?.goal.label ?? (project && longtermStatusLabel(project) || (liveUrl ? '程序试用 · 测试数据 · 尚未交付' : project?.current_stage === 'completed' ? '可以使用' : project?.desktop_blocked && !running ? '制作暂时停止' : desktopPhase ? '正在制作' : '等待想法成形'))}</span>
         <div style={{ flex: 1 }} />
+        {hasCanvas && data?.can_trial && <button type="button" className="workspace-trial-button" disabled={loading} onClick={() => void onLaunch(false, undefined, false, true)}>独立试用</button>}
+        {hasCanvas && !data?.can_trial && data?.can_launch && <button type="button" className="workspace-trial-button" disabled={loading} onClick={() => void onLaunch()}>启动程序</button>}
         {(project?.current_stage==='completed'||data?.trial?.release_id)&&data?.supports_point_selection!==false&&<button type="button" data-ai-id="delivery-point-correction" className="theatre-tool"
           disabled={loading||!data?.launch.parse_ok&&!data?.point_selection_version} aria-expanded={showCorrection} onClick={()=>setShowCorrection(value=>!value)}>{showCorrection?'收起点选面板':'点选修改'}</button>}
         <button
@@ -146,6 +164,10 @@ export const DeliveryPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
         </button>
       </div>
 
+      <Inspection className={hasCanvas ? 'workspace-delivery-inspector workspace-status-inspector' : undefined}>
+      {hasCanvas && <summary onClick={inspect}>{data?.status_view?.execution.label ?? '当前状态'} · 检查与启动</summary>}
+      <div className={hasCanvas ? 'workspace-inspection-content' : undefined}>
+      {hasCanvas && <button type="button" className="theatre-tool" onClick={event => { const details = event.currentTarget.closest('details')!; details.open = false; details.querySelector('summary')?.focus() }}>关闭检查详情</button>}
       {data?.status_view && <div role="status" aria-label="执行与交付状态" style={{display:'flex',gap:12,flexWrap:'wrap',padding:'7px 14px',fontSize:'var(--font-size-xs)',color:'var(--color-text-muted)',borderBottom:'1px solid var(--line-2)'}}>
         <span title={data.status_view.execution.reason}>执行：{data.status_view.execution.label}</span>
         <span>检查：{data.status_view.verification.label}</span>
@@ -204,9 +226,14 @@ export const DeliveryPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
         <span>测试数据 · {data.trial?.qualification==='host_verified_test_data'?'已有宿主检查，待阶段确认':'尚未验收'}{data.trial?.state==='running'?' · 自动验收期间可继续使用':''}{data.trial ? ` · 版本 ${data.trial.release_id.slice(0,12)}` : ''}</span>
       </div>}
       {data?.trial?.state==='exited'&&data.trial.last_output!==undefined&&<pre className="software-command-trial" aria-label="命令试用输出">{data.trial.last_output||'命令运行完成，无输出。'}</pre>}
+      </div></Inspection>
       {embedded && data?.trial?.state === 'running' && data.trial.url && <iframe key={data.trial.release_id} title="独立程序试用（测试数据，尚未验收）" src={data.trial.url} sandbox="allow-scripts allow-forms allow-same-origin allow-downloads" style={{ flex: 1, width: '100%', minHeight: 360, border: 0 }} />}
       {embedded && data?.trial?.state !== 'running' && liveUrl && <><span>开发调试画面 · 可能随调试关闭</span><iframe title="开发调试画面" src={liveUrl} sandbox="allow-scripts allow-forms allow-same-origin allow-downloads" style={{ flex: 1, width: '100%', minHeight: 360, border: 0 }} /></>}
       {embedded && !liveUrl && data?.trial?.state !== 'running' && project?.current_stage !== 'completed' && data?.confirmed_sketch_url && <div className="delivery-confirmed-sketch"><SketchViewport src={data.confirmed_sketch_url} readOnly confirmed /></div>}
+      <Inspection className={hasCanvas ? 'workspace-delivery-inspector workspace-maintenance-inspector' : undefined} open={hasCanvas && showCorrection ? true : undefined}>
+      {hasCanvas && <summary onClick={inspect}>维护与文件</summary>}
+      <div className={hasCanvas ? 'workspace-inspection-content' : undefined}>
+      {hasCanvas && <button type="button" className="theatre-tool" onClick={event => { const details = event.currentTarget.closest('details')!; details.open = false; setShowCorrection(false); details.querySelector('summary')?.focus() }}>关闭维护详情</button>}
       <div className="theatre-delivery-body" data-has-sketch={Boolean(embedded && project?.current_stage !== 'completed' && data?.confirmed_sketch_url)} style={{ flex: data?.trial?.state === 'running' ? '0 0 auto' : 1, overflowY: 'auto', padding: '10px 14px', minHeight: 0 }}>
         {project?.mode==='longterm'&&project.workflow_version==='software-v1'&&projectId&&<LongtermProjectPanel key={projectId} projectId={projectId} state={data?.longterm} error={data?.longterm_error} archived={project.status==='archived'||project.status==='abandoned'} refresh={()=>void refresh()} />}
         <SoftwareSuggestions key={projectId} value={data?.improvement_suggestions} refresh={()=>void refresh()} />
@@ -256,6 +283,7 @@ export const DeliveryPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
           </>
         )}
       </div>
+      </div></Inspection>
     </div>
   )
 }

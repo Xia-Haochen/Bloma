@@ -19,9 +19,13 @@ mkdirSync(join(home, 'agent-sessions'), { recursive: true })
 writeFileSync(join(home, 'bloma-agent-sessions.json'), JSON.stringify({ version: 1, sessions: [{ session_id: sid, project_id: pid, status: 'completed', jsonl_path: join(home, 'agent-sessions', sid + '.jsonl'), created_at: now, updated_at: now }] }))
 const messages = [
   { id: 'human-fixture', role: 'user', origin: 'human', content: [{ type: 'text', text: '想把课程笔记整理清楚。' }], timestamp: 1 },
-  { id: 'reply-fixture', role: 'assistant', origin: 'agent', content: [{ type: 'text', text: '第一版界面已准备好。可以先看整体，细节放大再看。\n\n当前修改尚未完成验证。' }], timestamp: 2 },
+  { id: 'reply-fixture', role: 'assistant', origin: 'agent', content: [{ type: 'text', text: process.env.BLOMA_UI_LONG_REPLY ? '长消息完整正文。\n\n'.repeat(100) : '第一版界面已准备好。可以先看整体，细节放大再看。\n\n当前修改尚未完成验证。' }], timestamp: 2 },
 ]
 writeFileSync(join(home, 'agent-sessions', sid + '.jsonl'), messages.map(message => JSON.stringify(message)).join('\n') + '\n')
+const documentsDir = join(home, 'agent-workspaces', 'default-software-builder', 'documents', pid)
+mkdirSync(documentsDir, { recursive: true })
+writeFileSync(join(documentsDir, 'task.md'), '# 离线验收文档\n\n这是实际读取的本地文档。\n\n' + '长内容用于滚动检查。\n\n'.repeat(80))
+writeFileSync(join(documentsDir, '.document-manifest.json'), JSON.stringify({ documents: [{ document_id: 'task', type: 'prd', path: join(documentsDir, 'task.md'), status: 'synced' }] }))
 const env = { ...process.env, PROMA_HOME: home, BLOMA_DESKTOP_DISPATCH: '0' }
 delete env.ELECTRON_RUN_AS_NODE; delete env.VITE_DEV_SERVER_URL
 const report = { home, projectId: pid, checks: [], layouts: [], errors: [], scope: 'offline fixed project and fixture IPC stream events; real Electron, no model requests' }
@@ -58,7 +62,7 @@ try {
   await page.waitForFunction(() => document.querySelector('.conversation-reply-character img')?.naturalWidth > 0)
   const input = page.getByRole('textbox', { name: '消息输入' })
   await input.fill('等待确认的补充，不要发送')
-  for (const [width, height] of [[1366, 768], [1440, 900], [1024, 768]]) {
+  for (const [width, height] of [[1366, 768], [1440, 900], [1024, 768], [1023, 739]]) {
     await resize(width, height)
     await page.waitForFunction(() => {
       const surface = document.querySelector('.sketch-surface').getBoundingClientRect(), paper = document.querySelector('.sketch-page').getBoundingClientRect()
@@ -66,13 +70,50 @@ try {
     })
     const layout = await page.evaluate(() => {
       const app = document.querySelector('.workspace-theatre'), work = document.querySelector('.theatre-stage').getBoundingClientRect(), chat = document.querySelector('.theatre-conversation').getBoundingClientRect(), input = document.querySelector('textarea[aria-label="消息输入"]').getBoundingClientRect(), actor = document.querySelector('.conversation-reply-character').getBoundingClientRect()
-      return { window: [innerWidth, innerHeight], preview: { left: work.left, right: work.right }, chat: { left: chat.left, right: chat.right }, input: { top: input.top, bottom: input.bottom }, actor: { left: actor.left, right: actor.right }, overflow: app.scrollWidth > app.clientWidth + 1 || app.scrollHeight > app.clientHeight + 1, fit: document.querySelector('.sketch-scale').textContent }
+      return { window: [innerWidth, innerHeight], preview: { left: work.left, right: work.right }, chat: { left: chat.left, right: chat.right }, input: { top: input.top, bottom: input.bottom }, actor: { left: actor.left, right: actor.right }, overflow: app.scrollWidth > app.clientWidth + 1 || app.scrollHeight > app.clientHeight + 1, dpi: devicePixelRatio, paper: { width: document.querySelector('.sketch-page').getBoundingClientRect().width, height: document.querySelector('.sketch-page').getBoundingClientRect().height }, fit: document.querySelector('.sketch-scale').textContent }
     })
-    assert.equal(layout.overflow, false, JSON.stringify(layout)); assert.ok(layout.preview.right <= layout.chat.left, JSON.stringify(layout)); assert.ok(layout.input.bottom < layout.window[1], JSON.stringify(layout)); assert.ok(layout.actor.left >= layout.chat.left && layout.actor.right <= layout.chat.right, JSON.stringify(layout))
+    assert.equal(layout.overflow, false, JSON.stringify(layout)); assert.ok(layout.preview.right <= layout.chat.left + .1, JSON.stringify(layout)); assert.ok(layout.input.bottom < layout.window[1], JSON.stringify(layout)); assert.ok(layout.actor.left >= layout.chat.left && layout.actor.right <= layout.chat.right, JSON.stringify(layout))
+    if (width === 1023) assert.ok(layout.paper.width * layout.paper.height >= 707 * 443, JSON.stringify(layout))
+    await page.screenshot({ path: join(folder, `workspace-${width}.png`) })
     report.layouts.push({ requested: [width, height], ...layout })
   }
   await resize(1366, 768)
   await page.screenshot({ path: join(folder, 'workspace.png') })
+  for (const name of ['文档', '材料', '版本', '协作']) {
+    await page.getByRole('button', { name, exact: true }).click()
+    await page.waitForTimeout(300)
+    if (name === '文档') {
+      await page.locator('[data-ai-id="document-list-item"]').click()
+      await page.locator('[data-ai-id="document-content"]').waitFor()
+      assert.equal(await page.locator('[data-ai-id="document-list-item"]').getAttribute('aria-pressed'), 'true')
+    }
+    await page.screenshot({ path: join(folder, `panel-${name}.png`) })
+    await page.keyboard.press('Escape')
+  }
+  // Alter only the offline fixture canvas to inspect saturation and obscuring in Electron.
+  await frame.evaluate(() => {
+    document.body.style.background = '#101822'; document.body.style.color = '#fff'
+    document.querySelector('article').style.background = '#142535'
+    document.querySelector('article').insertAdjacentHTML('beforeend', '<button style="position:absolute;right:30px;top:280px;background:#1266ff;color:white">蓝色按钮背景不可透出</button><div style="position:absolute;right:20px;top:360px;width:180px;height:180px;background:#00ee55;border-radius:50%">绿色语音球</div>')
+  })
+  await page.getByRole('button', { name: '文档', exact: true }).click()
+  await page.waitForTimeout(300)
+  assert.equal(await page.locator('[data-ai-id="document-list-item"]').getAttribute('aria-pressed'), 'true')
+  await page.screenshot({ path: join(folder, 'matte-dark.png') })
+  const material = await page.locator('.theatre-sidepanel').evaluate(element => {
+    const style = getComputedStyle(element)
+    return { background: style.backgroundColor, blur: style.backdropFilter, opacity: style.opacity }
+  })
+  report.material = material
+  assert.equal(material.opacity, '1')
+  await page.keyboard.press('Escape')
+  await page.locator('.workspace-status-inspector > summary').click()
+  assert.equal(await page.getByRole('status', { name: '执行与交付状态' }).isVisible(), true)
+  await page.keyboard.press('Escape')
+  assert.equal(await page.locator('.workspace-status-inspector').getAttribute('open'), null)
+  await page.locator('.workspace-maintenance-inspector > summary').click()
+  await page.screenshot({ path: join(folder, 'maintenance.png') })
+  await page.keyboard.press('Escape')
   const separator = page.getByRole('separator', { name: '调整会话栏宽度' })
   const originalWidth = Number(await separator.getAttribute('aria-valuenow'))
   await separator.focus(); await separator.press('ArrowLeft')
@@ -80,7 +121,8 @@ try {
   assert.equal(await input.inputValue(), '等待确认的补充，不要发送')
   await page.getByRole('button', { name: '专注预览', exact: true }).click()
   assert.equal(await page.locator('.theatre-conversation').isVisible(), false)
-  await page.getByRole('button', { name: '退出专注预览', exact: true }).click()
+  await page.screenshot({ path: join(folder, 'focused.png') })
+  await page.keyboard.press('Escape')
   assert.equal(await input.inputValue(), '等待确认的补充，不要发送'); assert.equal(await frame.evaluate(() => window.count), 0)
   await page.getByRole('button', { name: '收起人物', exact: true }).click(); assert.equal(await page.locator('.conversation-reply-character').count(), 0)
   await page.getByRole('button', { name: '显示人物', exact: true }).click()
@@ -117,14 +159,22 @@ try {
   await emit('completed', {})
   await page.waitForFunction(() => document.querySelector('[data-ai-id="progress-verify"]').getAttribute('data-state') === 'attention')
   assert.match(await page.locator('.workspace-theatre').evaluate(element => getComputedStyle(element).colorScheme), /light/)
-  for (const [width, height] of [[736, 700], [390, 844]]) {
+  for (const [width, height] of [[736, 700], [390, 844], [320, 740]]) {
     await resize(width, height)
     await page.getByRole('button', { name: '对话', exact: true }).click(); assert.equal(await input.isVisible(), true)
     assert.equal(await input.inputValue(), '等待确认的补充，不要发送')
     await page.getByRole('button', { name: '草图与程序', exact: true }).click(); assert.equal(await page.locator('.theatre-stage').isVisible(), true)
     assert.equal(await page.locator('.workspace-theatre').evaluate(element => element.scrollWidth > element.clientWidth + 1), false)
   }
+  await page.screenshot({ path: join(folder, 'narrow-320.png') })
   report.checks.push('real desktop preview/conversation geometry', 'resizing direction and draft preservation', 'focus preserves iframe and input', 'real latest reply and quiet preference', 'hover comic, popup pointer transfer, expansion, Escape, click and work records', 'all five stage comics decoded', 'fixture IPC starts blue motion and terminal returns to stopped state', 'documents', 'narrow view switch', 'fixed light and reduced motion')
+  await resize(1366, 768)
+  await page.getByRole('button', { name: '文档', exact: true }).click()
+  await page.waitForTimeout(250)
+  // Explicitly exercise the opaque fallback without changing any application source.
+  await page.addStyleTag({ content: '.workspace-theatre .theatre-sidepanel { backdrop-filter: none !important; background: #f8f8f4 !important; }' })
+  await page.screenshot({ path: join(folder, 'opaque-fallback.png') })
+  await page.keyboard.press('Escape')
   assert.deepEqual(report.errors, [])
 } finally {
   writeFileSync(join(folder, 'report.json'), JSON.stringify(report, null, 2))

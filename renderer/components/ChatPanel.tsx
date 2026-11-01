@@ -17,7 +17,6 @@ import { ThinkingIndicator, type ThinkingPhase } from './ThinkingIndicator'
 import { Markdown } from './Markdown'
 import { CompactReply } from './CompactReply'
 import { MessageSquare, IconAlertTriangle, IconSettings, Image, Copy, Conversation, Check, GitBranch } from './icons'
-import { StudioFumoAvatar } from './StudioCompanion'
 import { ReplyCharacter } from './ReplyCharacter'
 import { copyText } from '../lib/copy-text'
 import { isInternalMessage, assistantDisplayText } from '../../shared/message-presentation'
@@ -126,8 +125,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   onForkFromMessage,
 }) => {
   const activeSessionId = useAtomValue(activeAgentSessionIdAtom)
-  const [historyExpanded, setHistoryExpanded] = React.useState(true)
-  React.useEffect(() => setHistoryExpanded(true), [activeSessionId])
+  const [historyExpanded, setHistoryExpanded] = React.useState(presentation !== 'theatre')
+  React.useEffect(() => setHistoryExpanded(presentation !== 'theatre'), [activeSessionId, presentation])
   const [quiet, setQuiet] = React.useState(() => { try { return localStorage.getItem('bloma.workspace.character-quiet.v1') === '1' } catch { return false } })
   const compact = presentation === 'theatre' && !historyExpanded
   const sessionUsage = useAtomValue(sessionUsageFamily(activeSessionId ?? ''))
@@ -296,11 +295,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         }}
       >
         <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: presentation === 'theatre' ? 12 : 'var(--font-size-sm)', fontWeight: 500, color: 'var(--color-text)' }}>
-          {presentation === 'theatre' ? <StudioFumoAvatar /> : <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--theatre-accent, var(--color-quick))', display: 'inline-block' }} />}
-          {presentation === 'theatre' ? 'Bloma' : '对话'}
+          {presentation === 'theatre' ? null : <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--theatre-accent, var(--color-quick))', display: 'inline-block' }} />}
+          {presentation === 'theatre' ? '与 Bloma 协作' : '对话'}
         </span>
-        {presentation === 'theatre' && <button type="button" className="theatre-tool conversation-quiet" aria-label={quiet ? '显示人物' : '收起人物'} aria-pressed={quiet} onClick={() => setQuiet(value => { const next = !value; try { localStorage.setItem('bloma.workspace.character-quiet.v1', next ? '1' : '0') } catch { /* Per-visit preference still works. */ } return next })}>人物</button>}
-        {presentation === 'theatre' ? <button type="button" className="theatre-tool" data-ai-id="conversation-toggle" aria-expanded={historyExpanded} onClick={() => setHistoryExpanded(previous => !previous)}><Conversation size={14} />{historyExpanded ? '收起完整对话' : `完整对话${messages.length ? ` · ${messages.length}` : ''}`}</button> : <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>Enter 发送</span>}
+        {presentation === 'theatre' && <button type="button" className="theatre-tool conversation-quiet" aria-label={quiet ? '显示人物' : '收起人物'} aria-pressed={quiet} onClick={() => setQuiet(value => { const next = !value; try { localStorage.setItem('bloma.workspace.character-quiet.v1', next ? '1' : '0') } catch { /* Per-visit preference still works. */ } return next })}>{quiet ? '显示人物' : '收起人物'}</button>}
+        {presentation === 'theatre' ? <button type="button" className="theatre-tool" data-ai-id="conversation-toggle" aria-expanded={historyExpanded} onClick={() => setHistoryExpanded(previous => !previous)}><Conversation size={14} />{historyExpanded ? '返回当前' : '历史'}</button> : <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>Enter 发送</span>}
       </div>
 
       {/* 消息列表 */}
@@ -1040,11 +1039,17 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ characterCue, characterKi
     )
   }
 
+  const firstParagraph = text.split(/\n\s*\n/)[0] ?? ''
+  const clause = text.match(/^[^，。！？：:\n]{1,40}[，。！？：:]/)?.[0] ?? ''
+  const firstClause = /[`*_\[\]<>]/.test(clause) ? '' : clause
+  const lead = characterCue && !isUser ? firstParagraph.length <= 90 ? firstParagraph : firstClause : ''
+  const bodyText = lead ? text.slice(lead.length).replace(/^\s*\n/, '') : text
   return (
     <div
       data-ai-id="message-bubble"
       data-role={message.role}
       data-character={Boolean(characterCue && !isUser)}
+      data-long={text.length > 180}
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -1073,9 +1078,9 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ characterCue, characterKi
           wordBreak: 'break-word',
         }}
       >
-        {characterCue && !isUser && <ReplyCharacter cue={characterCue} kind={characterKind} />}
+        {characterCue && !isUser && <div className="conversation-character-scene"><div className="conversation-character-lead"><small>当前回复</small>{lead && <Markdown text={lead} />}</div><ReplyCharacter cue={characterCue} kind={characterKind} /></div>}
         {/* assistant 旁白/完成总结渲染 Markdown（模型输出天然带 md）；user 输入保持纯文本语义 */}
-        {isUser || !text ? text || (isStreaming ? '…' : '') : compact ? <CompactReply text={text} /> : <Markdown text={text} />}
+        {isUser || !text ? text || (isStreaming ? '…' : '') : compact ? <CompactReply text={bodyText} /> : <Markdown text={bodyText} />}
         {textAttachments?.length ? <MessageAttachments attachments={textAttachments} /> : null}
         {imageBlocks.length > 0 && (
           <span

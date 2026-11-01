@@ -49,6 +49,7 @@ export const DocumentPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
   const [reading, setReading] = React.useState(false)
   const [filePath, setFilePath] = React.useState('')
   const [fileError, setFileError] = React.useState('')
+  const readGeneration = React.useRef(0)
 
   React.useEffect(() => {
     if (!expanded || !project) return
@@ -67,23 +68,25 @@ export const DocumentPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
     return () => { cancelled = true }
   }, [expanded, project?.project_id])
 
-  React.useEffect(() => { setSelected(null); setFilePath(''); setFileError('') }, [project?.project_id])
+  React.useEffect(() => { readGeneration.current++; setSelected(null); setReading(false); setFilePath(''); setFileError(''); return () => { readGeneration.current++ } }, [project?.project_id])
 
   const handleSelect = (doc: DocumentRef) => {
     if (!project) return
     const api = window.electronAPI
     if (!api?.documents?.read) return
+    const generation = ++readGeneration.current
     setReading(true)
     setFileError('')
     setSelected(null)
     void api.documents
       .read({ request_id: crypto.randomUUID(), project_id: project.project_id, document_id: doc.document_id })
       .then((result) => {
+        if (generation !== readGeneration.current) return
         if (result.ok) setSelected({ kind: 'document', document: doc, content: result.data.content })
         else setFileError(result.error.user_visible_message || result.error.message)
       })
-      .catch((error: unknown) => setFileError(error instanceof Error ? error.message : String(error)))
-      .finally(() => setReading(false))
+      .catch((error: unknown) => { if (generation === readGeneration.current) setFileError(error instanceof Error ? error.message : String(error)) })
+      .finally(() => { if (generation === readGeneration.current) setReading(false) })
   }
 
   /** 产物文件打开（W6）：主进程校验项目根内+拒基础设施目录/二进制，256KB 截断如实标注 */
@@ -95,11 +98,13 @@ export const DocumentPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
       setFileError('当前环境不支持文件查看（preload 桥未就绪）。')
       return
     }
+    const generation = ++readGeneration.current
     setReading(true)
     setFileError('')
     void api.project
       .fileRead({ request_id: crypto.randomUUID(), project_id: project.project_id, path: trimmed })
       .then((result) => {
+        if (generation !== readGeneration.current) return
         if (result.ok) {
           setSelected({ kind: 'file', path: result.data.path, content: result.data.content, truncated: result.data.truncated })
         } else {
@@ -108,9 +113,11 @@ export const DocumentPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
         }
       })
       .catch((error: unknown) => {
+        if (generation !== readGeneration.current) return
+        setSelected(null)
         setFileError(error instanceof Error ? error.message : String(error))
       })
-      .finally(() => setReading(false))
+      .finally(() => { if (generation === readGeneration.current) setReading(false) })
   }
 
   return (

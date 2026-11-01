@@ -11,17 +11,17 @@ function Fixture({ side = 'left' }: { side?: 'left' | 'right' }) {
 afterEach(() => { cleanup(); localStorage.clear(); vi.unstubAllGlobals() })
 
 describe('conversation width preference', () => {
-  it('right pane starts at 300px and grows when its left edge moves left', () => {
+  it('right pane starts at 280px and grows when its left edge moves left', () => {
     localStorage.setItem(CONVERSATION_WIDTH_KEY, 'invalid-width')
     render(<Fixture side="right" />)
     const separator = screen.getByRole('separator')
-    expect(separator.getAttribute('aria-valuenow')).toBe('300')
+    expect(separator.getAttribute('aria-valuenow')).toBe('280')
     fireEvent.keyDown(separator, { key: 'ArrowLeft' })
-    expect(separator.getAttribute('aria-valuenow')).toBe('320')
-    fireEvent.keyDown(separator, { key: 'ArrowRight' })
     expect(separator.getAttribute('aria-valuenow')).toBe('300')
+    fireEvent.keyDown(separator, { key: 'ArrowRight' })
+    expect(separator.getAttribute('aria-valuenow')).toBe('280')
     fireEvent.doubleClick(separator)
-    expect(localStorage.getItem(CONVERSATION_WIDTH_KEY)).toBe('300')
+    expect(localStorage.getItem(CONVERSATION_WIDTH_KEY)).toBe('280')
   })
   it('keyboard changes persist across remount and double click restores the default', () => {
     const view = render(<Fixture />)

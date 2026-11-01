@@ -20,7 +20,7 @@ function readPreferredWidth(fallback = DEFAULT_WIDTH): number {
 export function useConversationWidth(side: 'left' | 'right' = 'left') {
   const containerRef = useRef<HTMLDivElement>(null)
   const drag = useRef<{ x: number; width: number } | null>(null)
-  const [preferred, setPreferred] = useState(() => readPreferredWidth(side === 'right' ? 300 : DEFAULT_WIDTH))
+  const [preferred, setPreferred] = useState(() => readPreferredWidth(side === 'right' ? 280 : DEFAULT_WIDTH))
   const [available, setAvailable] = useState(0)
   const [resizing, setResizing] = useState(false)
   const maximum = available > 0 ? Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, available - PREVIEW_MIN_WIDTH - DIVIDER_WIDTH)) : MAX_WIDTH
@@ -79,7 +79,7 @@ export function useConversationWidth(side: 'left' | 'right' = 'left') {
       onPointerUp: finish,
       onPointerCancel: finish,
       onLostPointerCapture: finish,
-      onDoubleClick: () => { change(side === 'right' ? 300 : DEFAULT_WIDTH); persist() },
+      onDoubleClick: () => { change(side === 'right' ? 280 : DEFAULT_WIDTH); persist() },
       onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => {
         const value = event.key === 'ArrowLeft' ? width + (side === 'right' ? 20 : -20) : event.key === 'ArrowRight' ? width + (side === 'right' ? -20 : 20)
           : event.key === 'Home' ? MIN_WIDTH : event.key === 'End' ? maximum : undefined

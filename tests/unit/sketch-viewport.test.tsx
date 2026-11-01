@@ -6,10 +6,12 @@ import { SketchViewport } from '../../renderer/components/SketchViewport'
 import { stripSketchReviewChrome } from '../../shared/sketch-viewport'
 
 beforeEach(() => {
+  const style = document.createElement('style')
+  style.id = 'viewport-test-padding'; style.textContent = '.sketch-surface { padding: 12px; }'; document.head.append(style)
   vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(664)
   vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(424)
 })
-afterEach(() => { cleanup(); vi.restoreAllMocks() })
+afterEach(() => { cleanup(); document.getElementById('viewport-test-padding')?.remove(); vi.restoreAllMocks() })
 
 function report(frame: HTMLIFrameElement, width: number, height: number, source: MessageEventSource | null = frame.contentWindow) {
   const post = vi.spyOn(frame.contentWindow!, 'postMessage')

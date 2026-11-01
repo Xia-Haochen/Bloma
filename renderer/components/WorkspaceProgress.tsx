@@ -71,7 +71,7 @@ export const WorkspaceProgress: React.FC<{
       </button>)}
     </nav>
     {step && createPortal(<div id={id} className="workspace-progress-popover" data-expanded={expanded} role="dialog" aria-label={`${step.label}阶段详情`} ref={panel} style={{ left: position.left, top: position.top }} onPointerEnter={() => clearTimeout(timer.current)} onPointerLeave={leave} onBlur={event => { if (!panel.current?.contains(event.relatedTarget as Node) && !nav.current?.contains(event.relatedTarget as Node)) leave() }}>
-      <header><strong>{step.label}</strong><span data-state={step.state}>{labels[step.state]}</span><button type="button" onClick={() => setComic(value => !value)}>{comic ? '进展' : '小漫画'}</button><button type="button" aria-label="关闭阶段详情" onClick={close}><X size={14} /></button></header>
+      <header><strong>{step.label}</strong><span data-state={step.state}>{labels[step.state]}</span><button type="button" onClick={() => setComic(value => !value)}>{comic ? '进展' : '小漫画'}</button><button type="button" aria-label="关闭阶段详情" onClick={() => { close(); restoringFocus.current = true; if (open !== null) buttons.current[open]?.focus(); restoringFocus.current = false }}><X size={14} /></button></header>
       {comic && <button type="button" className="workspace-comic" aria-label={expanded ? '缩小阶段漫画' : '放大阶段漫画'} onClick={() => { pinned.current = open; setExpanded(value => !value) }}><img src={comics[step.key]} alt={`${step.label}阶段三格小漫画`} /></button>}
       <p>{step.state === 'active' && liveDetail ? liveDetail : step.detail}</p>
       <button type="button" className="workspace-progress-records" onClick={() => { close(); onRecords() }}><FileText size={13} />工作记录</button>

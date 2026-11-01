@@ -119,17 +119,19 @@ export const WorkspaceShell: React.FC<WorkspaceShellProps> = (props) => {
   const progress = deriveWorkspaceProgress({ project, stage, phase: phase ?? project?.desktop_phase ?? null, busy, decision, hasSketch: Boolean(props.previewUrl), error: last?.type === 'error' ? stream.last_error : undefined })
   const live = pickLiveLine(buildProgressLines(stream.events, []))
   const liveDetail = busy && live ? `${live.label}${live.detail ? ` · ${live.detail}` : ''}` : undefined
+  const toolTrigger = React.useRef<HTMLElement | null>(null)
   const openTool = (name: 'documents' | 'collaboration' | 'versions' | 'materials' | 'records') => {
+    if (document.activeElement instanceof HTMLElement && document.activeElement.closest('.workspace-project-tools, .studio-footer')) toolTrigger.current = document.activeElement
+    previewTarget.current?.querySelectorAll<HTMLDetailsElement>('details.workspace-delivery-inspector[open]').forEach(details => { details.open = false })
     setDocuments(name === 'documents' ? !documents : false)
     setCollaboration(name === 'collaboration' ? !collaboration : false)
     setLocalPanel(name === 'versions' || name === 'materials' || name === 'records' ? localPanel === name ? null : name : null)
     if (name === 'versions') setTimelineExpanded(true)
   }
-  const toolTrigger = React.useRef<HTMLElement | null>(null)
   const panelOpen = documents || collaboration || Boolean(localPanel)
   const wasPanelOpen = React.useRef(false)
   React.useEffect(() => {
-    if (panelOpen && !wasPanelOpen.current) toolTrigger.current = document.activeElement as HTMLElement
+    if (panelOpen && !wasPanelOpen.current && !toolTrigger.current?.isConnected) toolTrigger.current = document.activeElement as HTMLElement
     if (!panelOpen && wasPanelOpen.current) toolTrigger.current?.focus()
     wasPanelOpen.current = panelOpen
   }, [panelOpen])
@@ -153,16 +155,16 @@ export const WorkspaceShell: React.FC<WorkspaceShellProps> = (props) => {
         <WorkspaceHeader compact onAllProjects={props.onAllProjects} onOpenSettings={props.onOpenSettings} onUpgrade={props.onUpgrade} onHome={props.onHome} />
         <WorkspaceProgress steps={progress} liveDetail={liveDetail} onRecords={() => openTool('records')} />
         <nav className="workspace-project-tools" aria-label="项目资料">
-          <button type="button" className="theatre-tool" data-ai-id="docs-button" aria-label="文档" title="文档" aria-pressed={documents} onClick={() => openTool('documents')}><FileText size={15} /></button>
-          <button type="button" className="theatre-tool" data-ai-id="materials-button" aria-label="材料" title="材料" aria-pressed={localPanel === 'materials'} onClick={() => openTool('materials')}><Layers size={15} /></button>
-          <button type="button" className="theatre-tool" data-ai-id="versions-button" aria-label="版本" title="版本" aria-pressed={localPanel === 'versions'} onClick={() => openTool('versions')}><History size={15} /></button>
-          <button type="button" className="theatre-tool" data-ai-id="collaboration-button" aria-label="协作" title="协作" aria-pressed={collaboration} onClick={() => openTool('collaboration')}><Users size={15} /></button>
+          <button type="button" className="theatre-tool" data-ai-id="docs-button" aria-label="文档" title="文档" aria-pressed={documents} onClick={() => openTool('documents')}><FileText size={15} /><span>文档</span></button>
+          <button type="button" className="theatre-tool" data-ai-id="materials-button" aria-label="材料" title="材料" aria-pressed={localPanel === 'materials'} onClick={() => openTool('materials')}><Layers size={15} /><span>材料</span></button>
+          <button type="button" className="theatre-tool" data-ai-id="versions-button" aria-label="版本" title="版本" aria-pressed={localPanel === 'versions'} onClick={() => openTool('versions')}><History size={15} /><span>版本</span></button>
+          <button type="button" className="theatre-tool" data-ai-id="collaboration-button" aria-label="协作" title="协作" aria-pressed={collaboration} onClick={() => openTool('collaboration')}><Users size={15} /><span>协作</span></button>
         </nav>
       </div>
       <div className="studio-body" ref={conversation.containerRef}>
       <nav className="studio-view-switch" aria-label="工作区视图"><button type="button" aria-pressed={mobileView === 'conversation'} onClick={() => setMobileView('conversation')}>对话</button><button type="button" aria-pressed={mobileView === 'preview'} onClick={() => setMobileView('preview')}>草图与程序</button></nav>
       <main className="theatre-stage" ref={previewTarget}>
-        <div className="theatre-stage-heading"><div key={scene.title} className="studio-scene-heading"><p className="theatre-eyebrow">从想法到软件</p><h2>{scene.title}</h2></div><div className="studio-heading-actions"><span className="studio-scene-description">{scene.description}</span><button type="button" className="theatre-tool studio-control" title={focused ? '退出专注预览' : '专注预览'} aria-label={focused ? '退出专注预览' : '专注预览'} aria-pressed={focused} onClick={() => setFocused(value => !value)}>{focused ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button></div></div>
+        <div className="theatre-stage-heading" data-delivery={Boolean(props.deliveryPanel)}><div key={scene.title} className="studio-scene-heading" title={scene.description}><p className="theatre-eyebrow">从想法到软件</p><h2>{scopePending ? scene.title : project?.name ?? scene.title}</h2></div><div className="studio-heading-actions"><span className="studio-scene-description">{scene.description}</span><button type="button" className="theatre-tool studio-control" title={focused ? '退出专注预览' : '专注预览'} aria-label={focused ? '退出专注预览' : '专注预览'} aria-pressed={focused} onClick={() => setFocused(value => !value)}>{focused ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button></div></div>
         <div className="theatre-main" data-panel-open={documents || collaboration || Boolean(localPanel)}>
           <section className="theatre-product" aria-label="软件与当前结果">
         {scopePending ? <ScopeConfirmationPanel scope={props.decisionScope} summary={props.decisionBody} options={props.cardOptions!} onSelect={props.onCardOptionSelect!} busy={busy} />
@@ -214,6 +216,7 @@ export const WorkspaceShell: React.FC<WorkspaceShellProps> = (props) => {
       </section>
 
       </div>
+      <footer className="workspace-app-foot">Bloma · 作品工作室</footer>
     </div>
   )
 }
