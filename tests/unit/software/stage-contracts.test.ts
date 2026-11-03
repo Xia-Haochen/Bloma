@@ -6,7 +6,7 @@ it('accepts only direct unchanged-context composition, including a bounded chain
   expect(composesPriorEntry(`import previous from './stage2.mjs';export default async(ctx)=>{await previous(ctx);}`,'tests/stage3.mjs','tests/stage1.mjs',p=>p==='tests/stage2.mjs'?composed:undefined)).toBe(true)
 })
 it('rejects skipped old entry, branches, context rewriting, alias mutation and cycles',()=>{
-  for(const source of [composed.replace('await prior(ctx);',''),composed.replace('await prior(ctx);','if(false)await prior(ctx);'),
+  for(const source of [composed.replace('await prior(ctx);await next(ctx);','await next(ctx);await prior(ctx);'),composed.replace('await prior(ctx);',''),composed.replace('await prior(ctx);','if(false)await prior(ctx);'),
     composed.replace('prior(ctx)','prior({...ctx})'),composed.replace('await prior(ctx);','prior=next;await prior(ctx);'),
     composed.replace('await prior(ctx);','return;await prior(ctx);')])expect(composesPriorEntry(source,'tests/stage2.mjs','tests/stage1.mjs')).toBe(false)
   const cyclic=`import previous from './stage2.mjs';export default async(ctx)=>{await previous(ctx);}`

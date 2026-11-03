@@ -24,7 +24,7 @@ export function composesPriorEntry(source: string, entry: string, priorEntry: st
   }
   if (!fn || fn.parameters.length !== 1 || !ts.isIdentifier(fn.parameters[0].name) || !fn.body || !ts.isBlock(fn.body)) return false
   const context = fn.parameters[0].name.text
-  let previous = false
+  let previous = false, first = true
   for (const statement of fn.body.statements) {
     if (!ts.isExpressionStatement(statement) || !ts.isAwaitExpression(statement.expression) || !ts.isCallExpression(statement.expression.expression)) return false
     const call = statement.expression.expression
@@ -33,6 +33,8 @@ export function composesPriorEntry(source: string, entry: string, priorEntry: st
     const target = imports.get(call.expression.text)!
     if (target === priorEntry) previous = true
     else if (read && !previous) { const nested = read(target); if (nested && composesPriorEntry(nested, target, priorEntry, read, new Set(seen))) previous = true }
+    if (first && !previous) return false
+    first = false
   }
   return previous
 }
