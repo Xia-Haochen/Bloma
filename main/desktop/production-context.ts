@@ -1,3 +1,5 @@
+import { projectActivityView } from '../software/project-activity'
+import { decisionPage } from '../software/project-decisions'
 import { projectEvaluation } from '../software/project-evaluation'
 import { projectPlanView } from '../software/project-plan'
 import { guiControlBindings } from './gui-acceptance-preparation'
@@ -7,7 +9,7 @@ import { readPrdBackplane } from '../project/prd-store'
 import { isSoftwareProject } from './workflow-policy'
 import { readDesktopRequirementsDigest } from './requirement-digest'
 import { CORE_DECLARATION_BRIEF, MODEL_VERIFICATION_BRIEF, SPEECH_VERIFICATION_BRIEF } from './core-verification'
-import { requirementEvidenceHash, trustedAcceptance, acceptanceAssociationIssues } from '../project/requirement-contract'
+import { prdScopeFingerprint, requirementEvidenceHash, trustedAcceptance, acceptanceAssociationIssues } from '../project/requirement-contract'
 import type { DispatchExperiment } from './dispatch-experiment'
 import type { RequirementsModel } from '../model/requirements-model'
 import { guiStepsSchema, GUI_CHECK_EXAMPLE, SOFTWARE_GUI_ACTION_KINDS } from './gui-tool-contract'
@@ -66,7 +68,8 @@ export function buildProductionContextTool(projectId: string): AgentLoopTool {
   return { name: 'read_production_context', parallelSafe: true,
     description: '只读按需上下文：components看可复用组合，ai-service看通用AI模板与Key/路由；diagnostics汇总故障现场。capabilities列目录；documents/vision/multimodal/http-integration看能力；existing-project/working-state看工程与现场，features看范围，verification-gui/llm/speech看验收协议。',
     input_schema: { type: 'object', properties: {
-      topic: { type: 'string', enum: ['capabilities','components','ai-service','diagnostics','execution','working-state','documents','multimodal','vision','http-integration','acceptance-counterexamples','existing-project','overview', 'features', 'prd', 'launch', 'verification', 'verification-llm', 'verification-speech', 'verification-gui', 'data-update', 'delivery', 'resume', 'independent-design', 'longterm', 'project-state'] },
+      topic: { type: 'string', enum: ['capabilities','components','ai-service','diagnostics','execution','working-state','documents','multimodal','vision','http-integration','acceptance-counterexamples','existing-project','overview', 'features', 'prd', 'launch', 'verification', 'verification-llm', 'verification-speech', 'verification-gui', 'data-update', 'delivery', 'resume', 'independent-design', 'longterm', 'project-state', 'project-activity'] },
+      offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 50 }, history: { type: 'boolean' },
       feature_ids: { type: 'array', items: { type: 'string' }, description: 'features主题的功能编号，如F-001；未知编号拒绝，不默默过滤。' },
     }, required: ['topic'] },
     execute: async (input, ctx) => {
@@ -92,10 +95,11 @@ export function buildProductionContextTool(projectId: string): AgentLoopTool {
           completion: '命令结束、本轮结束、最近验证和项目交付是不同事实。仍运行的命令先接续读取；命令成功不签发产品通过。' }) }
         if (isSoftwareProject(projectId) && input.topic === 'working-state') return { output: JSON.stringify(softwareWorkingContext(projectId)) }
         if (ctx.projectId !== projectId) throw new Error('PRODUCTION_CONTEXT_MISMATCH')
-        if(input.topic==='project-state')return{output:JSON.stringify(projectEvaluation(projectId))}
+        if(input.topic==='project-activity')return{output:JSON.stringify(projectActivityView(projectId,input.offset as number|undefined,input.limit as number|undefined))}
+        if(input.topic==='project-state')return{output:JSON.stringify(projectEvaluation(projectId,{offset:input.offset as number|undefined,limit:input.limit as number|undefined,history:input.history as boolean|undefined}))}
         if(input.topic==='longterm'){
           const state=isLongtermSoftware(projectId)?readLongtermState(projectId):undefined
-          return{output:JSON.stringify({enabled:isLongtermSoftware(projectId),current:state?.milestones.find(item=>item.id===state.current_id),backlog:state?.backlog.slice(-20),decisions:state?.decisions.slice(-12),
+          return{output:JSON.stringify({enabled:isLongtermSoftware(projectId),current:state?.milestones.find(item=>item.id===state.current_id),backlog:state?.backlog.slice(-20),decisions:decisionPage(state?.decisions??[],prdScopeFingerprint(readPrdBackplane(projectId))).items,
             note:'待办和历史决策是上下文，不是当前范围或通过证据。只有已确认的当前任务单可实现；复杂能力/接口/数据变化时记录影响、兼容和迁移决定，不重做整套旧架构流程。'})}
         }
         if(input.topic==='independent-design')return{output:JSON.stringify({enabled:readIndependentPolicy(projectId)?.enabled??false,design:readIndependentDesign(projectId)??{status:'disabled',reason:'未启用第二模型验收设计；当前为单模型验收。'},

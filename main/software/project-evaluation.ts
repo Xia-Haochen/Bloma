@@ -1,3 +1,4 @@
+import { decisionPage } from './project-decisions'
 import { findProject } from '../project/project-service'
 import { readPrdBackplane } from '../project/prd-store'
 import { prdScopeFingerprint } from '../project/requirement-contract'
@@ -6,20 +7,22 @@ import { projectPlanView } from './project-plan'
 import { readSoftwareRunState } from './run-state'
 
 /** Read-only project facts. A historical delivery event cannot end a new scope. */
-export function projectEvaluation(projectId: string) {
+export function projectEvaluation(projectId: string, options: { offset?: number; limit?: number; history?: boolean } = {}) {
   const project = findProject(projectId), brief = readPrdBackplane(projectId)
   const scope = prdScopeFingerprint(brief)
   const state = isLongtermSoftware(projectId) ? readLongtermState(projectId) : undefined
   const current = state?.milestones.find(m => m.id === state.current_id)
   const run = readSoftwareRunState(projectId)
   const sameScope = current?.scope_hash === scope
+  const decisions = decisionPage(state?.decisions ?? [], scope, options)
   const delivered = Boolean(brief.user_confirmed_at && sameScope && current?.status === 'delivered')
   return { version: 1, project_id: projectId, scope, confirmed: Boolean(brief.user_confirmed_at),
     ...projectPlanView(brief),
     current_milestone: current ? { id: current.id, status: current.status, current_scope: sameScope } : null,
     cumulative_scope_delivered: delivered,
     remaining_required_feature_ids: delivered ? [] : brief.requirements.map(r => r.id),
-    current_decisions: state?.decisions.filter(d => d.scope === scope) ?? [],
+    current_decisions: decisions.items.filter(d => d.effective),
+    decisions, decision_revision: state?.revision ?? 0,
     historical_decision_ids: state?.decisions.filter(d => d.scope !== scope).map(d => d.id) ?? [],
     optional_backlog_count: state?.backlog.filter(b => ['deferred', 'adopt_requested'].includes(b.state)).length ?? 0,
     execution: run && run.operationId === project.lean_operation_id ? { status: run.status, budget: run.budget } : null,

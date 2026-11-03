@@ -6,7 +6,7 @@ import { softwareVerificationFingerprint as verificationFingerprint } from '../d
 import { hasSoftwareSessionProcess } from './process-manager'
 import { hasDebugSession } from './debug-sessions'
 
-interface Assignment { paths: string[]; readOnly: boolean; active: boolean; source?: string }
+interface Assignment { taskKey: string; paths: string[]; readOnly: boolean; active: boolean; source?: string }
 const overlap = (a: string, b: string) => a === b || a.endsWith('/') && b.startsWith(a) || b.endsWith('/') && a.startsWith(b)
 
 /** Shared-workspace collaborators edit assigned files only. Arbitrary commands
@@ -53,7 +53,9 @@ export function createSoftwareCollaborationPolicy(projectId: string, root: strin
     if (writable && (!paths.length || paths.length > 32)) throw new Error('DELEGATION_EXPLICIT_WRITE_PATHS_REQUIRED')
     if (paths.some((path, i) => paths.slice(0, i).some(other => overlap(path, other)))
       || [...assignments.values()].some(assignment => assignment.active && !assignment.readOnly && paths.some(path => assignment.paths.some(other => overlap(path, other))))) throw new Error('DELEGATION_WRITE_PATH_CONFLICT')
-    const assignment: Assignment = { paths, readOnly: !writable, active: true, source: verificationFingerprint(root) }
+    const taskKey = JSON.stringify([args.role ?? 'implement', args.task.trim(), args.expectedOutput ?? '', paths])
+    if ([...assignments.values()].some(a => a.active && a.taskKey === taskKey)) throw Error('DELEGATION_DUPLICATE_ACTIVE_TASK')
+    const assignment: Assignment = { taskKey, paths, readOnly: !writable, active: true, source: verificationFingerprint(root) }
     assignments.set(childSessionId, assignment)
     return { release: () => { assignment.active = false }, completionNote: () => assignment.readOnly && assignment.source !== verificationFingerprint(root)
       ? '\n核查期间源码已变化；以上仅供定位，不能作为当前版本通过证据。' : '' }

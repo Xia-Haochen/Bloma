@@ -522,7 +522,7 @@ export interface LongtermProjectState {
     features:Array<{id:string;description:string;expected:string}>;candidate_id?:string;source_digest?:string;request_id?:string;created_at:string;verified_at?:string;confirmed_at?:string;deferred_at?:string;
     confirmation_requested_at?:string;versions?:Array<{candidate_id:string;source_digest:string;at:string}>}>
   backlog:Array<LeanScopeSuggestion&{state:'deferred'|'rejected'|'adopt_requested'|'staged';origin_scope:string;at:string}>
-  decisions:Array<{id:string;decision:string;reason:string;author:'agent'|'user';at:string;scope:string}>
+  decisions:Array<{id:string;decision:string;reason:string;author:'agent'|'user';at:string;scope:string;supersedes?:string[];feature_ids?:string[]}>
 }
 export interface LongtermActionInput extends RequestEnvelope {
   project_id:string;session_id:string;revision:number;action:'confirm'|'later'|'adopt_backlog'|'archive';backlog_id?:string

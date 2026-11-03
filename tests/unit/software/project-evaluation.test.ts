@@ -21,6 +21,18 @@ function brief(goal: string) {
 beforeEach(()=>{old=process.env.PROMA_HOME;home=mkdtempSync(join(tmpdir(),'bloma-project-facts-'));process.env.PROMA_HOME=home
   project=createProject({request_id:'c',mode:'longterm'},{workflowVersion:'software-v1'});brief('第一轮')})
 afterEach(()=>{if(old===undefined)delete process.env.PROMA_HOME;else process.env.PROMA_HOME=old;rmSync(home,{recursive:true,force:true,maxRetries:5})})
+it('replaces a decision with revision protection and preserves its audit history through the public paged view', async()=>{
+  const first=recordLongtermDecision(project.project_id,'s','旧方案','既有约定')
+  const oldId=first.decisions[0].id
+  const next=recordLongtermDecision(project.project_id,'s','新方案','新实现保持原业务',{supersedes:[oldId],expected_revision:first.revision,feature_ids:['F-001']})
+  expect(()=>recordLongtermDecision(project.project_id,'s','迟到方案','旧快照',{supersedes:[oldId],expected_revision:first.revision})).toThrow('STALE')
+  const tool=buildProductionContextTool(project.project_id),ctx={projectId:project.project_id,sessionId:'s',requestId:'r',signal:new AbortController().signal,state:createToolState()}
+  const current=JSON.parse((await tool.execute({topic:'project-state'},ctx)).output)
+  expect(current.current_decisions.map((d:{id:string})=>d.id)).toEqual([next.decisions.at(-1)!.id])
+  const history=JSON.parse((await tool.execute({topic:'project-state',history:true,limit:1},ctx)).output)
+  expect(history.decisions.items[0]).toMatchObject({id:oldId,effective:false})
+  expect(history.decisions.next_offset).toBe(1)
+})
 it('persists a confirmed reading plan through the real document store and public context tool',async()=>{
   const prior=readPrdBackplane(project.project_id)
   const next={...prior,project_plan:{version:1 as const,current:'save',stages:[{id:'save',title:'保存',feature_ids:['F-001']}]}}

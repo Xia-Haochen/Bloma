@@ -236,7 +236,22 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     childMaterialsBuilder: child => quality.isQualityChild(child) ? undefined : sessionMaterials(input.projectId, input.sessionId),
     onRuntimeObservation: observeRuntime,
     ...(({ maxConcurrentDelegations: 2, allowChannelOverrides: false, delegationSummaryLimit: 3000,
-      prepareDelegation: quality.prepare,
+      prepareDelegation: value => {
+        const lease = quality.prepare(value)
+        recordEvaluationEvent(input.projectId, 'delegation_started', {
+          session_id: value.childSessionId, parent_session_id: input.sessionId,
+          source: quality.isQualityChild(value.childSessionId) ? 'required_quality' : 'model_selected',
+          reason: value.args.expectedOutput ?? value.args.task,
+          task: value.args.task, role: value.args.role ?? 'implement', write_paths: value.args.writePaths ?? [],
+          max_children: 2, budget_scope: budget.executionScope,
+        })
+        let released = false
+        return { ...lease, release: () => {
+          lease.release()
+          if (!released) recordEvaluationEvent(input.projectId, 'delegation_released', { session_id: value.childSessionId, verification: 'not_implied' })
+          released = true
+        } }
+      },
       childSystemBuilder: (_role: import('../../shared/delegation-run-context').DelegationRunRole, child: string) =>
         quality.system(child) ?? `完成主负责人交付的具体子任务，先读相关文件，沿用现有接口。项目根：${project.root_path}。文件权限：${collaboration.describe(child)}。仅在归属范围内修改；不运行命令、不再委派、不修改目标/验收输入。需要跨边界修改时回报主负责人。简短交接实际修改、检查和未验证项，不自报产品通过。全局约束：${JSON.stringify(brief.constraints)}` })),
     childToolsBuilder: (id, role, _format, child) => {

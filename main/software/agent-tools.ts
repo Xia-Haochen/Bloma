@@ -27,10 +27,10 @@ export function buildSoftwareAgentTools(projectId: string, role: DelegationRunRo
   if (role === 'parent') tools.push(...buildSoftwareExecutionTools(projectId, policy.assertCommand, previewChanged), environmentTool(projectId), prepareEnvironmentTool(projectId, policy), buildSoftwareInspectTool(projectId, policy, previewChanged), buildSoftwareVerifyTool(projectId, policy, previewChanged), buildImprovementSuggestionTool(projectId,suggestionsChanged,policy.assertCommand))
   let longterm=false
   try{longterm=isLongtermSoftware(projectId)}catch{/* isolated schema clients may build tools before storing a project */}
-  if(role==='parent'&&longterm)tools.push({name:'record_longterm_decision',description:'保存当前长期里程碑的重要接口/数据格式/资源/迁移决定和理由，供下一轮恢复。不改范围、不验证、不暂停；不要保存密钥或把待办当成本轮授权。',
-    input_schema:{type:'object',additionalProperties:false,required:['decision','reason'],properties:{decision:{type:'string',maxLength:1200},reason:{type:'string',maxLength:1600}}},execute:async(input,ctx)=>{
+  if(role==='parent'&&longterm)tools.push({name:'record_longterm_decision',description:'保存当前长期里程碑的重要接口/数据格式/资源/迁移决定和理由。替代旧决定时传supersedes及project-state的decision_revision作为expected_revision；feature_ids引用确认需求。读取project-state可分页查有效决定和历史。不改范围、不验证、不暂停；不要保存密钥或把待办当成本轮授权。',
+    input_schema:{type:'object',additionalProperties:false,required:['decision','reason'],properties:{decision:{type:'string',maxLength:1200},reason:{type:'string',maxLength:1600},supersedes:{type:'array',items:{type:'string'}},feature_ids:{type:'array',items:{type:'string'}},expected_revision:{type:'integer',minimum:1}}},execute:async(input,ctx)=>{
       try{policy.assertCommand(ctx);if(ctx.projectId!==projectId||typeof input.decision!=='string'||typeof input.reason!=='string')throw Error('LONGTERM_DECISION_INVALID')
-        const state=recordLongtermDecision(projectId,ctx.sessionId,input.decision,input.reason);longtermChanged?.();return{output:JSON.stringify({saved:true,revision:state.revision,decision:state.decisions.at(-1)})}
+        const state=recordLongtermDecision(projectId,ctx.sessionId,input.decision,input.reason,{supersedes:input.supersedes as string[]|undefined,feature_ids:input.feature_ids as string[]|undefined,expected_revision:input.expected_revision as number|undefined});longtermChanged?.();return{output:JSON.stringify({saved:true,revision:state.revision,decision:state.decisions.at(-1)})}
       }catch(error){return{output:String(error),isError:true}}
     }})
   return tools
