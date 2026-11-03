@@ -1,3 +1,4 @@
+import { beginProjectAssignment } from '../software/task-assignment'
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SDKQuery } from '../orchestration/stages/orchestration-contracts'
@@ -131,7 +132,9 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   const continuation=/^(?:继续|恢复|验收|重新验收|运行验收|按已确认目标制作|开始桌面交付流程)[。！!\s]*$/.test(input.content.trim())
   const originalSource=softwareVerificationFingerprint(project.root_path)
   const runId = randomUUID()
+  let assignment: ReturnType<typeof beginProjectAssignment> | undefined
   const checkpoint = (status: SoftwareRunStatus, patch: { error?: string; candidateId?: string; source?: string; check?: { path: string; sha256: string } } = {}) => {
+    assignment?.checkpoint(status, patch)
     saveSoftwareRunState({ projectId: input.projectId, sessionId: input.sessionId, runId, status, ...patch })
   }
   const collaboration = createSoftwareCollaborationPolicy(input.projectId, project.root_path, input.sessionId)
@@ -194,6 +197,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
       if(!semantics.ready){await recordIndependentDisputes(input.projectId,semantics,signal);blocked(`独立案例的预期或覆盖声明尚有争议，未开始迎合这些预期的实现，也未改动确认目标或冻结断言：\n${JSON.stringify(semantics)}`,true);return}
     }
   }
+  if (!deps.coreVerification && !deps.securityScan && !deps.launchSmoke) assignment = beginProjectAssignment(input.projectId,input.sessionId,runId)
   checkpoint('running', { source: softwareVerificationFingerprint(project.root_path) })
   const runSignal = signal
   const budgetedQuery = budget.wrap(input.query)
