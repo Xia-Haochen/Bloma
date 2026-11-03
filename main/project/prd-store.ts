@@ -1,3 +1,4 @@
+import { validateProjectPlan } from '../software/project-plan'
 import { isModernWorkflowVersion } from '../../shared/workflow-version'
 /**
  * 需求追加/断言更新/PRD 渲染；对外契约经 document-engine re-export 保持不变。
@@ -134,6 +135,7 @@ export function readPrdBackplane(projectId: string): PrdBackplane {
           || parsed.lean_brief.delivery !== undefined && (!['desktop', 'browser', 'command'].includes(parsed.lean_brief.delivery)
             || (parsed.lean_brief.ui === 'none') !== (parsed.lean_brief.delivery === 'command'))
           || parsed.lean_brief.preview === 'reuse' && !/^[a-f0-9]{64}$/.test(parsed.lean_brief.reference_html_hash ?? ''))) throw new Error('LEAN_BRIEF_INVALID')
+        validateProjectPlan(parsed.project_plan, parsed.requirements.map(r => r.id))
         return reconcilePrdBackplane(parsed)
       }
       if (isModernWorkflowVersion(project.workflow_version)) throw new Error('LEAN_BRIEF_INVALID')

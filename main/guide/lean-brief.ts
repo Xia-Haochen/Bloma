@@ -1,3 +1,4 @@
+import { validateProjectPlan } from '../software/project-plan'
 import { createHash } from 'node:crypto'
 import type { PrdBackplane, SketchRequirement } from '../model/prd-backplane'
 import { bindAcceptance } from '../project/requirement-contract'
@@ -9,11 +10,11 @@ const texts = (value: unknown): string[] => Array.isArray(value) && value.every(
 const object = (x: unknown): x is Record<string, unknown> => Boolean(x && typeof x === 'object' && !Array.isArray(x))
 
 export const LEAN_BRIEF_PROMPT = `把用户目标整理为可执行的短任务单。只问真正阻塞成品方向的疑问，不问内部技术选择，不凑问题或功能数量，不自动增加删除、账号、联网等功能。
-原话与材料完整保留，历史仅作参考，最新明确意见优先；旧功能不得悄悄丢弃。保留既有F编号，新增能力不挤占旧编号。每项必需能力写一个可观察结果，不展开对象、规则、流程或三类状态图谱。未知关键条件只输出 {"action":"clarify","question":"关键问题","options":["选项"]}。
+原话与材料完整保留，历史仅作参考，最新明确意见优先；旧功能不得悄悄丢弃。保留既有F编号，新增能力不挤占旧编号。每项必需能力写一个可观察结果，复杂任务按需在constraints保留关键对象关系和状态规则，未知关键规则须澄清；简单任务不额外展开。未知关键条件只输出 {"action":"clarify","question":"关键问题","options":["选项"]}。
 “先给我看草图、确认后开工”属于制作流程，保留在原话，不列为成品功能；成品本身需要的画图或审批功能仍须保留。
 目标明确输出 {"action":"brief","name":"简短项目名","goal":"目标","ui":"required|none","requirements":[{"id":"已有F编号或省略","description":"必需能力","expected":"实际应看到什么"}],"constraints":[],"out_of_scope":[],"assumptions":[],"suggestions":[]}。
 requirements可用内部capabilities标记验收能力，仅接受llm/speech/microphone/prefix_rename/rename_undo；文件音频转写标speech，真实录音/麦克风输入才加microphone。不是用户技术选型，不增加功能；空标记不能取消明确文字承诺。
-可以在suggestions单列0~3条值得考虑的可选灵感，每条为{"title":"简短建议","description":"采纳后增加的具体能力","benefit":"对用户有什么帮助","expected":"采纳后可观察的结果"}。基于需求给出具体、不重复的建议，不凑数，不搜索或冒充市场调研；不得违背用户约束或范围外事项。用户明确要求的功能仍放requirements，不能降级成建议。未采纳建议不得混入goal、requirements、constraints、assumptions或必需验收；用户说直接做也不等于同意建议。不另写PRD正文、审计报告或实现代码。只输出JSON。`
+可以在suggestions单列0~3条值得考虑的可选灵感，每条为{"title":"简短建议","description":"采纳后增加的具体能力","benefit":"对用户有什么帮助","expected":"采纳后可观察的结果"}。基于需求给出具体、不重复的建议，不凑数，不搜索或冒充市场调研；不得违背用户约束或范围外事项。用户明确要求的功能仍放requirements，不能降级成建议。未采纳建议不得混入goal、requirements、constraints、assumptions或必需验收；用户说直接做也不等于同意建议。不另写PRD正文、审计报告或实现代码。复杂多阶段任务可附project_plan:{version:1,stages:[{id:"stage-1",title:"阶段标题",feature_ids:["F-001"]}],current:"stage-1"}；使用已有或本轮按顺序分配的F编号，每个必需功能恰好属于一个阶段。计划只是阅读视图，不删除后续功能，不授权阶段提前交付。只输出JSON。`
 
 export function parseLeanBrief(raw: string, context: { projectId: string; sessionId: string; source: string; previous: PrdBackplane; software?: boolean }):
   { action: 'clarify'; question: string; options: string[] } | { action: 'brief'; brief: PrdBackplane; suggestions: LeanScopeSuggestion[] } | undefined {
@@ -44,9 +45,11 @@ export function parseLeanBrief(raw: string, context: { projectId: string; sessio
     requirements.push(feature)
     acceptance[id] = row.expected
   }
+  let plan
+  try { plan = validateProjectPlan(value.project_plan === undefined ? context.previous.project_plan : value.project_plan, requirements.map(r => r.id)) } catch { return }
   return { action: 'brief', suggestions: parseLeanSuggestions(value.suggestions, requirements.map(row => row.description)), brief: bindAcceptance({ project_id: context.projectId,
     name: typeof value.name === 'string' && value.name.trim() ? value.name : context.previous.name,
-    positioning: value.goal, requirements, acceptance, constraints: texts(value.constraints), out_of_scope: texts(value.out_of_scope), assumptions: texts(value.assumptions),
+    positioning: value.goal, requirements, acceptance, ...(plan ? { project_plan: plan } : {}), constraints: texts(value.constraints), out_of_scope: texts(value.out_of_scope), assumptions: texts(value.assumptions),
     lean_brief: { version: 1, ui: value.ui as 'required' | 'none', source_session_id: context.sessionId,
       ...(context.software ? { delivery: delivery as 'desktop' | 'browser' | 'command' } : {}),
       ...(context.software && distribution !== undefined ? { distribution: distribution as 'local' | 'portable' | 'installer' | 'source' } : {}),
@@ -54,7 +57,7 @@ export function parseLeanBrief(raw: string, context: { projectId: string; sessio
 }
 
 export function renderLeanBrief(brief: PrdBackplane): string {
-  return [brief.positioning, ...brief.requirements.map(row => `${row.id} ${row.description}\n完成应看到：${brief.acceptance[row.id] ?? ''}`),
+  return [brief.positioning, ...(brief.project_plan ? ["实施顺序（全部功能仍须交付）：" + brief.project_plan.stages.map(s => s.title + "（" + s.feature_ids.join("、") + "）").join(" → ")] : []), ...brief.requirements.map(row => `${row.id} ${row.description}\n完成应看到：${brief.acceptance[row.id] ?? ''}`),
     ...(brief.lean_brief?.delivery ? ['使用方式：' + ({ desktop: '桌面软件，一键启动', browser: '在本机浏览器使用', command: '命令工具' }[brief.lean_brief.delivery])] : []),
     ...(brief.lean_brief?.distribution ? ['交付方式：' + ({ local: '在本机直接使用', portable: '可复制到其他电脑直接使用', installer: '可在其他电脑安装使用', source: '移交源码' }[brief.lean_brief.distribution])] : []),
     ...(brief.lean_brief?.preview === 'reuse' ? ['界面沿用已确认外观，在制作时按新增功能调整。'] : []),

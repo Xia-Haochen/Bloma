@@ -1,5 +1,6 @@
 /** Discovery metadata only. Full protocols remain behind the context tool. */
 export const SOFTWARE_CONTEXT_CATALOG = [
+  { name:'project-state',when:'整体目标、阶段阅读视图、未完成必需能力和当前范围决策',topic:'project-state',tools:['read_production_context'] },
   { name:'product-components',when:'复用设置/数据/队列/HTTP/多模态/文件/查询/分发模块，选择产品组件组合',topic:'components',tools:['prepare_software_capability'] },
   { name:'ai-service',when:'产品统一AI服务、路由和自己的Key配置；product-settings准备设置界面及后台桥',topic:'ai-service',tools:['prepare_software_capability'] },
   { name:'diagnostics',when:'一次核对执行、历史验收失败、命令及当前调试截图',topic:'diagnostics',tools:['read_process','inspect_app'] },

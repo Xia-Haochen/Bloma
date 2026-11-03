@@ -1,3 +1,5 @@
+import { projectEvaluation } from '../software/project-evaluation'
+import { projectPlanView } from '../software/project-plan'
 import { guiControlBindings } from './gui-acceptance-preparation'
 import type { AgentLoopTool } from '../agent/loop/agent-loop'
 import type { PrdBackplane } from '../model/prd-backplane'
@@ -37,6 +39,7 @@ export function productionContext(backplane: PrdBackplane, topic: string, featur
   if (topic === 'verification-llm') return { protocol: MODEL_VERIFICATION_BRIEF }
   if (topic === 'verification-speech') return { protocol: SPEECH_VERIFICATION_BRIEF }
   if (topic === 'overview') return {
+    project_plan: projectPlanView(backplane),
     positioning: backplane.positioning, features: backplane.requirements.map(({ id, description, priority }) => ({ id, description, priority })),
     ...(backplane.lean_brief ? { delivery: backplane.lean_brief.delivery, distribution: backplane.lean_brief.distribution, ui: backplane.lean_brief.ui } : {}),
     constraints: backplane.constraints, out_of_scope: backplane.out_of_scope, assumptions: backplane.assumptions,
@@ -63,7 +66,7 @@ export function buildProductionContextTool(projectId: string): AgentLoopTool {
   return { name: 'read_production_context', parallelSafe: true,
     description: '只读按需上下文：components看可复用组合，ai-service看通用AI模板与Key/路由；diagnostics汇总故障现场。capabilities列目录；documents/vision/multimodal/http-integration看能力；existing-project/working-state看工程与现场，features看范围，verification-gui/llm/speech看验收协议。',
     input_schema: { type: 'object', properties: {
-      topic: { type: 'string', enum: ['capabilities','components','ai-service','diagnostics','execution','working-state','documents','multimodal','vision','http-integration','acceptance-counterexamples','existing-project','overview', 'features', 'prd', 'launch', 'verification', 'verification-llm', 'verification-speech', 'verification-gui', 'data-update', 'delivery', 'resume', 'independent-design', 'longterm'] },
+      topic: { type: 'string', enum: ['capabilities','components','ai-service','diagnostics','execution','working-state','documents','multimodal','vision','http-integration','acceptance-counterexamples','existing-project','overview', 'features', 'prd', 'launch', 'verification', 'verification-llm', 'verification-speech', 'verification-gui', 'data-update', 'delivery', 'resume', 'independent-design', 'longterm', 'project-state'] },
       feature_ids: { type: 'array', items: { type: 'string' }, description: 'features主题的功能编号，如F-001；未知编号拒绝，不默默过滤。' },
     }, required: ['topic'] },
     execute: async (input, ctx) => {
@@ -89,6 +92,7 @@ export function buildProductionContextTool(projectId: string): AgentLoopTool {
           completion: '命令结束、本轮结束、最近验证和项目交付是不同事实。仍运行的命令先接续读取；命令成功不签发产品通过。' }) }
         if (isSoftwareProject(projectId) && input.topic === 'working-state') return { output: JSON.stringify(softwareWorkingContext(projectId)) }
         if (ctx.projectId !== projectId) throw new Error('PRODUCTION_CONTEXT_MISMATCH')
+        if(input.topic==='project-state')return{output:JSON.stringify(projectEvaluation(projectId))}
         if(input.topic==='longterm'){
           const state=isLongtermSoftware(projectId)?readLongtermState(projectId):undefined
           return{output:JSON.stringify({enabled:isLongtermSoftware(projectId),current:state?.milestones.find(item=>item.id===state.current_id),backlog:state?.backlog.slice(-20),decisions:state?.decisions.slice(-12),

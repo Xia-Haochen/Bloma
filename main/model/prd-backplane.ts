@@ -547,6 +547,7 @@ export interface GenerationGuardrails {
  * F-001 固定为"主题锚点"（用户最初想做什么），澄清/纠错/迭代只追加后续项、不覆盖主题。
  */
 export interface PrdBackplane {
+  project_plan?: { version: 1; stages: Array<{ id: string; title: string; feature_ids: string[] }>; current: string }
   /** Small production brief, with source provenance; no synthetic requirements graph. */
   lean_brief?: { version: 1; ui: 'required' | 'none'; delivery?: 'desktop' | 'browser' | 'command'; distribution?: 'local' | 'portable' | 'installer' | 'source'; preview?: 'skip' | 'reuse'; reference_html_hash?: string; source_session_id: string; source_sha256: string }
   /** Structured business requirements; old projects without this field remain readable. */

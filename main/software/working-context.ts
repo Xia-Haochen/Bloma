@@ -45,7 +45,7 @@ export function softwareWorkingContext(projectId: string, busy = true) {
   try { const live = leanBudget(projectId, 'desktop-implement').snapshot(); budget = { requests: live.requests, output: live.output, accounting_available: true } }
   catch { budget = { accounting_available: false, error: '当前计量记录不可读；以请求/金额准入保护为准，不从旧索引推断剩余额度。' } }
   return { project_id: projectId, operation_id: project.lean_operation_id, session_id: current?.sessionId ?? project.last_session_id,
-    goal_excerpt: brief.positioning.slice(0, 600), confirmed: Boolean(brief.user_confirmed_at), scope_hash: prdScopeFingerprint(brief), feature_ids: brief.requirements.slice(0, 128).map(r => r.id), feature_count: brief.requirements.length,
+    project_state_topic: 'project-state', goal_excerpt: brief.positioning.slice(0, 600), confirmed: Boolean(brief.user_confirmed_at), scope_hash: prdScopeFingerprint(brief), feature_ids: brief.requirements.slice(0, 128).map(r => r.id), feature_count: brief.requirements.length,
     status: softwareStatusView(projectId, busy), current_source: source, checkpoint_source: current?.source,
     source_changed_since_checkpoint: source && current?.source ? source !== current.source : undefined,
     pending_commands: activeSoftwareCommands(projectId, current?.sessionId ?? project.last_session_id ?? ''),
