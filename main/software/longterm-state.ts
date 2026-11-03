@@ -43,7 +43,7 @@ export function ensureLongtermState(projectId:string,sessionId:string){
   if(!brief.user_confirmed_at)throw Error('LONGTERM_CONFIRMED_SCOPE_REQUIRED')
   const state=readLongtermState(projectId)??{version:1 as const,project_id:projectId,revision:0,milestones:[],backlog:[],decisions:[]}
   const scope=prdScopeFingerprint(brief),current=state.milestones.find(item=>item.id===state.current_id)
-  if(current?.scope_hash===scope&&current.status!=='delivered'&&current.status!=='superseded'){
+  if(current?.scope_hash===scope&&current.operation_id===(findProject(projectId).lean_operation_id??'initial')&&current.status!=='delivered'&&current.status!=='superseded'){
     if(current.session_id!==sessionId)throw Error('LONGTERM_SESSION_MISMATCH: 先回到当前里程碑所属会话')
     return state
   }

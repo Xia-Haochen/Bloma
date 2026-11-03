@@ -1,3 +1,7 @@
+import { transferProjectTaskOwner } from './task-assignment'
+import { listSessions } from '../platform/sessions/session-service'
+import { hasSoftwareSessionProcess } from './process-manager'
+import { hasDebugSession } from './debug-sessions'
 import { resolve } from 'node:path'
 import type { LongtermActionInput } from '../../shared/types'
 import { readLongtermState, saveLongtermState, isLongtermSoftware, longtermPendingDecision } from './longterm-state'
@@ -19,8 +23,24 @@ export async function performLongtermAction(input:LongtermActionInput,signal:Abo
   if(['archived','abandoned'].includes(findProject(input.project_id).status))throw Error('LONGTERM_PROJECT_ARCHIVED: 先显式恢复项目')
   const state=readLongtermState(input.project_id),current=state?.milestones.find(item=>item.id===state.current_id)
   if(!state||state.revision!==input.revision)throw Error('LONGTERM_STATE_STALE')
-  if(!['confirm','later','adopt_backlog','archive'].includes(input.action))throw Error('LONGTERM_ACTION_INVALID')
+  if(!['confirm','later','adopt_backlog','archive','handoff'].includes(input.action))throw Error('LONGTERM_ACTION_INVALID')
   const notify=()=>deps.emit('longterm_changed',{summary:findProject(input.project_id).longterm_summary})
+  if(input.action==='handoff'){
+    if(deps.busy||!current||current.operation_id!==(findProject(input.project_id).lean_operation_id??'initial')||current.status==='confirming'||current.status==='delivered')throw Error('LONGTERM_HANDOFF_NOT_IDLE')
+    if(current.session_id===input.session_id)throw Error('LONGTERM_HANDOFF_SAME_SESSION')
+    if(!listSessions({request_id:input.request_id,project_id:input.project_id}).sessions.some(s=>s.session_id===input.session_id))throw Error('LONGTERM_HANDOFF_SESSION_INVALID')
+    if(hasSoftwareSessionProcess(input.project_id,current.session_id)||hasDebugSession(input.project_id,current.session_id))throw Error('LONGTERM_HANDOFF_WORK_STILL_RUNNING')
+    return withLeanRuntime(input.project_id,'desktop-implement',signal,async activeSignal=>{
+      activeSignal.throwIfAborted()
+      if(readLongtermState(input.project_id)?.revision!==state.revision||prdScopeFingerprint(readPrdBackplane(input.project_id))!==current.scope_hash)throw Error('LONGTERM_STATE_STALE')
+      const from=current.session_id
+      transferProjectTaskOwner(input.project_id,from,input.session_id)
+      current.session_id=input.session_id
+      const next=saveLongtermState(state)
+      recordEvaluationEvent(input.project_id,'execution_handoff',{from,to:input.session_id,milestone:current.id})
+      notify();return{state:next,detail:'执行归属已转到当前会话，原记录与用量保留；未启动模型或接管旧进程，可在此会话继续。'}
+    })
+  }
   if(input.action==='adopt_backlog'){
     const item=state.backlog.find(item=>item.id===input.backlog_id)
     if(!item||!['deferred','adopt_requested'].includes(item.state))throw Error('LONGTERM_BACKLOG_STALE')

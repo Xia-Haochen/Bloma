@@ -79,7 +79,7 @@ function ProjectModelSettings({ projectId, name }: { projectId: string; name: st
             <label>上下文上限（token）<input aria-label="上下文上限" type="number" min="1" max="2000000" value={context} onChange={event => edit(setContext,event.target.value)} /></label>
             <label>输入单价（元／百万 token）<input aria-label="输入单价" type="number" min="0" step="any" value={inputPrice} onChange={event => edit(setInputPrice,event.target.value)} /></label>
             <label>输出单价（元／百万 token）<input aria-label="输出单价" type="number" min="0" step="any" value={outputPrice} onChange={event => edit(setOutputPrice,event.target.value)} /></label>
-          </div><p>平台按完整上下文与最多 4096 输出 token 计算预留；预算不足会拒绝保存。</p>
+          </div><p>按当前任务最多 {data?.design_request_limit??1} 次独立设计请求，共用下列总预算；每次按完整上下文与最多4096输出token预留，预算不足会拒绝保存。</p>
         </details>
         <label className="model-consent"><input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} />我确认上述计价，授权当前项目本轮 B 独立设计最多使用 {cap || '所填金额'} 元。保存不立即调用模型。</label>
       </div>}

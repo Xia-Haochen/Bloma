@@ -1,3 +1,4 @@
+import { assertStageContractsRetained } from './project-stages';
 import { existsSync, readFileSync } from 'node:fs';
 import { freezeNativeGuiTests, nativeTestContractChanges, NativeTestContractError } from './native-gui-tests';
 import { findProject, updateProject } from '../project/project-service';
@@ -22,6 +23,7 @@ export function registerNativeGuiTests(projectId: string, script: string, restar
         const changes = previous.native_tests ? nativeTestContractChanges(previous.native_tests, native_tests) : ['existing-action-suite'];
         if (previous.scope_hash === scope && changes.length && !repairable) throw new NativeTestContractError(changes);
     }
+    assertStageContractsRetained(projectId, native_tests);
     assertRetainedSoftwareBehavior(projectId, 'gui', suite);
     // Immutable identity pair records every accepted adapter revision. No model
     // can use the audit record to replace the frozen business contract.

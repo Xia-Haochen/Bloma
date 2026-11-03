@@ -1,3 +1,4 @@
+import { recordSessionActivity } from '../../../main/platform/sessions/session-service'
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -116,4 +117,17 @@ it('fails closed on damaged records and on final state persistence failure witho
   vi.mocked(writeTextFileAtomic).mockImplementation((...args)=>{if(args[0]===file)throw Error('fixture disk full');actual.writeTextFileAtomic(...args)})
   await expect(performLongtermAction(action(state.revision),signal(),{busy:false,emit})).rejects.toThrow('fixture disk full')
   expect(readFileSync(file,'utf8')).toBe(before);expect(findProject(project.project_id).status).toBe('active');expect(longtermPendingDecision(project.project_id,'s')).toBeTruthy()
+})
+
+it('hands an idle milestone to an explicit project session without spending or removing candidate guards',async()=>{
+  const state=ensureLongtermState(project.project_id,'s')
+  recordSessionActivity('target',project.project_id)
+  const input={request_id:'handoff',project_id:project.project_id,session_id:'target',revision:state.revision,action:'handoff' as const}
+  await expect(performLongtermAction(input,signal(),{busy:true,emit})).rejects.toThrow('NOT_IDLE')
+  const before=leanBudget(project.project_id,'desktop-implement').snapshot().requests
+  const result=await performLongtermAction(input,signal(),{busy:false,emit})
+  expect(result.state.milestones[0].session_id).toBe('target')
+  expect(leanBudget(project.project_id,'desktop-implement').snapshot().requests).toBe(before)
+  expect(()=>ensureLongtermState(project.project_id,'s')).toThrow('SESSION_MISMATCH')
+  await expect(performLongtermAction(input,signal(),{busy:false,emit})).rejects.toThrow('STALE')
 })

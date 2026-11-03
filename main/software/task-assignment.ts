@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getPromaHome } from '../../storage/config-paths'
@@ -80,9 +80,28 @@ export function beginProjectAssignment(projectId: string, session: string, run: 
 export function projectTaskView(projectId: string, offset = 0, limit = 20) {
   if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw Error('TASK_PAGE_INVALID')
   const state = readProjectTasks(projectId), project = findProject(projectId), scope = prdScopeFingerprint(readPrdBackplane(projectId))
-  return { revision: state.revision, tasks: state.tasks.slice(offset, offset + limit).map(t => ({
-    ...t, assignments: t.assignments.slice(-10), assignment_count: t.assignments.length,
+  const source = softwareVerificationFingerprint(project.root_path)
+  return { revision: state.revision, tasks: [...state.tasks].reverse().slice(offset, offset + limit).map(t => ({
+    ...t, source_matches: t.assignments.find(a => a.id === t.current)?.source === source, assignments: t.assignments.slice(-10), assignment_count: t.assignments.length,
     current_scope: t.scope === scope && t.operation === (project.lean_operation_id ?? 'initial'),
     note: '运行状态及报告属于记录版本；当前源码变化后必须重新验证。',
   })), next_offset: offset + limit < state.tasks.length ? offset + limit : null }
+}
+
+/** Fence the old attempt while the host owns the operation lease. No process is adopted. */
+export function transferProjectTaskOwner(projectId: string, from: string, to: string) {
+  const budget = leanBudget(projectId, 'desktop-implement').snapshot()
+  if (!budget.runtimeOwner || budget.runtimePid !== process.pid) throw Error('TASK_EXECUTION_LEASE_REQUIRED')
+  const project = findProject(projectId), scope = prdScopeFingerprint(readPrdBackplane(projectId))
+  const state = readProjectTasks(projectId)
+  const task = state.tasks.find(t => t.scope === scope && t.operation === (project.lean_operation_id ?? 'initial'))
+  if (!task) return
+  const old = task.assignments.find(a => a.id === task.current)!
+  if (old.session === to && old.id.startsWith('handoff-')) return // retry after a crash between task and milestone writes
+  if (old.session !== from) throw Error('TASK_HANDOFF_OWNER_CHANGED')
+  if (['running','repairing','verifying'].includes(old.status)) old.status = 'interrupted'
+  const id = `handoff-${randomUUID()}`
+  task.assignments.push({ id, session: to, lease: budget.runtimeOwner, status: 'interrupted', source: old.source,
+    started_at: new Date().toISOString(), error: '用户转交归属；下一次制作先核对已有产物和证据，不重放副作用。' })
+  task.current = id; save(projectId, state)
 }

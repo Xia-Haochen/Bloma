@@ -1,3 +1,4 @@
+import { projectProgress } from '../software/project-progress'
 /**
  * 交付面板 IPC（2026-10-04 呈现层收口批）。
  *
@@ -147,6 +148,7 @@ export function registerProjectDeliverablesIpc(ipcMain: IpcMain, _mainWindow: Br
       }
       result.can_launch = (project.current_stage === 'completed' || Boolean(stable)) && result.launch.parse_ok
       if (isSoftwareProject(project.project_id)) {
+        try{result.project_progress=projectProgress(project.project_id,hasRunForProject(project.project_id))}catch{result.project_progress_error='项目执行记录暂不可读，不能据此推断完成。'}
         result.status_view = softwareStatusView(project.project_id, hasRunForProject(project.project_id))
         if(isLongtermSoftware(project.project_id))try{result.longterm=readLongtermState(project.project_id)}catch(error){result.longterm_error=String(error)}
         result.improvement_suggestions = readSoftwareSuggestions(project.project_id)

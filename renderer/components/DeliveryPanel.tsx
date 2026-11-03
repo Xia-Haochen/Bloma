@@ -1,3 +1,4 @@
+import { ProjectExecutionPanel } from './ProjectExecutionPanel'
 import React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { RotateCw, LayoutTemplate, Play } from './icons'
@@ -223,7 +224,7 @@ export const DeliveryPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
         <button type="button" data-ai-id="software-trial-launch" disabled={loading || !data?.can_trial} onClick={() => void onLaunch(false, undefined, false, true)}>打开独立试用</button>
         {data.trial?.state === 'running' && <button type="button" data-ai-id="software-trial-update" disabled={loading} onClick={() => void onLaunch(true, undefined, false, true)}>已保存，切换到当前代码试用</button>}
         {data.trial?.state === 'running' && <button type="button" disabled={loading} onClick={() => void onCloseTrial()}>关闭试用</button>}
-        <span>测试数据 · {data.trial?.qualification==='host_verified_test_data'?'已有宿主检查，待阶段确认':'尚未验收'}{data.trial?.state==='running'?' · 自动验收期间可继续使用':''}{data.trial ? ` · 版本 ${data.trial.release_id.slice(0,12)}` : ''}</span>
+        <span>测试数据 · {data.trial?.qualification==='host_verified_test_data'?'已有宿主检查，待阶段确认':data.trial?.qualification==='stage_checked_test_data'?'仅阶段局部检查，整体尚未验收':'尚未验收'}{data.trial?.state==='running'?' · 自动验收期间可继续使用':''}{data.trial ? ` · 版本 ${data.trial.release_id.slice(0,12)}` : ''}</span>
       </div>}
       {data?.trial?.state==='exited'&&data.trial.last_output!==undefined&&<pre className="software-command-trial" aria-label="命令试用输出">{data.trial.last_output||'命令运行完成，无输出。'}</pre>}
       </div></Inspection>
@@ -235,6 +236,7 @@ export const DeliveryPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
       <div className={hasCanvas ? 'workspace-inspection-content' : undefined}>
       {hasCanvas && <button type="button" className="theatre-tool" onClick={event => { const details = event.currentTarget.closest('details')!; details.open = false; setShowCorrection(false); details.querySelector('summary')?.focus() }}>关闭维护详情</button>}
       <div className="theatre-delivery-body" data-has-sketch={Boolean(embedded && project?.current_stage !== 'completed' && data?.confirmed_sketch_url)} style={{ flex: data?.trial?.state === 'running' ? '0 0 auto' : 1, overflowY: 'auto', padding: '10px 14px', minHeight: 0 }}>
+        {projectId&&<ProjectExecutionPanel projectId={projectId} progress={data?.project_progress} error={data?.project_progress_error}/>}
         {project?.mode==='longterm'&&project.workflow_version==='software-v1'&&projectId&&<LongtermProjectPanel key={projectId} projectId={projectId} state={data?.longterm} error={data?.longterm_error} archived={project.status==='archived'||project.status==='abandoned'} refresh={()=>void refresh()} />}
         <SoftwareSuggestions key={projectId} value={data?.improvement_suggestions} refresh={()=>void refresh()} />
         {data?.trial?.state !== 'running' && <ProgramScreenshot />}

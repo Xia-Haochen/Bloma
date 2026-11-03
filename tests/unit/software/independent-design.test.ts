@@ -199,3 +199,32 @@ it('executes frozen B business values through an actual browser and rejects a pr
   writeFileSync(join(root,'index.html'),html.replace('.value"',`.value+'Wrong'"`))
   expect((await verifyIndependentDesign(project.project_id,await prepareSoftwareRelease(project.project_id,root),AbortSignal.timeout(45000))).status).toBe('failed')
 },90000)
+
+it('splits a large confirmed target only under explicit bounded batch authority and never automatically repeats a partial attempt',async()=>{
+  const parsed=parseLeanBrief(JSON.stringify({action:'brief',goal:'多个字段',ui:'required',delivery:'browser',requirements:Array.from({length:13},(_,i)=>({description:'字段'+i,expected:'显示值'+i}))}),{projectId:project.project_id,sessionId:'s',source:'字段',previous:readPrdBackplane(project.project_id),software:true})!
+  if(parsed.action!=='brief')throw Error('fixture');parsed.brief.lean_brief!.preview='skip'
+  syncDocuments({request_id:'expand',project_id:project.project_id,session_id:'s',checkpoint:'requirement_confirmed'},parsed.brief)
+  const scope=prdScopeFingerprint(markPrdUserConfirmed(project.project_id)!)
+  updateProject(project.project_id,{ux_confirmation:{prd_fingerprint:scope,design_hash:scope,html_hash:null}})
+  enable()
+  const denied=await prepareIndependentDesign(input())
+  expect(denied.reason).toContain('BATCH_AUTHORIZATION_REQUIRED');expect(calls).toBe(0)
+  const auth=JSON.parse(readFileSync(policy.authorization_path,'utf8'));auth.max_design_requests=3
+  writeFileSync(policy.authorization_path,JSON.stringify(auth))
+  let requests=0,failSecond=true
+  const batched:SDKQuery=async function*(prompt,options){
+    requests++;const data=JSON.parse(prompt)
+    options.requestGuard?.({url:'https://b.invalid/v1/messages',body:JSON.stringify({model:'model-b'})})
+    if(data.batch.index===2&&failSecond){yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:'invalid'}]}};return}
+    const result={cases:data.requirements.map((r:{id:string;expected:string;requirement_hash:string},i:number)=>({id:data.batch.id_prefix+i,feature:r.id,basis:{requirement_hash:r.requirement_hash,expected_source:r.expected},coverage:['normal'],steps:[{kind:'fill',control:'input',value:r.expected},{kind:'expect',control:'result',equals:r.expected,oracle:{kind:'input',step:0}}]})),coverage_notes:data.requirements.flatMap((r:{id:string;expected:string})=>['multi_object','exception','cancel','reopen'].map(category=>({feature:r.id,category,disposition:'not_applicable',reason:'仅显示输入',source:r.expected})))}
+    yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify(result)}]}}
+  }
+  const failed=await prepareIndependentDesign({...input(),query:batched})
+  expect(failed.status).toBe('blocked');expect(requests).toBe(2)
+  await prepareIndependentDesign({...input(),query:batched});expect(requests).toBe(2)
+  failSecond=false;writeFileSync(policy.authorization_path,JSON.stringify({...auth,nonce:'explicit-new-test-authorization'}))
+  const result=await prepareIndependentDesign({...input(),query:batched})
+  expect(result.status,result.reason).toBe('frozen');expect(requests).toBe(5);expect(result.contract?.cases).toHaveLength(13)
+  expect(new Set(result.contract?.cases.map(c=>c.id)).size).toBe(13)
+  await prepareIndependentDesign({...input(),query:batched});expect(requests).toBe(5)
+})

@@ -258,6 +258,7 @@ export interface ChannelModel {
 }
 
 export interface SoftwareModelSettings {
+  design_request_limit?:number
   project_id: string; revision: string; variant: 'single'|'independent'; locked: boolean; lock_reason?: string
   channels: Array<{ id: string; name: string; models: string[] }>
   channel_id?: string; model?: string
@@ -463,7 +464,15 @@ export interface SoftwareStatusView {
   goal: { status: 'not_delivered' | 'waiting_confirmation' | 'delivered' | 'archived'; label: string }
   active_commands: number
 }
+export interface SoftwareProjectProgress {
+  environment:string;execution:string;next_stage:string|null
+  stages:Array<{id:string;title:string;status:string;current_source:boolean}>
+  delegation_count:number;delegations:Array<{id:string;reason:string;status:'running'|'ended'|'interrupted';required_review:boolean}>
+  observed_strategy_segments:number;note:string
+}
 export interface ProjectDeliverablesResult {
+  project_progress?:SoftwareProjectProgress
+  project_progress_error?:string
   status_view?: SoftwareStatusView
   longterm?:LongtermProjectState
   longterm_error?:string
@@ -507,7 +516,7 @@ export interface ProjectLaunchAppInput extends RequestEnvelope {
 }
 export interface SoftwareTrial {
   release_id: string; source: string; process_id: string; pid?: number; state: string; data_dir: string; url?: string
-  qualification: 'unverified_test_data'|'host_verified_test_data'; at: string; last_output?:string
+  qualification: 'unverified_test_data'|'host_verified_test_data'|'stage_checked_test_data'; at: string; last_output?:string
 }
 export interface SoftwareSuggestions {
   version:1; id:string; project_id:string; session_id:string; scope:string; operation:string
@@ -525,7 +534,7 @@ export interface LongtermProjectState {
   decisions:Array<{id:string;decision:string;reason:string;author:'agent'|'user';at:string;scope:string;supersedes?:string[];feature_ids?:string[]}>
 }
 export interface LongtermActionInput extends RequestEnvelope {
-  project_id:string;session_id:string;revision:number;action:'confirm'|'later'|'adopt_backlog'|'archive';backlog_id?:string
+  project_id:string;session_id:string;revision:number;action:'confirm'|'later'|'adopt_backlog'|'archive'|'handoff';backlog_id?:string
 }
 
 /** 启动程序结果。 */

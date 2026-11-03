@@ -151,7 +151,10 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     return verificationFingerprint(project.root_path, { scope: prdScopeFingerprint(current), confirmed: Boolean(current.user_confirmed_at),
       ux: findProject(input.projectId).ux_confirmation ?? null, rules }, 'software')
   }
-  const emit = (type: Parameters<DesktopRouteDeps['publish']>[1], payload: Record<string, unknown>) => deps.publish(input, type, payload)
+  const emit = (type: Parameters<DesktopRouteDeps['publish']>[1], payload: Record<string, unknown>) => {
+    if(type.startsWith('delegation_'))recordEvaluationEvent(input.projectId,type,payload)
+    deps.publish(input, type, payload)
+  }
   const blocked = (reason: string, confirmation = false, state: SoftwareRunStatus = 'blocked') => {
     if (/\b(?:MONETARY_(?:BUDGET|OPERATION)_EXHAUSTED|HARNESS_(?:REQUEST|OUTPUT)_BUDGET_EXHAUSTED|REQUEST_BUDGET_EXHAUSTED)\b/.test(reason)) {
       try {
@@ -205,7 +208,18 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   // Pi persists an error string. Retain this run's typed refusal at the query
   // boundary so its cost breakdown survives the native session adapter.
   const query: SDKQuery = quality.wrapQuery(async function* (prompt, options) {
-    try { yield* budgetedQuery(prompt, options) }
+    try { yield* budgetedQuery(prompt, { ...options, requestGuard: request => {
+      options.requestGuard?.(request)
+      try {
+        const body = JSON.parse(request.body)
+        const effort = body.output_config?.effort ?? body.reasoning_effort ?? body.reasoning?.effort
+        const allowedEffort = ['none','minimal','low','medium','high','xhigh','max','ultra'].includes(effort) ? effort : 'unknown'
+        recordEvaluationEvent(input.projectId,'request_prepared', { session_id: options.accounting?.parentSessionId ?? input.sessionId,
+          model: typeof body.model === 'string' ? body.model : 'unknown', thinking_type: ['enabled','disabled','adaptive'].includes(body.thinking?.type) ? body.thinking.type : 'unknown',
+          reasoning_effort: allowedEffort, max_tokens: Number.isSafeInteger(body.max_tokens) ? body.max_tokens : null,
+          source: 'transport_request_guard', sent: 'not_confirmed', provider_parameter_acceptance: 'unknown' })
+      } catch { /* observational only; never store raw request bodies or credentials */ }
+    } }) }
     catch (error) { if (monetaryStopMessage(error)) monetaryFailure = error; throw error }
   })
   const baseTools = buildSoftwareAgentTools(input.projectId, 'parent', collaboration,
@@ -217,6 +231,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     brief.lean_brief.ui === 'required' ? buildLeanGuiTool(input.projectId) : buildLeanCliTool(input.projectId)])
   const system = [
     SOFTWARE_ENGINEERING_INSTRUCTIONS,
+    ...(brief.project_plan ? ['已确认阶段计划：'+JSON.stringify(brief.project_plan)+'。先read_production_context(project-stages)核对进度。Electron/浏览器GUI按顺序用verify_project_stage检查，每次包含之前阶段的累计案例；通过后继续返回的next_stage，无需用户反复催继续。局部通过不是交付，最后仍用verify_app检查全部需求。命令/其它运行时沿完整目标制作和验收，不伪造阶段通过。'] : []),
     '稳定候选结束制作前由宿主按已验证基线和实际差异选择审阅；inspect_collaboration_plan可查询理由，不能自报低风险或跳过角色。需要C时进行独立只读审阅。用start_quality_review、wait_for_delegations、read_quality_findings处理宿主台账。审阅期间不写不运行；finding是疑点，按确认预期登记必要复现案例，再check_quality_finding实际复现。修复后同案例复测并重新审阅当前候选，不能自报关闭或更改预期过关。',
     '宿主选定V的界面候选还须经独立V审阅；小范围纯样式改动可能只选V，其他业务/未知变更保留C/V。未变化的已验证候选不重复自动审阅，仍须原宿主验收。start_visual_review封存当前真实PNG与同次DOM/操作事实，子会话用专属图片授权，不能传父debug_session_id替代。必要操作先inspect_app，再启动V；未看图、图像渠道拒绝或旧图不能当视觉通过，不另选付费渠道或用OCR代替。',
     `项目根：${project.root_path}。已有平台组件和骨架优先复用，当前未有的环境先探测；不重做已证明的环境研究。不要求架构文档、阶段任务书或推进标记。`,

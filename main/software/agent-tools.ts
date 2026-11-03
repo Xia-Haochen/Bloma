@@ -1,3 +1,6 @@
+import { verifyProjectStage } from './project-stages'
+import { activeSoftwareCommands, stopSoftwareSession } from './process-manager'
+import { closeDebugSessions } from './debug-sessions'
 import { buildAgentTools } from '../agent/tools/agent-tools'
 import type { AgentLoopTool } from '../agent/loop/agent-loop'
 import type { DelegationRunRole } from '../../shared/delegation-run-context'
@@ -31,6 +34,16 @@ export function buildSoftwareAgentTools(projectId: string, role: DelegationRunRo
     input_schema:{type:'object',additionalProperties:false,required:['decision','reason'],properties:{decision:{type:'string',maxLength:1200},reason:{type:'string',maxLength:1600},supersedes:{type:'array',items:{type:'string'}},feature_ids:{type:'array',items:{type:'string'}},expected_revision:{type:'integer',minimum:1}}},execute:async(input,ctx)=>{
       try{policy.assertCommand(ctx);if(ctx.projectId!==projectId||typeof input.decision!=='string'||typeof input.reason!=='string')throw Error('LONGTERM_DECISION_INVALID')
         const state=recordLongtermDecision(projectId,ctx.sessionId,input.decision,input.reason,{supersedes:input.supersedes as string[]|undefined,feature_ids:input.feature_ids as string[]|undefined,expected_revision:input.expected_revision as number|undefined});longtermChanged?.();return{output:JSON.stringify({saved:true,revision:state.revision,decision:state.decisions.at(-1)})}
+      }catch(error){return{output:String(error),isError:true}}
+    }})
+  if(role==='parent')tools.push({name:'verify_project_stage',description:'按已确认project_plan顺序检查阶段：script为原生GUI测试，覆盖此前阶段与本阶段全部F编号。阶段通过只推进内部制作，不发布、不缩减最终完整验收。前次实际执行的业务输入/断言不得降低；可修定位。',
+    input_schema:{type:'object',additionalProperties:false,required:['stage_id','script'],properties:{stage_id:{type:'string'},script:{type:'string'},restart:{type:'boolean'}}},execute:async(input,ctx)=>{
+      try{policy.assertCommand(ctx)
+        if(ctx.projectId!==projectId||typeof input.stage_id!=='string'||typeof input.script!=='string'||input.restart!==undefined&&typeof input.restart!=='boolean')throw Error('PROJECT_STAGE_INPUT_INVALID')
+        if(activeSoftwareCommands(projectId,ctx.sessionId).length)throw Error('PROJECT_STAGE_WAIT_FOR_COMMANDS')
+        await closeDebugSessions(projectId,ctx.sessionId);await stopSoftwareSession(projectId,ctx.sessionId)
+        const result=await verifyProjectStage(projectId,input.stage_id,input.script,ctx.signal,input.restart===true)
+        return{output:JSON.stringify(result),isError:result.status!=='passed'}
       }catch(error){return{output:String(error),isError:true}}
     }})
   return tools
@@ -82,7 +95,7 @@ export const SOFTWARE_ENGINEERING_INSTRUCTIONS = [
   '图片OCR与音频复用按需读取read_production_context(multimodal)，JSON API/Webhook读取http-integration；用prepare_software_capability的ocr/http物化产品组件。只实现当前确认范围，产品使用自己的凭据；准备、OCR识别文本、本机HTTP契约和真实外部效果分别报告，不能借平台渠道密钥或用受控服务冒充真实账号集成。',
   '资料解析/检索先按需读取read_production_context(documents)，复用产品自己的成熟解析依赖和document_runtime.cjs，不自写PDF/ZIP解析器替代依赖诊断。已有工程用inspect_repository overview/changes核对原入口与本轮增量；设计验收时可读取acceptance-counterexamples，选择与当前确认范围有关的多对象/异常反例。目录和组件准备不等于产品通过。',
   '通用能力按需读取：read_production_context(capabilities)看目录，execution看异步命令，working-state看当前现场。安装/构建/测试可run_command(yield_ms:1000)保留同一进程，用read_process等待结果；不要因工具已返回就重复启动或宣称完成。已有说明和组件按需使用，不增加前置流程。',
-  '长期型读取read_production_context(longterm)恢复当前里程碑、待办与决策。只实现当前已确认目标；待办不自动开工。能力/接口/数据结构有重要变化时用record_longterm_decision保存兼容、迁移或回滚决定及原因。宿主检查通过后保留当前版本，待用户核对里程碑；不要把本阶段通过说成整个长期产品已完成。',
+  '长期型读取read_production_context(project-state)恢复当前有效决定和全部目标，分页用offset/limit；project-tasks读取执行归属和旧报告，project-stages读取累计局部检查。普通继续优先恢复原会话，不重放旧副作用。只实现当前已确认目标；待办不自动开工。能力/接口/数据结构有重要变化时用record_longterm_decision保存兼容、迁移或回滚决定及原因。宿主检查通过后保留当前版本，待用户核对里程碑；不要把本阶段通过说成整个长期产品已完成。',
   '语音识别等复杂能力先用inspect_software_capabilities检查现有组件、项目运行时和真实资源；speech用prepare_software_capability受控准备，不扫描宿主源码猜协议，不重复手写模型下载/录音内核。Python直接复用SpeechEngine，Node/Electron可用speech_bridge.cjs.transcribeWav处理APP_DATA_DIR内的PCM16 WAV；资源准备、固定音频与真实麦克风/GUI/独立交付分别验收。',
   '若宿主已启用第二模型验收设计，先用read_production_context(independent-design)读取冻结案例；实现这些已确认业务预期并在INDEPENDENT_ADAPTER.json只映射逻辑控件到静态CSS，不能改输入或断言。缺少适配控件不等于缺少产品功能；若B要求范围外行为或预期有争议，用challenge_independent_case提出理由与证据，不能擅自新增功能、禁用案例或裁决通过。未启用时仍为单模型验收，不声称独立审阅。',
   '可用offer_suggestions留下制作中或交付后供参考的改进建议；它不改变范围、不暂停当前制作。未被用户明确选择并再次确认的建议，不能实现或列为验收义务；不要用propose_scope_change把自己的想法冒充用户新需求。',

@@ -1,3 +1,4 @@
+import { projectStageView } from '../software/project-stages'
 import { projectTaskView } from '../software/task-assignment'
 import { projectActivityView } from '../software/project-activity'
 import { decisionPage } from '../software/project-decisions'
@@ -69,7 +70,7 @@ export function buildProductionContextTool(projectId: string): AgentLoopTool {
   return { name: 'read_production_context', parallelSafe: true,
     description: '只读按需上下文：components看可复用组合，ai-service看通用AI模板与Key/路由；diagnostics汇总故障现场。capabilities列目录；documents/vision/multimodal/http-integration看能力；existing-project/working-state看工程与现场，features看范围，verification-gui/llm/speech看验收协议。',
     input_schema: { type: 'object', properties: {
-      topic: { type: 'string', enum: ['capabilities','components','ai-service','diagnostics','execution','working-state','documents','multimodal','vision','http-integration','acceptance-counterexamples','existing-project','overview', 'features', 'prd', 'launch', 'verification', 'verification-llm', 'verification-speech', 'verification-gui', 'data-update', 'delivery', 'resume', 'independent-design', 'longterm', 'project-state', 'project-activity', 'project-tasks'] },
+      topic: { type: 'string', enum: ['capabilities','components','ai-service','diagnostics','execution','working-state','documents','multimodal','vision','http-integration','acceptance-counterexamples','existing-project','overview', 'features', 'prd', 'launch', 'verification', 'verification-llm', 'verification-speech', 'verification-gui', 'data-update', 'delivery', 'resume', 'independent-design', 'longterm', 'project-state', 'project-activity', 'project-tasks', 'project-stages'] },
       offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 50 }, history: { type: 'boolean' },
       feature_ids: { type: 'array', items: { type: 'string' }, description: 'features主题的功能编号，如F-001；未知编号拒绝，不默默过滤。' },
     }, required: ['topic'] },
@@ -96,6 +97,7 @@ export function buildProductionContextTool(projectId: string): AgentLoopTool {
           completion: '命令结束、本轮结束、最近验证和项目交付是不同事实。仍运行的命令先接续读取；命令成功不签发产品通过。' }) }
         if (isSoftwareProject(projectId) && input.topic === 'working-state') return { output: JSON.stringify(softwareWorkingContext(projectId)) }
         if (ctx.projectId !== projectId) throw new Error('PRODUCTION_CONTEXT_MISMATCH')
+        if(input.topic==='project-stages')return{output:JSON.stringify(projectStageView(projectId))}
         if(input.topic==='project-tasks')return{output:JSON.stringify(projectTaskView(projectId,input.offset as number|undefined,input.limit as number|undefined))}
         if(input.topic==='project-activity')return{output:JSON.stringify(projectActivityView(projectId,input.offset as number|undefined,input.limit as number|undefined))}
         if(input.topic==='project-state')return{output:JSON.stringify(projectEvaluation(projectId,{offset:input.offset as number|undefined,limit:input.limit as number|undefined,history:input.history as boolean|undefined}))}

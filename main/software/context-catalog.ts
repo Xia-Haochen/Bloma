@@ -1,5 +1,6 @@
 /** Discovery metadata only. Full protocols remain behind the context tool. */
 export const SOFTWARE_CONTEXT_CATALOG = [
+  { name:'project-stages',when:'已确认阶段的累计局部GUI检查、快照和下一项；最终仍需完整验收',topic:'project-stages',tools:['verify_project_stage','verify_app'] },
   { name:'project-tasks',when:'当前目标执行归属、attempt历史与宿主报告；不恢复旧进程',topic:'project-tasks',tools:['read_production_context'] },
   { name:'project-activity',when:'分页读取任务活动、实际配置与策略分段；不是通过凭据',topic:'project-activity',tools:['read_production_context'] },
   { name:'project-state',when:'整体目标、阶段阅读视图、未完成必需能力和当前范围决策',topic:'project-state',tools:['read_production_context'] },
