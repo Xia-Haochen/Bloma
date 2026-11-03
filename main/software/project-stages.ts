@@ -8,13 +8,14 @@ import { readPrdBackplane } from '../project/prd-store'
 import { prdScopeFingerprint } from '../project/requirement-contract'
 import { readConfirmedUxBinding } from '../project/ux-binding'
 import { parseGuiSuite, type GuiAcceptanceSuite } from '../desktop/gui-acceptance'
-import { freezeNativeGuiTests, nativeTestContractChanges, type NativeGuiTests } from './native-gui-tests'
+import { freezeNativeGuiTests, type NativeGuiTests } from './native-gui-tests'
 import { runNativeGuiTests } from './native-gui-observer'
 import { prepareSoftwareRelease, verifyReleaseSource } from './release-store'
 import { runSecurityScan } from '../verification/security-scan'
 import { recordEvaluationEvent } from './harness-evaluation'
 import { softwareVerificationFingerprint } from '../desktop/verification-fingerprint'
 import { validateProjectPlan } from './project-plan'
+import { stageContractChanges, stageContractError } from './stage-contracts'
 
 interface StageAttempt { id: string; stage: string; scope: string; source: string; status: 'running'|'passed'|'failed'|'unverified';
   covers: string[]; executed?: boolean; native: NativeGuiTests; candidate?: string; report?: string; report_hash?: string; at: string; error?: string }
@@ -65,7 +66,8 @@ export async function verifyProjectStage(id: string, stageId: string, script: st
   const state = readProjectStages(id)
   // Keep every previously executed contract in this scope, including failed attempts.
   for (const old of state.attempts.filter(a => a.scope === scope && a.executed !== false)) {
-    if (nativeTestContractChanges(old.native, native).length) throw Error('PROJECT_STAGE_RETAINED_BEHAVIOR_CHANGED')
+    const changes = stageContractChanges(id, project.root_path, old.native, native)
+    if (changes.length) throw stageContractError(id, old.native, changes)
   }
   const source = softwareVerificationFingerprint(project.root_path)
   if (!source) throw Error('PROJECT_STAGE_SOURCE_REQUIRED')
@@ -103,7 +105,8 @@ export async function verifyProjectStage(id: string, stageId: string, script: st
 export function assertStageContractsRetained(id: string, native: NativeGuiTests) {
   const scope = prdScopeFingerprint(readPrdBackplane(id))
   for (const attempt of readProjectStages(id).attempts.filter(a => a.scope === scope && a.executed !== false)) {
-    if (nativeTestContractChanges(attempt.native, native).length) throw Error('PROJECT_STAGE_RETAINED_BEHAVIOR_CHANGED')
+    const changes = stageContractChanges(id, findProject(id).root_path, attempt.native, native)
+    if (changes.length) throw stageContractError(id, attempt.native, changes)
   }
 }
 

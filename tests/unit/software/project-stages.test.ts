@@ -18,7 +18,7 @@ beforeEach(()=>{old=process.env.PROMA_HOME;home=mkdtempSync(join(tmpdir(),'bloma
 afterEach(()=>{if(old===undefined)delete process.env.PROMA_HOME;else process.env.PROMA_HOME=old;rmSync(home,{recursive:true,force:true,maxRetries:5,retryDelay:100})},30000)
 const first=`await test('F-001 器材保存',async()=>{if(phase==='initial'){await page.locator('#add').click()}await expect(page.locator('#name-a')).toHaveText('A');await expect(page.locator('#name-b')).toHaveText('B')});`
 const second=`await test('F-002 维修借还关联',async()=>{if(phase==='initial'){await page.locator('#repair').click();await expect(page.locator('#state-a')).toHaveText('maintenance');await page.locator('#borrow').click()}await expect(page.locator('#state-a')).toHaveText('maintenance');await expect(page.locator('#state-b')).toHaveText('available')});`
-it('runs real cumulative GUI journeys, detects cross-module corruption and preserves earlier frozen cases at final registration',async()=>{
+it.each([false,true])('runs cumulative GUI journeys and preserves earlier contracts (composed entry=%s)',async(composed)=>{
   const listener=createServer();await new Promise<void>(r=>listener.listen(0,'127.0.0.1',r));const port=(listener.address() as {port:number}).port;await new Promise<void>(r=>listener.close(()=>r()))
   const parsed=parseLeanBrief(JSON.stringify({action:'brief',goal:'器材管理',ui:'required',delivery:'browser',requirements:[{description:'保存器材',expected:'两件器材重开保留'},{description:'维修和借还',expected:'维修器材不能借出且不影响另一件，重开保留'}],project_plan:{version:1,current:'store',stages:[{id:'store',title:'登记',feature_ids:['F-001']},{id:'flow',title:'借还维修',feature_ids:['F-002']}]}}),{projectId:project.project_id,sessionId:'s',source:'器材管理',previous:readPrdBackplane(project.project_id),software:true})!
   if(parsed.action!=='brief')throw Error('fixture');parsed.brief.lean_brief!.preview='skip'
@@ -35,17 +35,23 @@ it('runs real cumulative GUI journeys, detects cross-module corruption and prese
   expect((await verifyProjectStage(project.project_id,'store','acceptance.mjs',new AbortController().signal,true)).status).toBe('passed')
   expect(existsSync(guiSuitePath(project.project_id))).toBe(false)
   expect(projectStageView(project.project_id).next_stage).toBe('flow')
-  script(first+second)
+  let entry='acceptance.mjs'
+  if(composed){
+    writeFileSync(join(root,'extra.mjs'),`export default async({test,page,expect,phase})=>{${second}}`)
+    writeFileSync(join(root,'stage2.mjs'),`import prior from './acceptance.mjs';import next from './extra.mjs';export default async(ctx)=>{await prior(ctx);await next(ctx);}`)
+    entry='stage2.mjs'
+  }else script(first+second)
   writeFileSync(join(root,'domain.cjs'),`exports.borrow=(item)=>{item.state='borrowed'}`)
-  expect((await verifyProjectStage(project.project_id,'flow','acceptance.mjs',new AbortController().signal,true)).status).toBe('failed')
+  expect((await verifyProjectStage(project.project_id,'flow',entry,new AbortController().signal,true)).status).toBe('failed')
   const preserved=latestCheckedStageCandidate(project.project_id)
   const trial=await launchSoftwareTrial(project.project_id)
   expect(trial.started).toBe(true);expect(trial.trial?.release_id).toBe(preserved);expect(trial.trial?.qualification).toBe('stage_checked_test_data')
   await closeSoftwareTrial(project.project_id,trial.trial!.release_id)
   writeFileSync(join(root,'domain.cjs'),`exports.borrow=(item)=>{if(item.state!=='maintenance')item.state='borrowed'}`)
-  expect((await verifyProjectStage(project.project_id,'flow','acceptance.mjs',new AbortController().signal,true)).status).toBe('passed')
+  expect((await verifyProjectStage(project.project_id,'flow',entry,new AbortController().signal,true)).status).toBe('passed')
   expect(projectStageView(project.project_id).next_stage).toBeNull()
-  expect(registerNativeGuiTests(project.project_id,'acceptance.mjs',true).covers).toEqual(['F-001','F-002'])
-  script(first+second.replace("toHaveText('maintenance')","toHaveText('borrowed')"))
-  await expect(verifyProjectStage(project.project_id,'flow','acceptance.mjs',new AbortController().signal,true)).rejects.toThrow('RETAINED_BEHAVIOR')
+  expect(registerNativeGuiTests(project.project_id,entry,true).covers).toEqual(['F-001','F-002'])
+  if(composed)writeFileSync(join(root,'extra.mjs'),`export default async({test,page,expect,phase})=>{${second.replace("toHaveText('maintenance')","toHaveText('borrowed')")}}`)
+  else script(first+second.replace("toHaveText('maintenance')","toHaveText('borrowed')"))
+  await expect(verifyProjectStage(project.project_id,'flow',entry,new AbortController().signal,true)).rejects.toThrow('RETAINED_BEHAVIOR')
 },180000)

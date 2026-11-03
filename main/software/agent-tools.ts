@@ -36,7 +36,7 @@ export function buildSoftwareAgentTools(projectId: string, role: DelegationRunRo
         const state=recordLongtermDecision(projectId,ctx.sessionId,input.decision,input.reason,{supersedes:input.supersedes as string[]|undefined,feature_ids:input.feature_ids as string[]|undefined,expected_revision:input.expected_revision as number|undefined});longtermChanged?.();return{output:JSON.stringify({saved:true,revision:state.revision,decision:state.decisions.at(-1)})}
       }catch(error){return{output:String(error),isError:true}}
     }})
-  if(role==='parent')tools.push({name:'verify_project_stage',description:'按已确认project_plan顺序检查阶段：script为原生GUI测试，覆盖此前阶段与本阶段全部F编号。阶段通过只推进内部制作，不发布、不缩减最终完整验收。前次实际执行的业务输入/断言不得降低；可修定位。',
+  if(role==='parent')tools.push({name:'verify_project_stage',description:'按已确认project_plan顺序检查阶段：script为原生GUI测试，覆盖此前阶段与本阶段全部F编号。阶段通过只推进内部制作，不发布、不缩减最终完整验收。前次实际执行的业务输入/断言不得降低；可修定位。新阶段另建入口直接await调用原入口和新增模块，原入口保持不变；失败诊断附原入口预览。',
     input_schema:{type:'object',additionalProperties:false,required:['stage_id','script'],properties:{stage_id:{type:'string'},script:{type:'string'},restart:{type:'boolean'}}},execute:async(input,ctx)=>{
       try{policy.assertCommand(ctx)
         if(ctx.projectId!==projectId||typeof input.stage_id!=='string'||typeof input.script!=='string'||input.restart!==undefined&&typeof input.restart!=='boolean')throw Error('PROJECT_STAGE_INPUT_INVALID')

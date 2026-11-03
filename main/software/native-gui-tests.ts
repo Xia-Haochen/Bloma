@@ -272,6 +272,12 @@ export function frozenNativeGuiRoot(projectId: string, native: NativeGuiTests, s
     frozenNativeGuiVersion(projectId, native, sourceRoot);
     return base(projectId, native.digest);
 }
+/** Diagnostic only: the host's immutable entry, never an arbitrary filesystem read. */
+export function frozenNativeEntryPreview(projectId: string, native: NativeGuiTests) {
+    frozenNativeGuiVersion(projectId, native);
+    const text = readFileSync(join(base(projectId, native.digest), native.entry), 'utf8');
+    return { entry: native.entry, text: text.slice(0, 4000), truncated: text.length > 4000 };
+}
 export function nativeGuiObservations(suite: GuiAcceptanceSuite, reports: Array<{
     code: number;
     events: string;
