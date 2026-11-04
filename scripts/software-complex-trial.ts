@@ -140,8 +140,8 @@ export async function main() {
   const trace=createTrialRequestRecorder(join(root,'trace'),safe,session=>{
     try{const p=findProject(project.project_id);return{project_id:p.project_id,status:p.status,current_stage:latestStage??p.current_stage,persisted_stage:p.current_stage,desktop_phase:p.desktop_phase,source:softwareVerificationFingerprint(p.root_path),review_kind:readQualityLedger(p.project_id).reviews.find(r=>r.child===session)?.kind}}catch{return{phase}}
   },policyRate)
-  const paid = trace.wrap(control.wrap(anthropicMessagesQueryViaProviders),phase), signal = AbortSignal.timeout(45 * 60000)
-  const query: SDKQuery = async function* (prompt, options) {
+  const paid = control.wrap(anthropicMessagesQueryViaProviders), signal = AbortSignal.timeout(45 * 60000)
+  const rawQuery: SDKQuery = async function* (prompt, options) {
     if(existsSync(join(root,'pause-generation')))throw Error('TRIAL_PAUSED_BETWEEN_REQUESTS')
     writeFileSync(startedMarker, 'started')
     const briefText: string[] = []
@@ -159,6 +159,7 @@ export async function main() {
       yield message
     } } finally { if (options.accounting?.role === 'brief') writeFileSync(join(root,`${which}-brief-${randomUUID()}.json`),safe({text:briefText.join('')})) }
   }
+  const query:SDKQuery=trace.wrap(rawQuery,phase)
   const taskDir = join(root, which); mkdirSync(taskDir, { recursive: true })
   const projectFile = join(taskDir, 'project.json')
   if (phase === 'run' && existsSync(projectFile)) throw Error('TRIAL_ALREADY_RAN_USE_RESUME')
@@ -171,9 +172,20 @@ export async function main() {
   let lastSave=0
   const save = (force=false) => { if(!force&&Date.now()-lastSave<500)return; lastSave=Date.now();writeTextFileAtomic(reportPath, safe({ ...report, operation: control.snapshot(), money: money() })) }
   const cards: AgentEvent[] = []
+  const observerFailures=new Map<string,number>()
   const event = (type: AgentEvent['type'], payload: Record<string, unknown>) => {
+    if(type==='thinking_delta')return
     if(type==='stage_changed'&&typeof payload.stage==='string')latestStage=payload.stage
     trace.event(type,{...payload,phase,run_id:runId})
+    if(type==='tool_call_completed'){
+      const tool=String(payload.tool)
+      if(payload.is_error===false)for(const k of observerFailures.keys())if(k.startsWith(tool+':'))observerFailures.delete(k)
+      const code=payload.is_error===true?String(payload.output_summary??'').match(/\b(?:PROJECT_STAGE|GUI_NATIVE|QUALITY|MONETARY|SOFTWARE|REQUEST|HARNESS)_[A-Z_]+\b/)?.[0]:undefined
+      if(code){const k=tool+':'+code,n=(observerFailures.get(k)??0)+1;observerFailures.set(k,n);if(n===3){
+        writeFileSync(join(root,'pause-generation'),'Observer pause after repeated host contract refusal: '+k)
+        trace.event('observer_pause',{cause:k,repeated:n,action:'stop_before_next_model_request',source:'trial_supervisor_not_product_pass'})
+      }}
+    }
     if (type === 'user_decision_required') cards.push({ type, payload } as AgentEvent)
     appendFileSync(join(taskDir, 'events.jsonl'), safe({ at: new Date().toISOString(), phase, run_id: runId, type, payload }) + '\n')
     save()

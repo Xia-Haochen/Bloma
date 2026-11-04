@@ -26,9 +26,10 @@ export function createTrialRequestRecorder(folder:string,redact:(value:unknown)=
       const cell=(s:unknown)=>String(s??'').replaceAll('|','\\|').replace(/[\r\n]+/g,' ').slice(0,230)
       body.push(`| ${r.sequence} | ${cell(r.before?.desktop_phase??r.before?.current_stage??r.phase)} / ${cell(r.role)} | ${cell(r.status)} | ${r.transports.filter((t:any)=>t.state==='started').length} | ${r.usage?.input_tokens??'?'} / ${r.usage?.output_tokens??'?'} | ${cell(r.trigger)}；${cell(r.tool_calls.map((t:any)=>t.name).join(', '))} | [请求 ${r.sequence}](requests/${String(r.sequence).padStart(5,'0')}.json) |`)
     }
-    writeFileSync(join(folder,'timeline.md'),body.join('\n')+'\n')
+    writeFileSync(join(folder,'timeline.md'),JSON.parse(redact(body.join('\n')+'\n')))
   }
   const event=(type:string,payload:any)=>{
+    if(type==='thinking_delta'||type==='reasoning_delta')return
     const id=payload.tool_call_id,owner=id&&toolOwners.get(id),row=owner&&rows.get(owner)
     const entry={at:new Date().toISOString(),type,payload:clean(payload),trace_id:owner??null}
     appendFileSync(join(folder,'events.jsonl'),redact(entry)+'\n')
