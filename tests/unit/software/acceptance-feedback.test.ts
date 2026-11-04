@@ -35,3 +35,13 @@ it('uses structured execution evidence and leaves a locator timeout root cause u
   const assertion={status:'failed',summary:'check failed',core:{host_gui:{failure_kind:'assertion',steps:[{id:'one',passed:false,actual:{assertion:{expected:1,actual:0}}}]}}} as never
   expect(verificationFailure(assertion)).toMatchObject({category:'product_assertion',classification_basis:'assertion'})
 })
+it('separates hidden-state wait errors from uncertain overlays and preserves runtime precedence', () => {
+  const failure = (error: string, kind?: string) => ({ status: 'failed', summary: 'GUI check failed',
+    core: { host_gui: { failure_kind: kind, steps: [{ id: 'close-modal', passed: false, actual: { error } }] } } }) as never
+  expect(verificationFailure(failure(`TimeoutError: waiting for locator('#import-modal[hidden]') to be visible`, 'assertion')))
+    .toMatchObject({ category: 'test_adapter', code: 'TEST_WAIT_STATE_CONTRADICTION', classification_basis: 'adapter_contract' })
+  expect(verificationFailure(failure('TimeoutError waiting for locator; topbar intercepts pointer events')))
+    .toMatchObject({ category: 'unknown', classification_basis: 'unresolved' })
+  expect(verificationFailure(failure('TimeoutError waiting for locator', 'runtime')))
+    .toMatchObject({ category: 'product_assertion', classification_basis: 'host_runtime' })
+})

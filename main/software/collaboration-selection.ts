@@ -1,3 +1,4 @@
+import { visualCoverageComplete } from './visual-review-checklist'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -39,7 +40,7 @@ export async function selectQualityCollaboration(projectId: string, current: Ide
   const full: ReviewKind[] = gui ? ['code','visual'] : ['code']
   let baseline: string | undefined, changed: string[] = [], risk: CollaborationSelection['risk'] = 'full', required = full, reasons: string[] = []
   const ledger = readQualityLedger(projectId)
-  const unresolved = ledger.findings.some(f => f.disposition !== 'superseded' && ['high','critical'].includes(f.severity) && f.checks.some(c => c.outcome === 'failed')
+  const unresolved = ledger.findings.some(f => f.disposition !== 'superseded' && (['high','critical'].includes(f.severity) || f.review_kind === 'visual' && f.severity === 'medium') && f.checks.some(c => c.outcome === 'failed')
     && !(f.disposition === 'closed' && f.checks.at(-1) && sameIdentity(f.checks.at(-1)!.identity, current)))
   try {
     const release = await activeSoftwareRelease(projectId, signal)
@@ -50,7 +51,7 @@ export async function selectQualityCollaboration(projectId: string, current: Ide
       const hex=/^[a-f0-9]{64}$/
       const priorV = ledger.reviews.filter(r => r.status === 'complete' && r.kind === 'visual' && r.identity.source === release.source.digest && r.visual_delivery
         &&r.visual?.project===projectId&&r.visual.review===r.id&&r.visual.candidate===qualityHash(r.identity)&&hex.test(r.visual.image_hash)&&hex.test(r.visual.manifest_hash)&&hex.test(r.visual_delivery.request_hash)
-        &&r.child&&r.image?.imageId.startsWith(`${r.child}/`)&&r.visual.image_hash === r.visual_delivery.image_hash && r.visual_observations?.length).at(-1)
+        &&r.child&&r.image?.imageId.startsWith(`${r.child}/`)&&r.visual.image_hash === r.visual_delivery.image_hash && visualCoverageComplete(r.visual_observations)).at(-1)
       const previousSelection = ledger.collaboration?.find(s => s.id === release.verified?.collaboration_id)
       let certificate: CollaborationSelection | undefined
       if(previousSelection){const {id,...facts}=previousSelection;if(previousSelection.version===1&&qualityHash(facts)===id&&previousSelection.identity.source===release.source.digest&&Array.isArray(previousSelection.required)

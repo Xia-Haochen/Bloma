@@ -82,8 +82,20 @@ it('parent cannot forge a C submission; no-source opinions remain disputed/sugge
   await review([{ ...finding, expected_source: '应当自动增加备份功能' }, { ...finding, requirement: 'unknown' }])
   const ledger = readQualityLedger(project.project_id)
   expect(ledger.findings.map(f => f.disposition)).toEqual(['disputed', 'suggestion'])
+  const read = quality.parentTools.find(t => t.name === 'read_quality_findings')!
+  const closeout = JSON.parse((await read.execute({}, ctx())).output).closeout
+  expect(closeout.deferred).toEqual(ledger.findings.map(f => f.id))
+  expect(closeout.next_tool).toBe('verify_app')
   await expect(quality.parentTools.find(t => t.name === 'check_quality_finding')!.execute({ finding_id: ledger.findings[0].id, case_name: 'sum' }, ctx())).rejects.toThrow('UNGROUNDED')
 })
+it('does not mark an unobserved reproduction as not reproduced', async () => {
+  await review()
+  const id = readQualityLedger(project.project_id).findings[0].id
+  const result = await quality.parentTools.find(t => t.name === 'check_quality_finding')!
+    .execute({ finding_id: id, case_name: 'case-that-was-not-run' }, ctx())
+  expect(result.isError).toBe(true)
+  expect(readQualityLedger(project.project_id).findings[0]).toMatchObject({ disposition: 'suspected', checks: [{ outcome: 'unverified' }] })
+}, 60000)
 it('review freezes writers and commands; external source changes and cancellation cannot submit stale findings', async () => {
   register(async function* () { await new Promise(() => {}) })
   const child = await quality.begin(ctx())

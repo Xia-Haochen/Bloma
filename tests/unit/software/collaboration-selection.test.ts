@@ -30,7 +30,7 @@ beforeEach(async()=>{
   // Controlled host metadata is only a selector fixture, not a GUI acceptance
   // claim. The separate production test creates a real verified C/V baseline.
   saveQualityLedger(project.project_id,{version:1,findings:[],reviews:[{id:'C',kind:'code',identity:original,status:'complete',at:new Date().toISOString()},
-    {id:'V',kind:'visual',identity:original,status:'complete',at:new Date().toISOString(),child:'fixture-child',image:{imageId:'fixture-child/frozen.png',media_type:'image/png'},visual:{project:project.project_id,parent:'s',review:'V',candidate:qualityHash(original),image_hash:'a'.repeat(64),manifest_hash:'b'.repeat(64),expires:0},visual_delivery:{at:new Date().toISOString(),image_hash:'a'.repeat(64),request_hash:'c'.repeat(64)},visual_observations:[{scope:'controlled_selector_fixture'}]}]})
+    {id:'V',kind:'visual',identity:original,status:'complete',at:new Date().toISOString(),child:'fixture-child',image:{imageId:'fixture-child/frozen.png',media_type:'image/png'},visual:{project:project.project_id,parent:'s',review:'V',candidate:qualityHash(original),image_hash:'a'.repeat(64),manifest_hash:'b'.repeat(64),expires:0},visual_delivery:{at:new Date().toISOString(),image_hash:'a'.repeat(64),request_hash:'c'.repeat(64)},visual_observations:['layout','interaction','content','scope'].map(area=>({area,observed:'controlled_selector_fixture'}))}]})
   await promoteSoftwareRelease(release,{version:'controlled-selector-fixture',scope,at:new Date().toISOString()})
 })
 afterEach(()=>{if(previous===undefined)delete process.env.PROMA_HOME;else process.env.PROMA_HOME=previous;rmSync(home,{recursive:true,force:true,maxRetries:5,retryDelay:100})})

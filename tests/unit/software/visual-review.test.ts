@@ -36,8 +36,13 @@ const model = createServer(async (request, response) => {
   const use = (name: string, input: Record<string, unknown>) => ({ type: 'tool_use', name, input, id: `v-${wireBodies.length}-${name}` })
   if (!hasImage) send(response, [use('read_quality_review', {}), use('view_quality_image', {})])
   else if (!alreadySubmitted) send(response, [use('submit_quality_findings', {
-    visual_observations: [{ image_sha256: visual.visual!.image_hash, region: '总数右侧', observed: reportFinding ? '数字3旁仍显示00件，存在静态零残留' : '总数数字旁只显示件，无静态零残留' }],
-    findings: reportFinding ? [{ requirement: 'F-001', expected_source: expected, category: 'visual', severity: 'high', location: '#total右侧单位', trigger: '点击增加', evidence: '图片中数值旁显示静态00件', reproduction: '点击增加并核对整个total文本', unknowns: '', kind: 'suspected' }] : []
+    visual_observations: [
+      { area: 'layout', region: '页面', observed: '标题、数量和按钮均可见，当前窗口内未见挤压' },
+      { area: 'interaction', region: '增加按钮', observed: '按钮可见；本截图未证明点击结果，需冻结业务测试' },
+      { area: 'scope', region: '页面', observed: '仅当前数量页初始状态；未覆盖其他窗口尺寸' },
+      { area: 'content', region: '总数右侧', observed: reportFinding ? '数字3旁仍显示00件，存在静态零残留' : '总数数字旁只显示件，无静态零残留' }
+    ].map(row => ({ ...row, image_sha256: visual.visual!.image_hash })),
+    findings: reportFinding ? [{ requirement: 'F-001', expected_source: expected, category: 'visual', severity: 'medium', location: '#total右侧单位', trigger: '点击增加', evidence: '图片中数值旁显示静态00件', reproduction: '点击增加并核对整个total文本', unknowns: '', kind: 'suspected' }] : []
   })])
   else send(response, [{ type: 'text', text: '具体可见观察与疑点已提交，未声称业务通过。' }])
 })

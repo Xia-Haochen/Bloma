@@ -43,7 +43,7 @@ export function buildSoftwareVerifyTool(projectId: string, policy: ReturnType<ty
           issues: result.security?.issues.slice(0, 8), candidate_id: result.candidate?.id, report: result.report_path, evidence_dir: result.core?.host_gui?.evidence_dir,
           evidence_warnings: result.core?.host_gui?.evidence_warnings,
           independent:result.independent&&{status:result.independent.status,diagnostic:result.independent.diagnostic,report:result.independent.report_path,semantics:result.independent.semantics,cases:result.independent.case_results},
-          next: result.status === 'passed' ? '已登记的本机检查通过，可以结束制作；宿主核对版本后交付，完整需求效果仍需独立核对。' : result.failure?.next ?? '按实际失败修复，再verify_app；不要降低已确认预期。' })),
+          next: result.status === 'passed' ? '已登记的本机检查通过；read_quality_findings核对当前候选审阅缺口，按closeout补齐。审阅有效且无阻塞后结束制作，由宿主核对版本并交付；不为可延期建议继续改动。' : result.failure?.next ?? '按实际失败修复，再verify_app；不要降低已确认预期。' })),
           isError: result.status !== 'passed', feedback: { schema_version: 1, execution: 'completed', source: 'host', scope: 'software_candidate',
             verification: result.status === 'passed' ? 'passed' : result.status === 'failed' ? 'failed' : 'unverified',
             category: result.failure?.category === 'unknown' ? 'unknown' : ['test_adapter','harness'].includes(result.failure?.category??'') ? 'verification_harness' : result.status === 'environment_blocked' ? 'environment' : result.status === 'failed' ? 'product_assertion' : 'verification_harness',

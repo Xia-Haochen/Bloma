@@ -1,3 +1,5 @@
+import { findingNeedsClosure, qualityCloseout, observedQualityFinding } from './quality-closeout'
+import { visualReviewChecklist, visualCoverageComplete } from './visual-review-checklist'
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -10,7 +12,7 @@ import { readConfirmedUxBinding } from '../project/ux-binding'
 import { trustedAcceptance } from '../project/requirement-contract'
 import { guiSuitePath } from '../desktop/gui-acceptance'
 import { cliSuitePath } from '../desktop/lean-cli-check'
-import { verifySoftwareCandidate, type SoftwareVerification } from './verification'
+import { verifySoftwareCandidate } from './verification'
 import type { createSoftwareCollaborationPolicy } from './collaboration-policy'
 import { activeSoftwareCommands, redactSoftwareOutput, stopSoftwareSession } from './process-manager'
 import { closeDebugSessions } from './debug-sessions'
@@ -26,13 +28,6 @@ export { qualityLedgerPath, readQualityLedger } from './quality-ledger'
 export type { QualityFinding } from './quality-ledger'
 function rulesVersion(projectId: string) {
   return hash([guiSuitePath(projectId), cliSuitePath(projectId)].map(path => existsSync(path) ? readFileSync(path).toString('base64') : null))
-}
-function observed(result: SoftwareVerification, finding: QualityFinding, caseName: string): 'passed' | 'failed' | 'unverified' {
-  const gui = result.core?.host_gui?.case_results?.filter(c => c.name === caseName && c.feature === finding.requirement)
-  if (gui?.length === 1 && gui[0].assertions > 0 && ['passed', 'failed'].includes(gui[0].status)) return gui[0].status as 'passed' | 'failed'
-  const cli = result.core?.host_cli?.cases.filter(c => c.name === caseName && c.covers.includes(finding.requirement))
-  if (cli?.length === 1 && cli[0].exit_code !== null) return cli[0].passed ? 'passed' : 'failed'
-  return 'unverified'
 }
 
 /** The model supplies observations only. Candidate IDs, execution results and
@@ -95,7 +90,7 @@ export function createQualityReview(projectId: string, parent: string, policy: R
     pending = review
     try {
       return startDelegation(ctx, { role: 'review', readOnly: true,
-        task: kind === 'visual' ? `视觉审阅候选 ${id}。用read_quality_review读取确认预期、同次DOM/操作事实；必须view_quality_image查看真实图片，再提交visual_observations（image_sha256、region、observed）及findings。独立检查布局、遮挡、静态残留、单位、状态和当前对象；DOM与文件名不是图片。只报证据与疑点，不改源码或目标，不自报PASS。`
+        task: kind === 'visual' ? `视觉审阅候选 ${id}。用read_quality_review读取确认预期、同次DOM/操作事实；必须view_quality_image查看真实图片，再提交visual_observations（image_sha256、area、region、observed；area须覆盖layout/interaction/content/scope）及findings。独立检查布局、遮挡、静态残留、单位、状态和当前对象；DOM与文件名不是图片。只报证据与疑点，不改源码或目标，不自报PASS。`
           : `审阅候选 ${id}。先用read_quality_review取得宿主绑定的确认需求和材料。独立阅读实现，重点检查对象身份、异步状态、持久化、接口和遗漏分支；不继承制作方成功结论。用submit_quality_findings提交结构化疑点（没有发现也提交空数组），不自报PASS、不新增需求、不运行或修改文件。` })
     } finally { pending = undefined }
   })
@@ -114,10 +109,10 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       materialsRead.add(ctx.sessionId)
       return { output: JSON.stringify({ review, root: findProject(projectId).root_path, goal: brief.positioning, constraints: brief.constraints, confirmed_ux: ux,
         confirmed_design: review.kind === 'visual' && ux?.html_path ? { html: readFileSync(join(findProject(projectId).root_path, ux.html_path), 'utf8').slice(0, 64000), bounded_characters: 64000 } : undefined,
-        visual_facts: visual,
+        visual_facts: visual, visual_checklist: review.kind === 'visual' ? visualReviewChecklist : undefined,
         requirements: brief.requirements.map(r => ({ id: r.id, description: r.description, expected_source: trustedAcceptance(brief, r) })), out_of_scope: brief.out_of_scope }) }
     } }, { name: 'submit_quality_findings', description: '提交只读疑点，不得指定状态或PASS。expected_source逐字引用确认预期；无依据增强标suggestion，预期有争议标disputed。宿主生成ID、绑定候选；只能提交一次。',
-    input_schema: { type: 'object', additionalProperties: false, required: ['findings'], properties: { visual_observations: { type: 'array', maxItems: 16, items: { type: 'object', additionalProperties: false, required: ['image_sha256', 'region', 'observed'], properties: { image_sha256: { type: 'string' }, region: { type: 'string', maxLength: 1000 }, observed: { type: 'string', maxLength: 2000 } } } }, findings: { type: 'array', maxItems: 32, items: { type: 'object', additionalProperties: false,
+    input_schema: { type: 'object', additionalProperties: false, required: ['findings'], properties: { visual_observations: { type: 'array', maxItems: 16, items: { type: 'object', additionalProperties: false, required: ['image_sha256', 'area', 'region', 'observed'], properties: { area: { type: 'string', enum: Object.keys(visualReviewChecklist) }, image_sha256: { type: 'string' }, region: { type: 'string', maxLength: 1000 }, observed: { type: 'string', maxLength: 2000 } } } }, findings: { type: 'array', maxItems: 32, items: { type: 'object', additionalProperties: false,
       required: ['requirement', 'expected_source', 'category', 'severity', 'location', 'trigger', 'evidence', 'reproduction', 'unknowns', 'kind'],
       properties: { ...Object.fromEntries(['requirement', 'expected_source', 'category', 'location', 'trigger', 'evidence', 'reproduction', 'unknowns'].map(key => [key, { type: 'string', maxLength: 4000 }])),
         severity: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] }, kind: { type: 'string', enum: ['suspected', 'disputed', 'suggestion'] } } } } } },
@@ -130,8 +125,9 @@ export function createQualityReview(projectId: string, parent: string, policy: R
         if (!review.visual || !review.image || !review.visual_delivery || !imagesRequested.has(ctx.sessionId)) throw Error('VISUAL_IMAGE_NOT_DELIVERED')
         validateVisualGrant(review.visual, ctx.sessionId, review.image)
         const observations = input.visual_observations as Array<Record<string, unknown>>
-        if (!Array.isArray(observations) || !observations.length || observations.length > 16 || observations.some(o => !o || Object.keys(o).some(k => !['image_sha256', 'region', 'observed'].includes(k))
-          || o.image_sha256 !== review.visual!.image_hash || typeof o.region !== 'string' || !o.region.trim() || o.region.length > 1000 || typeof o.observed !== 'string' || !o.observed.trim() || o.observed.length > 2000)) throw Error('VISUAL_OBSERVATIONS_REQUIRED')
+        if (!Array.isArray(observations) || !observations.length || observations.length > 16 || observations.some(o => !o || Object.keys(o).some(k => !['image_sha256', 'area', 'region', 'observed'].includes(k))
+          || !Object.hasOwn(visualReviewChecklist, String(o.area)) || o.image_sha256 !== review.visual!.image_hash || typeof o.region !== 'string' || !o.region.trim() || o.region.length > 1000 || typeof o.observed !== 'string' || !o.observed.trim() || o.observed.length > 2000)) throw Error('VISUAL_OBSERVATIONS_REQUIRED')
+        if (!visualCoverageComplete(observations)) throw Error('VISUAL_CHECKLIST_INCOMPLETE: 须覆盖layout/interaction/content/scope，未观察状态明确写入scope')
         review.visual_observations = observations
       } else if (input.visual_observations !== undefined) throw Error('VISUAL_OBSERVATIONS_NOT_APPLICABLE')
       if (Object.keys(input).some(k => !['findings', 'visual_observations'].includes(k)) || !Array.isArray(input.findings) || input.findings.length > 32) throw Error('QUALITY_FINDINGS_INVALID')
@@ -175,12 +171,12 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       const result = await verifySoftwareCandidate(projectId, ctx.requestId, ctx.signal, true)
       const after = await identity(projectId, ctx.signal)
       if (!same(before, after) || rules !== rulesVersion(projectId)) throw Error('QUALITY_CHECK_INPUT_CHANGED')
-      const outcome = observed(result, finding, input.case_name)
+      const outcome = observedQualityFinding(result, finding, input.case_name)
       finding.checks.push({ at: new Date().toISOString(), identity: before, case_name: input.case_name, rules, outcome, report: result.report_path, candidate: result.candidate?.id,
         observation: redactSoftwareOutput(JSON.stringify({ status: result.status, summary: result.summary,
           gui: result.core?.host_gui?.case_results?.filter(c => c.name === input.case_name), cli: result.core?.host_cli?.cases.filter(c => c.name === input.case_name) })) })
       finding.disposition = outcome === 'failed' ? 'confirmed' : outcome === 'passed' && baseline && result.status === 'passed' ? 'closed'
-        : baseline ? 'confirmed' : 'not_reproduced'
+        : baseline ? 'confirmed' : outcome === 'passed' ? 'not_reproduced' : 'suspected'
       // Read again after asynchronous execution; no other writer may be erased.
       const current = readQualityLedger(projectId), index = current.findings.findIndex(f => f.id === finding.id)
       current.findings[index] = finding; save(current)
@@ -193,13 +189,12 @@ export function createQualityReview(projectId: string, parent: string, policy: R
     const selection = await selectQualityCollaboration(projectId,current,signal)
     const latest = ledger.reviews.filter(r => (r.kind ?? 'code') === 'code').at(-1)
     if (selection.required.includes('code') && (!latest || latest.status !== 'complete' || !same(latest.identity, current))) return 'QUALITY_REVIEW_REQUIRED: 当前候选尚无所需的有效结构化C审阅；用start_quality_review，等待并处理台账。'
-    const blocking = ledger.findings.filter(f => f.disposition !== 'superseded' && ['critical', 'high'].includes(f.severity) && f.checks.some(c => c.outcome === 'failed')
-      && !(f.disposition === 'closed' && same(f.checks.at(-1)!.identity, current) && f.checks.at(-1)!.rules === (f.independent ? independentDesignVersion(projectId) : rulesVersion(projectId))))
+    const blocking = ledger.findings.filter(f => findingNeedsClosure(f, current, rulesVersion(projectId), independentDesignVersion(projectId)))
     if (blocking.length) return `QUALITY_FINDINGS_OPEN: 重要已确认缺陷尚未在当前候选闭合：${JSON.stringify(blocking)}`
     if (selection.required.includes('visual')) {
       const visual = ledger.reviews.filter(r => r.kind === 'visual').at(-1)
       if (visual?.visual_error === 'MODEL_IMAGE_INPUT_UNSUPPORTED' && visual.visual_route === activeRoute) return 'QUALITY_VISUAL_MODEL_UNSUPPORTED: 当前模型已实际拒绝图片输入，V仍未验证；请更换支持图片的当前制作路由后继续，不能改用文字或自动重试同一路由。'
-      if (visual?.status === 'complete' && same(visual.identity, current) && visual.visual && visual.image && visual.child && visual.visual_delivery?.image_hash === visual.visual.image_hash && visual.visual_observations?.length) {
+      if (visual?.status === 'complete' && same(visual.identity, current) && visual.visual && visual.image && visual.child && visual.visual_delivery?.image_hash === visual.visual.image_hash && visualCoverageComplete(visual.visual_observations)) {
         try { validateVisualGrant(visual.visual, visual.child, visual.image); return } catch { /* recapture; old evidence never passes */ }
       }
       return 'QUALITY_VISUAL_REVIEW_REQUIRED: 当前界面候选尚无有效V图片审阅；用start_visual_review，不能用DOM或文件名冒充看图。'
@@ -212,7 +207,7 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       if (Object.keys(input).some(k => k !== 'debug_session_id') || input.debug_session_id !== undefined && typeof input.debug_session_id !== 'string') throw Error('VISUAL_INPUT_INVALID')
       return { output: JSON.stringify(await begin(ctx, 'visual', input.debug_session_id as string | undefined)) }
     } },
-    { name: 'read_quality_findings', description: '读取宿主finding台账与当前交付缺口；疑点不等于真实缺陷，失败记录保留。', input_schema: { type: 'object', properties: {} }, execute: async (_input, ctx) => { assertParent(ctx); return { output: JSON.stringify({ ledger: readQualityLedger(projectId), gate: await gate(ctx.signal) }) } } }, check]
+    { name: 'read_quality_findings', description: '读取宿主finding台账与当前交付缺口；疑点不等于真实缺陷，失败记录保留。', input_schema: { type: 'object', properties: {} }, execute: async (_input, ctx) => { assertParent(ctx); const reason = await gate(ctx.signal), current = await identity(projectId, ctx.signal), ledger = readQualityLedger(projectId); return { output: JSON.stringify({ ledger, gate: reason, closeout: qualityCloseout(ledger, current, reason, rulesVersion(projectId), independentDesignVersion(projectId)) }) } } }, check]
   const reviewTools = (tools: AgentLoopTool[], child?: string): AgentLoopTool[] => child && readQualityLedger(projectId).reviews.find(r => r.id === children.get(child))?.kind === 'visual' ? childProtocol : [...tools.filter(t => ['read_file', 'list_files', 'find', 'grep'].includes(t.name)).map(tool => ({
     ...tool, execute: async (input: Record<string, unknown>, ctx: ToolContext) => {
       if (readQualityLedger(projectId).reviews.find(r => r.id === children.get(ctx.sessionId))?.kind === 'visual') throw Error('VISUAL_SOURCE_READ_DENIED: V只使用授权图片和操作事实')
