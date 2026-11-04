@@ -1,3 +1,5 @@
+import { organizedPrd } from '../../support/organized-prd'
+import { projectRequirementsModel } from '../../../main/model/requirements-model'
 import { createServer, type ServerResponse } from 'node:http'
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -246,3 +248,16 @@ it('production stops on the first actual image rejection without retrying V or c
   expect(findProject(project.project_id).desktop_blocked?.note).toContain('QUALITY_VISUAL_MODEL_UNSUPPORTED')
   expect(findProject(project.project_id).status).toBe('active')
 }, 90000)
+
+it('does not force a single-image V reviewer to claim verification of the entire personal experience', async () => {
+  const brief = readPrdBackplane(project.project_id),model = organizedPrd(brief.requirements, expected).requirements_model
+  model.experience = { summary:'长期保留自己的记录', commitments:[{id:'EXP-001',statement:'重开保留历史',source_ids:['S-001'],feature_ids:['F-001'],scenario_ids:['AC-001'],unacceptable_substitute:'静态演示'}] }
+  brief.lean_brief!.preview='skip'
+  syncDocuments({request_id:'scope',project_id:project.project_id,session_id:parent,checkpoint:'requirement_confirmed'},projectRequirementsModel({...brief,requirements_model:model}))
+  const confirmed=markPrdUserConfirmed(project.project_id)!,scope=prdScopeFingerprint(confirmed)
+  updateProject(project.project_id,{ux_confirmation:{prd_fingerprint:scope,design_hash:scope,html_hash:null}})
+  reportFinding=false;await review('visual')
+  const last=readQualityLedger(project.project_id).reviews.at(-1)!
+  expect(last.status).toBe('complete');expect(last.intent_observations).toBeUndefined()
+  expect(last.visual_observations).toHaveLength(4)
+},60000)
