@@ -12,6 +12,17 @@ import type { PrdBackplane } from '../../../main/model/prd-backplane'
 
 const base='tests/fixtures/personal-wish/failures/'
 const previous: PrdBackplane={project_id:'fixture',name:'',positioning:'',requirements:[],acceptance:{},out_of_scope:[],assumptions:[]}
+it('extracts one complete real HTML artifact without trusting surrounding prose or permitting ambiguous/active content',()=>{
+  const raw=readFileSync(base+'doodle-sketch-prefaced.txt','utf8')
+  const parsed=parseSketchHtml(raw)
+  expect(parsed?.html.startsWith('<!DOCTYPE html>')).toBe(true)
+  expect(parsed?.html.endsWith('</html>')).toBe(true)
+  expect(parsed?.html).not.toContain('优化建议')
+  expect(parseSketchHtml('```html\n<html><body>A</body></html>\n```\n```html\n<html><body>B</body></html>\n```')).toBeUndefined()
+  expect(parseSketchHtml(raw+'\n```html\n<html><body>another</body></html>\n```')).toBeUndefined()
+  expect(parseSketchHtml(raw.replace('</body>','<script>alert(1)</script></body>'))).toBeUndefined()
+  expect(parseSketchHtml(raw.replace('</body>','<button onclick="alert(1)">click</button></body>'))).toBeUndefined()
+})
 it('replays the real omitted-model response and rejects missing or inconsistent structure decisions',()=>{
   const raw=readFileSync(base+'doodle-brief-missing-model.json','utf8'),issues:string[]=[]
   const context={projectId:'fixture',sessionId:'s',source:'绘画速度和颜色控制声音，旧画可选规则版本',previous,software:true,requireIntentAssessment:true,onIssues:(rows:string[])=>issues.push(...rows)}

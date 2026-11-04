@@ -85,7 +85,13 @@ export interface UxSketchResult {
 export function parseSketchHtml(text: string): UxSketchResult | undefined {
   let html = text.trim()
   const fence = html.match(/^```[a-zA-Z]*\s*\n([\s\S]*?)\n?```$/)
-  if (fence) html = fence[1].trim()
+  if (fence) { if ((html.match(/```/g) ?? []).length !== 2) return undefined; html = fence[1].trim() }
+  else {
+    // Transport prose is not the artifact. Accept exactly one explicitly marked
+    // HTML block; never guess missing closing bytes or select among candidates.
+    const blocks = [...html.matchAll(/```html[ \t]*\r?\n([\s\S]*?)\r?\n?```/gi)]
+    if (blocks.length === 1 && (html.match(/```/g) ?? []).length === 2) html = blocks[0][1].trim()
+  }
   const looksHtml = /^<!DOCTYPE html>/i.test(html) || /^<html[\s>]/i.test(html)
   if (!looksHtml || !html.includes('</html>')) return undefined
   if (/<script\b|\bon[a-z]+\s*=|javascript\s*:/i.test(html)) return undefined

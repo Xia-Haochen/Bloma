@@ -59,7 +59,7 @@ export async function main() {
   const root = resolve(process.env.BLOMA_COMPLEX_TRIAL_ROOT), phase = process.env.BLOMA_COMPLEX_TRIAL_PHASE ?? 'preflight'
   const tasks = trialTasks(), customCases = Boolean(process.env.BLOMA_COMPLEX_TRIAL_CASES)
   const which = process.env.BLOMA_COMPLEX_TRIAL_TASK ?? Object.keys(tasks)[0]
-  if (!['preflight', 'run', 'resume', 'change', 'confirm', 'inspect', 'replan', 'approve-ux'].includes(phase) || !Object.hasOwn(tasks, which)) throw Error('TRIAL_PHASE_INVALID')
+  if (!['preflight', 'run', 'resume', 'change', 'confirm', 'inspect', 'replan', 'approve-ux', 'retry-ux'].includes(phase) || !Object.hasOwn(tasks, which)) throw Error('TRIAL_PHASE_INVALID')
   const task = tasks[which as keyof typeof tasks], home = join(root, 'home'), profile = join(root, 'electron-profile')
   mkdirSync(home, { recursive: true }); mkdirSync(profile, { recursive: true })
   process.env.PROMA_HOME = home; process.env.BLOMA_DISPATCH_EXPERIMENT = '0'; delete process.env.BLOMA_EXPERIMENT_UNLIMITED_MONETARY
@@ -158,6 +158,8 @@ export async function main() {
     save(true)
     if (phase === 'inspect') {
       report.independent=customCases?{status:'unverified',reason:'需按当前样本独立oracle执行实际交互；不使用旧任务的专用验收器冒充通过。'}:which==='primary'?await inspectPrimary(project.project_id,join(taskDir,'independent'),process.env.BLOMA_COMPLEX_REGRESSION==='1'):await inspectDocuments(project.project_id,join(taskDir,'independent'))
+    } else if (phase === 'retry-ux') {
+      await handleGuideMessage({ project_id: project.project_id, session_id: sid, request_id: runId, mode: 'longterm', current_stage: 'blocked_for_user_decision', content: '重新生成草图', metadata: { source: 'card_option', selected_option_id: 'ux_retry' } }, e => event(e.type, e.payload), model)
     } else if (phase === 'approve-ux') {
       report.ux_confirmation = 'actual persisted UX card; trial operator reviewed preview before confirmation'
       await handleGuideMessage({ project_id: project.project_id, session_id: sid, request_id: runId, mode: 'longterm', current_stage: 'blocked_for_user_decision', content: '按草图开工', metadata: { source: 'card_option', selected_option_id: 'ux_confirm_go' } }, e => event(e.type, e.payload), model)
