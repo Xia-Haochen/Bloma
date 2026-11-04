@@ -88,7 +88,7 @@ export async function prepareIndependentDesign(input:{projectId:string;sessionId
     if(Math.floor(money.remaining_rmb*1e6)<reserve*batches.length)throw Error('INDEPENDENT_COMPLETE_REQUEST_RESERVE_UNAVAILABLE')
     const ux=readConfirmedUxBinding(input.projectId,brief)
     const data={goal:brief.positioning,requirements:brief.requirements.map(item=>({id:item.id,description:item.description,expected:trustedAcceptance(brief,item),requirement_hash:requirementEvidenceHash(brief,item),behavior_assertions:item.behavior_assertions})),
-      constraints:brief.constraints,out_of_scope:brief.out_of_scope,design_aids:COUNTEREXAMPLE_GUIDANCE,
+      intent:brief.requirements_model,constraints:brief.constraints,out_of_scope:brief.out_of_scope,design_aids:COUNTEREXAMPLE_GUIDANCE,
       confirmed_design:ux?.html_path?readFileSync(join(project.root_path,ux.html_path),'utf8'):null}
     const prompt=JSON.stringify(data);if(Buffer.byteLength(prompt)>256*1024)throw Error('INDEPENDENT_INPUT_TOO_LARGE')
     attempted=true

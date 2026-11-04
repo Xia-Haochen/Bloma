@@ -1,3 +1,4 @@
+import { validateIntentObservations } from './intent-review'
 import { productDesignPolicy } from '../project/product-design-policy'
 import { findingNeedsClosure, qualityCloseout, observedQualityFinding } from './quality-closeout'
 import { visualReviewChecklist, visualCoverageComplete } from './visual-review-checklist'
@@ -110,10 +111,10 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       materialsRead.add(ctx.sessionId)
       return { output: JSON.stringify({ review, root: findProject(projectId).root_path, goal: brief.positioning, constraints: brief.constraints, confirmed_ux: ux, design_policy: productDesignPolicy(brief),
         confirmed_design: review.kind === 'visual' && ux?.html_path ? { html: readFileSync(join(findProject(projectId).root_path, ux.html_path), 'utf8').slice(0, 64000), bounded_characters: 64000 } : undefined,
-        intent: brief.requirements_model, visual_facts: visual, visual_checklist: review.kind === 'visual' ? visualReviewChecklist : undefined,
+        intent: brief.requirements_model, intent_review_protocol: '有experience时逐项提交intent_observations:{commitment_id,status:supported|concern|unverified,evidence,limitations}；核对禁止替代。supported只是审阅意见，不代表真实运行通过。concern需关联finding；证据不足保留unverified。', visual_facts: visual, visual_checklist: review.kind === 'visual' ? visualReviewChecklist : undefined,
         requirements: brief.requirements.map(r => ({ id: r.id, description: r.description, expected_source: trustedAcceptance(brief, r) })), out_of_scope: brief.out_of_scope }) }
     } }, { name: 'submit_quality_findings', description: '提交只读疑点，不得指定状态或PASS。expected_source逐字引用确认预期；无依据增强标suggestion，预期有争议标disputed。宿主生成ID、绑定候选；只能提交一次。',
-    input_schema: { type: 'object', additionalProperties: false, required: ['findings'], properties: { visual_observations: { type: 'array', maxItems: 16, items: { type: 'object', additionalProperties: false, required: ['image_sha256', 'area', 'region', 'observed'], properties: { area: { type: 'string', enum: Object.keys(visualReviewChecklist) }, image_sha256: { type: 'string' }, region: { type: 'string', maxLength: 1000 }, observed: { type: 'string', maxLength: 2000 } } } }, findings: { type: 'array', maxItems: 32, items: { type: 'object', additionalProperties: false,
+    input_schema: { type: 'object', additionalProperties: false, required: ['findings'], properties: { intent_observations: { type: 'array', maxItems: 32, items: { type: 'object', additionalProperties: false, required: ['commitment_id','status','evidence','limitations'], properties: { commitment_id: {type:'string'}, status:{type:'string',enum:['supported','concern','unverified']}, evidence:{type:'string'}, limitations:{type:'string'} } } }, visual_observations: { type: 'array', maxItems: 16, items: { type: 'object', additionalProperties: false, required: ['image_sha256', 'area', 'region', 'observed'], properties: { area: { type: 'string', enum: Object.keys(visualReviewChecklist) }, image_sha256: { type: 'string' }, region: { type: 'string', maxLength: 1000 }, observed: { type: 'string', maxLength: 2000 } } } }, findings: { type: 'array', maxItems: 32, items: { type: 'object', additionalProperties: false,
       required: ['requirement', 'expected_source', 'category', 'severity', 'location', 'trigger', 'evidence', 'reproduction', 'unknowns', 'kind'],
       properties: { ...Object.fromEntries(['requirement', 'expected_source', 'category', 'location', 'trigger', 'evidence', 'reproduction', 'unknowns'].map(key => [key, { type: 'string', maxLength: 4000 }])),
         severity: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] }, kind: { type: 'string', enum: ['suspected', 'disputed', 'suggestion'] } } } } } },
@@ -131,7 +132,7 @@ export function createQualityReview(projectId: string, parent: string, policy: R
         if (!visualCoverageComplete(observations)) throw Error('VISUAL_CHECKLIST_INCOMPLETE: 须覆盖layout/interaction/content/scope，未观察状态明确写入scope')
         review.visual_observations = observations
       } else if (input.visual_observations !== undefined) throw Error('VISUAL_OBSERVATIONS_NOT_APPLICABLE')
-      if (Object.keys(input).some(k => !['findings', 'visual_observations'].includes(k)) || !Array.isArray(input.findings) || input.findings.length > 32) throw Error('QUALITY_FINDINGS_INVALID')
+      if (Object.keys(input).some(k => !['findings', 'visual_observations', 'intent_observations'].includes(k)) || !Array.isArray(input.findings) || input.findings.length > 32) throw Error('QUALITY_FINDINGS_INVALID')
       const brief = readPrdBackplane(projectId)
       const rows = input.findings.map((raw: unknown): QualityFinding => {
         const row = raw as Record<string, unknown>, fields = ['requirement', 'expected_source', 'category', 'severity', 'location', 'trigger', 'evidence', 'reproduction', 'unknowns', 'kind']
@@ -142,6 +143,9 @@ export function createQualityReview(projectId: string, parent: string, policy: R
         const { kind: _kind, ...finding } = row
         return { ...finding, id: randomUUID(), review: review.id, review_kind: review.kind ?? 'code', visual_material_hash: review.visual?.manifest_hash, identity: review.identity, disposition, checks: [] } as unknown as QualityFinding
       })
+      const intent = validateIntentObservations(input.intent_observations, brief.requirements_model?.experience)
+      if (intent?.some(o => o.status === 'concern' && !rows.some(f => brief.requirements_model!.experience!.commitments.find(c => c.id === o.commitment_id)!.feature_ids.includes(f.requirement)))) throw Error('INTENT_CONCERN_FINDING_REQUIRED')
+      review.intent_observations = intent?.map(o => ({ ...o, finding_ids: rows.filter(f => brief.requirements_model!.experience!.commitments.find(c => c.id === o.commitment_id)!.feature_ids.includes(f.requirement)).map(f => f.id) }))
       ledger.findings.push(...rows); review.status = 'submitted'; save(ledger)
       return { output: JSON.stringify({ submitted: true, findings: rows, verification: 'unverified' }) }
     } }, { name: 'view_quality_image', description: '读取本视觉子会话获宿主授权的当前候选真实PNG。无path或debug_session_id参数；跨会话、过期、换图拒绝。附图之后还须实际核对并提交具体可见观察，图片本身不签发PASS。', input_schema: { type: 'object', additionalProperties: false, properties: {} }, execute: async (input, ctx) => {
@@ -190,6 +194,8 @@ export function createQualityReview(projectId: string, parent: string, policy: R
     const selection = await selectQualityCollaboration(projectId,current,signal)
     const latest = ledger.reviews.filter(r => (r.kind ?? 'code') === 'code').at(-1)
     if (selection.required.includes('code') && (!latest || latest.status !== 'complete' || !same(latest.identity, current))) return 'QUALITY_REVIEW_REQUIRED: 当前候选尚无所需的有效结构化C审阅；用start_quality_review，等待并处理台账。'
+    const unresolvedIntent = (['code', 'visual'] as const).flatMap(kind => { const r = ledger.reviews.filter(r => (r.kind ?? 'code') === kind).at(-1); return r && same(r.identity, current) && r.status === 'complete' ? [r] : [] }).flatMap(r => r.intent_observations ?? []).filter(o => o.status === 'unverified' || o.status === 'concern' && (!o.finding_ids?.length || o.finding_ids.some(id => { const f = ledger.findings.find(f => f.id === id); return !f || !['closed','not_reproduced'].includes(f.disposition) || f.checks.at(-1)?.outcome !== 'passed' || !same(f.checks.at(-1)!.identity, current) })))
+    if (unresolvedIntent.length) return 'QUALITY_INTENT_UNRESOLVED: 核心体验仍有未验证或未闭合观察，先核对实际旅程和对应finding，不以通用界面替代：' + JSON.stringify(unresolvedIntent)
     const blocking = ledger.findings.filter(f => findingNeedsClosure(f, current, rulesVersion(projectId), independentDesignVersion(projectId)))
     if (blocking.length) return `QUALITY_FINDINGS_OPEN: 重要已确认缺陷尚未在当前候选闭合：${JSON.stringify(blocking)}`
     if (selection.required.includes('visual')) {

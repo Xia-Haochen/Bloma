@@ -13,7 +13,7 @@ export interface RequirementsModel {
   entities: Array<{ id: string; name: string; description: string; attributes: string[] }>
   relations: Array<{ from: string; to: string; description: string }>
   workflows: Array<{ id: string; name: string; steps: string[]; feature_ids: string[] }>
-  rules: Array<{ id: string; statement: string; feature_ids: string[]; source_ids: string[]; origin: 'user' | 'assumption' }>
+  rules: Array<{ id: string; statement: string; feature_ids: string[]; source_ids: string[]; origin: 'user' | 'assumption'; verification?: { operation: 'sum_decimal' | 'count_inputs' | 'sorted_unique' } }>
   scenarios: Array<{
     id: string; feature_id: string; kind: 'normal' | 'boundary' | 'exception'
     given?: string; when?: string; then?: string; not_applicable?: string; rule_ids: string[]
@@ -88,6 +88,7 @@ export function validateRequirementsModel(raw: unknown, features: SketchRequirem
   const ruleIds = new Set(rules.map(row => row.id as string))
   for (const rule of rules) {
     if (!text(rule.statement) || !['user', 'assumption'].includes(rule.origin as string)) issues.push(`${rule.id} 业务规则无效`)
+    if (rule.verification !== undefined && (!record(rule.verification) || Object.keys(rule.verification).some(k => k !== 'operation') || !['sum_decimal','count_inputs','sorted_unique'].includes(String(rule.verification.operation)))) issues.push(`${rule.id} 确定性判定器无效`)
     refs(rule.feature_ids, featureIds, `${rule.id} 功能`, true)
     refs(rule.source_ids, sourceIds, `${rule.id} 来源`, rule.origin === 'user')
   }

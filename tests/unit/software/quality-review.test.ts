@@ -1,3 +1,5 @@
+import { organizedPrd } from '../../support/organized-prd'
+import { projectRequirementsModel } from '../../../main/model/requirements-model'
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -42,12 +44,12 @@ function register(query: SDKQuery) {
     prepareDelegation: quality.prepare, childSystemBuilder: (_role, child) => quality.system(child)!,
     childToolsBuilder: (id, role) => quality.reviewTools(buildSoftwareAgentTools(id, role, policy)), publish: () => {} })
 }
-async function review(findings: Record<string, unknown>[] = [finding]) {
+async function review(findings: Record<string, unknown>[] = [finding], intent?: unknown[]) {
   let calls = 0
   register(async function* (_prompt, options) {
     expect(JSON.stringify(options.messages?.filter(m => m.role === 'system'))).not.toContain('A_SUCCESS_STORY_MUST_NOT_LEAK')
     yield { type: 'assistant', message: { role: 'assistant', content: ++calls === 1
-      ? [{ type: 'tool_use', id: 'materials', name: 'read_quality_review', input: {} }, { type: 'tool_use', id: 'source', name: 'read_file', input: { path: 'app.cjs' } }, { type: 'tool_use', id: 'submit', name: 'submit_quality_findings', input: { findings } }]
+      ? [{ type: 'tool_use', id: 'materials', name: 'read_quality_review', input: {} }, { type: 'tool_use', id: 'source', name: 'read_file', input: { path: 'app.cjs' } }, { type: 'tool_use', id: 'submit', name: 'submit_quality_findings', input: { findings, ...(intent ? { intent_observations: intent } : {}) } }]
       : [{ type: 'text', text: '已提交疑点，未验证。' }] } }
     yield { type: 'result', subtype: 'success', usage: { input_tokens: 10, output_tokens: 10 } }
   })
@@ -169,3 +171,16 @@ it('complete production runs C, reproduces and repairs a finding, reruns C on th
   expect(ledger.findings[0].checks.map(c => c.outcome)).toEqual(['failed', 'passed'])
   expect(ledger.reviews.filter(r => r.status === 'complete')).toHaveLength(2)
 }, 120000)
+
+it('keeps uncertain experience observations open and permits a new current review to resolve them', async () => {
+  const brief = readPrdBackplane(project.project_id)
+  const model = organizedPrd(brief.requirements, '核心体验需核对').requirements_model
+  model.experience = { summary: '计算过程可见', commitments: [{ id: 'EXP-001', statement: '过程可见', source_ids:['S-001'], feature_ids:['F-001'], scenario_ids:['AC-001'], unacceptable_substitute:'仅显示成功提示' }] }
+  syncDocuments({request_id:'intent',project_id:project.project_id,session_id:parent,checkpoint:'requirement_confirmed'},projectRequirementsModel({...brief,requirements_model:model}))
+  markPrdUserConfirmed(project.project_id)
+  const observation = {commitment_id:'EXP-001',status:'unverified',evidence:'尚未核对输出路径',limitations:'需要检查实际实现'}
+  await review([], [observation])
+  expect(await quality.gate()).toContain('INTENT_UNRESOLVED')
+  await review([], [{...observation,status:'supported',evidence:'已读实现输出具体结果',limitations:'真实行为仍由宿主验证'}])
+  expect(await quality.gate()).toBeUndefined()
+},60000)
