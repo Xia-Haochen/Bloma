@@ -136,6 +136,17 @@ export async function inspectRetestDoodle(projectId:string,folder:string,muteSel
       const text=(await row.innerText())+' '+await page.locator('#art-play-status').innerText(),events=await page.evaluate(()=>(window as any).__independentDoodleAudio.events)
       report.missing_timbre={text,events,requested:'removed-test-timbre'};expect(text).toMatch(/音色.*(不可用|缺失|不存在|无法)|不可用.*音色/);expect(events).toHaveLength(0);return report.missing_timbre
     })
+    await fault('映射保存期间的编辑不会被响应无声覆盖',async()=>{
+      const slow=page.locator('#bpm-slow'),fast=page.locator('#bpm-fast'),submitted=await slow.inputValue()==='80'?'100':'80',edited=await fast.inputValue()==='160'?'180':'160'
+      await slow.selectOption(submitted)
+      let release!:()=>void,seen!:()=>void;const hold=new Promise<void>(r=>release=r),started=new Promise<void>(r=>seen=r)
+      await page.route('**/api/mapping',async route=>{if(route.request().method()!=='POST')return route.continue();seen();await hold;await route.continue()})
+      try{const response=page.waitForResponse(r=>r.url().endsWith('/api/mapping')&&r.request().method()==='POST');await page.locator('#save-mapping').click();await started;const editable=await fast.isEnabled();if(editable)await fast.selectOption(edited)
+        release();const saved=await response;expect(saved.ok()).toBe(true);const payload=await saved.json();await expect(page.locator('body')).toContainText('当前版本 '+payload.state.currentVersionId);await expect(fast).toBeEnabled()
+        expect(data().mappingVersions.find((v:any)=>v.id===payload.state.currentVersionId).tempoBands.find((b:any)=>b.key==='slow').bpm).toBe(Number(submitted));if(editable)await expect(fast).toHaveValue(edited)
+        return{edited_while_pending:editable,submitted_slow:submitted,current_version:payload.state.currentVersionId}
+      }finally{release();await page.unroute('**/api/mapping')}
+    })
     await fault('保存请求期间新增笔画不会无声丢失',async()=>{
       await page.locator('#new-doodle').click();await draw('#6d8268',0,0);await expect(page.locator('#stroke-list li')).toHaveCount(1)
       let release!:()=>void,seen!:()=>void;const hold=new Promise<void>(r=>release=r),started=new Promise<void>(r=>seen=r),posts:any[]=[]
