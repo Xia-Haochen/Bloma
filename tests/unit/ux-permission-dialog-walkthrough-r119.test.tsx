@@ -58,7 +58,7 @@ describe('ux-permission-dialog-walkthrough r119：权限弹窗状态矩阵（ask
   it('[P1·warning 允许] 摘要可见+「允许」→ IPC respond(allow)，队列清空（恢复路径）', async () => {
     mountWith([req('warning')])
     expect(screen.getByText(/写入文件 demo\.txt/)).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '确认' }))
+    fireEvent.click(screen.getByRole('button', { name: '允许本次操作' }))
     await waitFor(() => {
       expect(respondMock).toHaveBeenCalledWith(
         expect.objectContaining({ decision: 'allow', remember_for_session: false }),
@@ -70,7 +70,7 @@ describe('ux-permission-dialog-walkthrough r119：权限弹窗状态矩阵（ask
   it('[P2·warning 拒绝+记住] 勾选记住→拒绝仍清队列（记住仅对 allow 生效——:167 契约锁定）', async () => {
     mountWith([req('warning')])
     fireEvent.click(screen.getByRole('checkbox'))
-    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    fireEvent.click(screen.getByRole('button', { name: '拒绝本次操作' }))
     await waitFor(() => {
       expect(respondMock).toHaveBeenCalledWith(
         expect.objectContaining({ decision: 'deny', remember_for_session: false }),
@@ -82,8 +82,8 @@ describe('ux-permission-dialog-walkthrough r119：权限弹窗状态矩阵（ask
     mountWith([req('dangerous')])
     expect(screen.getByRole('dialog', { hidden: true }) || screen.getByText(/写入文件/)).toBeTruthy()
     expect(screen.queryByRole('checkbox')).toBeNull() // F8 锁定：dangerous 无记住
-    expect(screen.getByRole('button', { name: '确认' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '取消' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '允许本次操作' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '拒绝本次操作' })).toBeTruthy()
   })
 
   it('[P4·空队列] 无请求时零渲染（不占 DOM/无幽灵弹窗）', () => {

@@ -278,7 +278,7 @@ export async function runUxConfirmGate(pending: PendingUxConfirm, feedback?: str
   if (sketchUrl) {
     publish(makeUxEvent(eventInput, 'ux_sketch_ready', { preview_url: sketchUrl, ...(reviewUrl ? { review_url: reviewUrl } : {}), round }))
     publish(makeUxEvent(eventInput, 'message_delta', {
-      text: `草图画好了，已在右侧预览展示（第 ${round} 轮）。看看界面方向对不对——确认后我就开工。`,
+      text: `第 ${round} 版界面草图已可预览。请核对布局与外观；草图不代表功能已完成，确认后开始制作。`,
     }))
   }
 
@@ -298,7 +298,7 @@ export function uxDecisionPayload(pending: PendingUxConfirm): Record<string, unk
     title: !ready ? '草图尚未就绪，请选择下一步' : pending.unappliedFeedback ? '当前设计仍有未处理意见，请选择下一步' : '请确认界面草图',
     summary: ready ? pending.sketchSummary ?? '' : '已保留确认的需求和已有意见，尚未开始实现。',
     questions: [
-      ...(ready ? [{ id: UX_CONFIRM_OPTION_CONFIRM, label: '确认草图，开工', description: '按这个界面方向开始实现' }]
+      ...(ready ? [{ id: UX_CONFIRM_OPTION_CONFIRM, label: '确认草图，开始制作', description: '按当前布局与外观制作实际功能' }]
         : [{ id: UX_CONFIRM_OPTION_RETRY, label: '重新生成草图', description: '沿用已确认需求和修改意见重试' }]),
       { id: UX_CONFIRM_OPTION_ADJUST, label: pending.limitReached ? '再调整一次' : '有要调整的', description: '说说哪里要改，我重新画' },
       ...(ready ? [{ id: UX_CONFIRM_OPTION_DELEGATE, label: '你帮我定', description: '按当前版本直接开工' }] : []),

@@ -394,7 +394,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 }}
               >
                 <span aria-hidden style={{ fontSize: 11 }}>↻</span>
-                {`网络不稳，正在自动重试（第 ${activeRetry.attempt} 次${activeRetry.maxRetries > 0 ? `／最多 ${activeRetry.maxRetries} 次` : ''}）…你的消息不会丢`}
+                {`请求暂未成功，正在自动重试（第 ${activeRetry.attempt} 次${activeRetry.maxRetries > 0 ? `／最多 ${activeRetry.maxRetries} 次` : ''}）。暂时无需重复发送。`}
               </div>
             )}
 

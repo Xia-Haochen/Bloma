@@ -84,12 +84,12 @@ export const DeliveryPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
     setLaunchState('启动中…')
     const api = window.electronAPI?.projectDeliverables
     if (!api) {
-      setLaunchState('启动失败：当前环境不支持启动通道')
+      setLaunchState('当前无法启动程序：请在 Bloma 桌面应用中重试。')
       return
     }
     let result
     try { result = await api.launch({ request_id: crypto.randomUUID(), project_id: projectId, ...(restart ? { restart: true } : {}), ...(snapshot ? { restore_snapshot: snapshot, restore_data_confirmed: true } : {}), ...(previous ? { previous_release: true } : {}), ...(trial ? { trial: true, trial_version: data?.trial?.release_id } : {}) }) }
-    catch { if (currentProjectId.current === projectId) setLaunchState('启动失败：请重试，或告诉向导你遇到的问题'); return }
+    catch { if (currentProjectId.current === projectId) setLaunchState('未收到启动结果。请先检查程序是否已打开；若没有，再重试或在对话中反馈。'); return }
     if (currentProjectId.current !== projectId) return
     if (result.ok && result.data.trial&&['running','exited'].includes(result.data.trial.state)) {
       const current = result.data.trial
@@ -99,11 +99,11 @@ export const DeliveryPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
     setConfirmRestore(false); void refresh()
     if (result.ok && result.data.started) {
       setNeedsRestart(false)
-      setLaunchState(result.data.detail ?? '已启动，可以开始使用。')
+      setLaunchState(result.data.detail ?? '程序已启动，请检查是否正常打开。')
     } else {
       setNeedsRestart(result.ok && result.data.needs_restart === true)
       setRestartPrevious(previous)
-      setLaunchState(result.ok && result.data.detail ? result.data.detail : `启动失败：${result.ok ? '进程未能存活' : result.error?.user_visible_message || result.error?.message || '未知错误'}`)
+      setLaunchState(result.ok && result.data.detail ? result.data.detail : `启动失败：${result.ok ? '程序启动后未能保持运行，请在对话中反馈此问题' : result.error?.user_visible_message || result.error?.message || '未提供具体原因，请重试或在对话中反馈'}`)
     }
   }
   const onCloseTrial = async () => {
@@ -196,9 +196,9 @@ export const DeliveryPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
         {!loading && data && !data.can_launch && (
           <span data-ai-id="delivery-launch-hint" style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>
             {project?.current_stage !== 'completed' ? '项目完成后可启动' : data.launch.declared && !data.launch.parse_ok
-              ? `LAUNCH.json 不合法：${data.launch.parse_error ?? ''}`
+              ? `启动配置无法读取（LAUNCH.json）：${data.launch.parse_error ?? ''}`
               : !data.launch.declared
-                ? '项目根缺少 LAUNCH.json 启动声明'
+                ? '缺少启动配置（LAUNCH.json），请在对话中要求补齐后再启动'
                 : '项目完成后可启动'}
           </span>
         )}
@@ -224,9 +224,9 @@ export const DeliveryPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
         <button type="button" data-ai-id="software-trial-launch" disabled={loading || !data?.can_trial} onClick={() => void onLaunch(false, undefined, false, true)}>打开独立试用</button>
         {data.trial?.state === 'running' && <button type="button" data-ai-id="software-trial-update" disabled={loading} onClick={() => void onLaunch(true, undefined, false, true)}>已保存，切换到当前代码试用</button>}
         {data.trial?.state === 'running' && <button type="button" disabled={loading} onClick={() => void onCloseTrial()}>关闭试用</button>}
-        <span>测试数据 · {data.trial?.qualification==='host_verified_test_data'?'已有宿主检查，待阶段确认':data.trial?.qualification==='stage_checked_test_data'?'仅阶段局部检查，整体尚未验收':'尚未验收'}{data.trial?.state==='running'?' · 自动验收期间可继续使用':''}{data.trial ? ` · 版本 ${data.trial.release_id.slice(0,12)}` : ''}</span>
+        <span>测试数据 · {data.trial?.qualification==='host_verified_test_data'?'已通过程序检查，待你确认本阶段':data.trial?.qualification==='stage_checked_test_data'?'已通过部分阶段检查，整体尚未验收':'尚未验收'}{data.trial?.state==='running'?' · 自动验收期间可继续使用':''}{data.trial ? ` · 版本 ${data.trial.release_id.slice(0,12)}` : ''}</span>
       </div>}
-      {data?.trial?.state==='exited'&&data.trial.last_output!==undefined&&<pre className="software-command-trial" aria-label="命令试用输出">{data.trial.last_output||'命令运行完成，无输出。'}</pre>}
+      {data?.trial?.state==='exited'&&data.trial.last_output!==undefined&&<pre className="software-command-trial" aria-label="命令试用输出">{data.trial.last_output||'命令已结束，没有输出。'}</pre>}
       </div></Inspection>
       {embedded && data?.trial?.state === 'running' && data.trial.url && <iframe key={data.trial.release_id} title="独立程序试用（测试数据，尚未验收）" src={data.trial.url} sandbox="allow-scripts allow-forms allow-same-origin allow-downloads" style={{ flex: 1, width: '100%', minHeight: 360, border: 0 }} />}
       {embedded && data?.trial?.state !== 'running' && liveUrl && <><span>开发调试画面 · 可能随调试关闭</span><iframe title="开发调试画面" src={liveUrl} sandbox="allow-scripts allow-forms allow-same-origin allow-downloads" style={{ flex: 1, width: '100%', minHeight: 360, border: 0 }} /></>}
@@ -240,7 +240,7 @@ export const DeliveryPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
         {project?.mode==='longterm'&&project.workflow_version==='software-v1'&&projectId&&<LongtermProjectPanel key={projectId} projectId={projectId} state={data?.longterm} error={data?.longterm_error} archived={project.status==='archived'||project.status==='abandoned'} refresh={()=>void refresh()} />}
         <SoftwareSuggestions key={projectId} value={data?.improvement_suggestions} refresh={()=>void refresh()} />
         {data?.trial?.state !== 'running' && <ProgramScreenshot />}
-        {!loading && !liveUrl && !project?.longterm_summary && data?.trial?.state !== 'running' && (data || embedded) && <div className="theatre-delivery-hero"><span className="theatre-idea-emblem"><LayoutTemplate size={25} /></span><h3>{project?.current_stage === 'completed' ? '这是你的软件了。' : project?.desktop_blocked ? '已有的工作，都保留了。' : desktopPhase ? '正在接通完整功能。' : '这里，会是你的软件。'}</h3><p>{project?.current_stage === 'completed' ? '启动后在独立窗口使用，随时可以继续改进。' : desktopPhase ? '从确认过的界面，继续成为真实程序。' : '先说你想解决什么，我们一起把它做出来。'}</p></div>}
+        {!loading && !liveUrl && !project?.longterm_summary && data?.trial?.state !== 'running' && (data || embedded) && <div className="theatre-delivery-hero"><span className="theatre-idea-emblem"><LayoutTemplate size={25} /></span><h3>{project?.current_stage === 'completed' ? '这是你的软件了。' : project?.desktop_blocked ? '制作暂时停止。' : desktopPhase ? '当前处于程序制作阶段。' : '这里，会是你的软件。'}</h3><p>{project?.current_stage === 'completed' ? '启动后在独立窗口使用，随时可以继续改进。' : desktopPhase ? '制作和检查进展可在上方状态与工作记录中查看。' : '先说你想解决什么，我们一起把它做出来。'}</p></div>}
         {/* 点选纠错（批11 MVP-E，2026-10-08）：入口/会话视图内嵌交付面板；completed 项目
             可用（主进程校验，旧骨架产物返回 unsupported 如实置灰提示） */}
         {(project?.current_stage === 'completed'||data?.trial?.release_id) && (
@@ -253,9 +253,9 @@ export const DeliveryPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
         {loading && <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: 6 }}><RotateCw size={12} /> 读取产物…</div>}
         {!loading && !data && !embedded && (
           <div data-ai-id="delivery-empty" style={{ padding: 'var(--space-6) var(--space-2)', textAlign: 'center' }}>
-            <p style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text)', fontWeight: 600, margin: '0 0 4px' }}>项目还没有可展示的交付内容</p>
+            <p style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text)', fontWeight: 600, margin: '0 0 4px' }}>暂未读取到交付内容</p>
             <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', margin: 0, lineHeight: 1.6 }}>
-              制作完成后，可以在这里启动程序、查看文件与使用说明。
+              可点击刷新重新读取。交付内容就绪后，可以在这里启动程序、查看文件与使用说明。
             </p>
           </div>
         )}

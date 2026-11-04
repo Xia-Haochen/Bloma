@@ -164,7 +164,7 @@ describe('MvpStatusBanner 导出项目按钮（PR-3）', () => {
     renderBanner()
     const text = screen.getByTestId('mvp-status-banner').textContent
     expect(text).toContain('制作已暂停')
-    expect(text).toContain('实现与验证')
+    expect(text).toContain('制作与检查')
     expect(text).not.toContain('网页')
     expect(text).not.toContain('已下线')
   })

@@ -114,7 +114,7 @@ describe('DeliveryPanel', () => {
     const button = screen.getByTestId('delivery-launch-button') as HTMLButtonElement
     expect(button.disabled).toBe(false)
     fireEvent.click(button)
-    await waitFor(() => expect(screen.getByTestId('delivery-launch-state').textContent).toContain('已启动，可以开始使用。'))
+    await waitFor(() => expect(screen.getByTestId('delivery-launch-state').textContent).toContain('程序已启动，请检查是否正常打开。'))
   })
 
   it('缺 LAUNCH.json → 按钮禁用 + 缺口提示如实', async () => {
@@ -181,6 +181,6 @@ describe('DeliveryPanel', () => {
 
   it('无数据且非加载 → 空态引导文案（A-8）', async () => {
     renderPanel('clarifying')
-    await waitFor(() => expect(screen.getByTestId('delivery-empty').textContent).toContain('还没有可展示的交付内容'))
+    await waitFor(() => expect(screen.getByTestId('delivery-empty').textContent).toContain('暂未读取到交付内容'))
   })
 })

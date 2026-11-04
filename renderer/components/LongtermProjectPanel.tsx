@@ -18,7 +18,7 @@ export function LongtermProjectPanel({projectId,state,error,refresh,archived=fal
     setPending(true)
     try{const result=await api.longtermAction({request_id:crypto.randomUUID(),project_id:projectId,session_id:sessionId,revision:state.revision,action,...(backlogId?{backlog_id:backlogId}:{})})
       setMessage(result.ok?result.data.detail:result.error.user_visible_message||result.error.message);refresh()
-    }catch{setMessage('操作尚未确认，状态和已有版本保留，请刷新后重试。')}finally{setPending(false)}
+    }catch{setMessage('未收到操作结果，请刷新查看最新状态，再决定是否重试。')}finally{setPending(false)}
   }
   return <section className="longterm-project-panel" aria-label="长期项目与里程碑">
     <header><strong>长期维护</strong><span>{archived||state?.archived_at?'已归档':awaiting?'本阶段待核对':current?.status==='delivered'?'本阶段已交付':current?'当前里程碑制作中':'下一轮目标待确认'}</span></header>

@@ -21,5 +21,5 @@ export function projectProgress(id: string, busy: boolean): SoftwareProjectProgr
         status: released ? 'ended' : busy ? 'running' : 'interrupted', required_review: data.source === 'required_quality' }
     }),
     observed_strategy_segments: projectActivityView(id).segment_count,
-    note: (projectActivityView(id).recording_complete ? '' : '运行观测存在缺口，请核对原记录。') + '显示宿主记录；子任务结束和阶段检查通过都不等于完整交付。' }
+    note: (projectActivityView(id).recording_complete ? '' : '部分运行记录缺失，以下进度可能不完整。') + '进度来自实际执行记录。子任务结束后仍需检查；阶段检查通过后，还需完成整体检查才能交付。' }
 }

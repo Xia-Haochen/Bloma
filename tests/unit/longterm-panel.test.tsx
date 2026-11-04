@@ -34,7 +34,7 @@ it('defers updates while a writer is active and renders restored decisions/versi
 it('projects milestone state without presenting pending review or a backlog as a finished whole product',()=>{
   const project={mode:'longterm',workflow_version:'software-v1',status:'active',current_stage:'blocked_for_user_decision',desktop_phase:'desktop-verify',longterm_summary:{status:'awaiting_confirmation',pending_items:1}} as Project
   expect(workspaceScene(project,project.current_stage,project.desktop_phase!,false).title).toBe('本阶段待你核对')
-  expect(deriveWorkspaceProgress({project,stage:project.current_stage,phase:project.desktop_phase!,busy:false})[4]).toMatchObject({state:'attention',detail:expect.stringContaining('核对')})
+  expect(deriveWorkspaceProgress({project,stage:project.current_stage,phase:project.desktop_phase!,busy:false})[4]).toMatchObject({state:'attention',detail:expect.stringContaining('请试用当前版本后确认')})
   project.status='completed';project.current_stage='completed';project.desktop_phase='delivered';project.longterm_summary!.status='backlog_pending'
   expect(longtermStatusLabel(project)).toBe('阶段已交付 · 待办 1');expect(workspaceScene(project,project.current_stage,project.desktop_phase,false).title).toBe('本阶段已交付')
 })
