@@ -60,7 +60,7 @@ describe('startup reconcile (T1)', () => {
     expect(readFileSync(join(root, 'app.py'), 'utf8')).toBe('# current desktop work')
     expect(readProjectAttempts(projectId)).toEqual(attempts)
     expect(readFileSync(join(root, 'data', 'records.json'), 'utf8')).toBe('[{"amount":42}]')
-    expect(readSessionText(sessionId)).toContain('没有自动回滚')
+    expect(readSessionText(sessionId)).toContain('程序文件和使用数据已保留')
     expect(await reconcileInterruptedProjects()).toEqual([])
   })
 

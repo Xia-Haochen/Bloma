@@ -135,7 +135,7 @@ function deriveBannerState(
     case 'ready':
       return { visible: true, variant: 'ready', title: STAGE_LABEL_MAP[stage], detail: '已有生成结果，可导出项目；功能检查情况请查看验证记录。', stage }
     case 'completed':
-      return { visible: true, variant: 'ready', title: '项目已交付', detail: '当前版本已交付。可导出项目，或在对话中提出后续修改；检查范围与已知限制请查看交付说明。', stage }
+      return { visible: true, variant: 'ready', title: '项目已交付', detail: '当前版本已交付，可以启动使用，也可以继续提出修改。', stage }
     case 'blocked_for_user_decision':
       return { visible: true, variant: 'blocked', title: STAGE_LABEL_MAP[stage], detail: '需要你做出决定后才能继续', stage }
     default:
@@ -189,7 +189,7 @@ const VARIANT_STYLE: Record<BannerState['variant'], { bg: string; border: string
 // 组件
 // =========================================================================
 
-export const MvpStatusBanner: React.FC<{ suppressBlocked?: boolean }> = ({ suppressBlocked = false }) => {
+export const MvpStatusBanner: React.FC<{ suppressBlocked?: boolean; compact?: boolean }> = ({ suppressBlocked = false, compact = false }) => {
   const sessionId = useAtomValue(activeAgentSessionIdAtom)
   const stage = useAtomValue(workflowStageAtom)
   const project = useAtomValue(currentProjectAtom)
@@ -288,6 +288,7 @@ export const MvpStatusBanner: React.FC<{ suppressBlocked?: boolean }> = ({ suppr
       role="status"
       aria-live="polite"
       data-ai-id="mvp-status-banner"
+      data-compact={compact}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -301,7 +302,7 @@ export const MvpStatusBanner: React.FC<{ suppressBlocked?: boolean }> = ({ suppr
       }}
     >
       {/* 左侧图标 */}
-      {Icon ? (
+      {!compact && Icon ? (
         <span
           style={{
             width: 28,
@@ -316,7 +317,7 @@ export const MvpStatusBanner: React.FC<{ suppressBlocked?: boolean }> = ({ suppr
         >
           <Icon size={18} />
         </span>
-      ) : style.animated ? (
+      ) : !compact && style.animated ? (
         /* 旋转脉冲指示器（generating/testing/judging/repairing） */
         <span
           style={{
@@ -348,7 +349,7 @@ export const MvpStatusBanner: React.FC<{ suppressBlocked?: boolean }> = ({ suppr
         >
           {banner.title}
         </p>
-        {banner.detail && (
+        {banner.detail && !compact && (
           <p
             style={{
               fontSize: 'var(--font-size-xs)',
@@ -380,7 +381,7 @@ export const MvpStatusBanner: React.FC<{ suppressBlocked?: boolean }> = ({ suppr
               whiteSpace: 'nowrap',
             }}
           >
-            已导出到 {exportedPath}（线上状态未知）
+            已导出到 {exportedPath}
           </span>
         ) : (
           <button

@@ -1,3 +1,4 @@
+import { productionNotice } from '../lib/production-notice'
 import { isModernWorkflowVersion } from '../../shared/workflow-version'
 import React from 'react'
 import { atom, useAtomValue } from 'jotai'
@@ -249,7 +250,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   // B-11：桌面阶段话术优先（桌面线运行期间 workflowStage 停在 clarifying，web 条目不命中）；
   // 非桌面线沿web 阶段→回退外部传入的 waitActionLabel
   const busyActionLabel = isModernWorkflowVersion(project?.workflow_version)
-    ? desktopPhase === 'desktop-verify' ? '验证程序' : desktopPhase === 'delivered' ? '已交付' : desktopPhase ? '制作程序' : '准备任务'
+    ? desktopPhase === 'desktop-verify' ? '验证程序' : desktopPhase === 'delivered' ? '整理交付结果' : desktopPhase ? '制作程序' : STAGE_ACTION_LABELS[workflowStage] ?? '整理需求'
     : desktopPhase
     ? DESKTOP_PHASE_ACTION_LABELS[desktopPhase] ?? waitActionLabel
     : STAGE_ACTION_LABELS[workflowStage] ?? waitActionLabel
@@ -394,7 +395,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 }}
               >
                 <span aria-hidden style={{ fontSize: 11 }}>↻</span>
-                {`请求暂未成功，正在自动重试（第 ${activeRetry.attempt} 次${activeRetry.maxRetries > 0 ? `／最多 ${activeRetry.maxRetries} 次` : ''}）。暂时无需重复发送。`}
+                {`请求暂未成功，正在自动重试（第 ${activeRetry.attempt} 次${activeRetry.maxRetries > 0 ? `／最多 ${activeRetry.maxRetries} 次` : ''}）。无需重复发送，重试结果会在这里显示。`}
               </div>
             )}
 
@@ -1039,11 +1040,14 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ characterCue, characterKi
     )
   }
 
-  const firstParagraph = text.split(/\n\s*\n/)[0] ?? ''
-  const clause = text.match(/^[^，。！？：:\n]{1,40}[，。！？：:]/)?.[0] ?? ''
+  // Recognized platform stop templates only; preserve the complete original and copy text.
+  const notice = !isUser && !isStreaming ? productionNotice(rawText) : undefined
+  const displayText = notice ?? text
+  const firstParagraph = displayText.split(/\n\s*\n/)[0] ?? ''
+  const clause = displayText.match(/^[^，。！？：:\n]{1,40}[，。！？：:]/)?.[0] ?? ''
   const firstClause = /[`*_\[\]<>]/.test(clause) ? '' : clause
   const lead = characterCue && !isUser ? firstParagraph.length <= 90 ? firstParagraph : firstClause : ''
-  const bodyText = lead ? text.slice(lead.length).replace(/^\s*\n/, '') : text
+  const bodyText = lead ? displayText.slice(lead.length).replace(/^\s*\n/, '') : displayText
   return (
     <div
       data-ai-id="message-bubble"
@@ -1081,6 +1085,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ characterCue, characterKi
         {characterCue && !isUser && <div className="conversation-character-scene"><div className="conversation-character-lead"><small>当前回复</small>{lead && <Markdown text={lead} />}</div><ReplyCharacter cue={characterCue} kind={characterKind} /></div>}
         {/* assistant 旁白/完成总结渲染 Markdown（模型输出天然带 md）；user 输入保持纯文本语义 */}
         {isUser || !text ? text || (isStreaming ? '…' : '') : compact ? <CompactReply text={bodyText} /> : <Markdown text={bodyText} />}
+        {notice && <details className="production-notice-details"><summary>查看停止原因与检查详情</summary><Markdown text={text} /></details>}
         {textAttachments?.length ? <MessageAttachments attachments={textAttachments} /> : null}
         {imageBlocks.length > 0 && (
           <span

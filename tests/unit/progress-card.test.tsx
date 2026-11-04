@@ -197,13 +197,13 @@ describe('ProgressCard', () => {
   it('无步骤模板且无活动：回退阶段文案 + 空态', () => {
     render(<ProgressCard stageLabel="正在理解你的需求" steps={[]} lines={[]} doneSteps={0} onClose={vi.fn()} />)
     expect(screen.getByText('正在理解你的需求')).toBeTruthy()
-    expect(screen.getByText('正在准备 / 理解你的需求…')).toBeTruthy()
+    expect(screen.getByText('正在准备，具体进展会显示在这里。')).toBeTruthy()
   })
 
   it('无步骤模板但有动作：阶段文案 + 已完成 N 步 + 动作行', () => {
     const live: ProgressLine[] = [{ key: 'a', kind: 'tool', label: '读取文件', detail: '', status: 'running' }]
     render(<ProgressCard stageLabel="正在理解你的需求" steps={[]} lines={live} doneSteps={1} onClose={vi.fn()} />)
-    expect(screen.getByText('正在理解你的需求 · 已完成 1 步')).toBeTruthy()
+    expect(screen.getByText('正在理解你的需求 · 已结束 1 项操作')).toBeTruthy()
     expect(screen.getByText('读取文件')).toBeTruthy()
   })
 

@@ -1326,7 +1326,7 @@ export const STAGE_LABEL_MAP: Record<WorkflowStage, string> = {
   clarifying: '等待你确认几个问题',
   generating_sketch: '正在生成草图',
   sketch_ready: '草图已生成',
-  generating_mvp: '正在生成完整功能',
+  generating_mvp: '正在制作程序',
   testing: '正在检查能不能正常使用',
   judge_review: '正在确认功能是否到位',
   repairing: '正在尝试修复',

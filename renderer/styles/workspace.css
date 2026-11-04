@@ -237,3 +237,11 @@
   .workspace-theatre .theatre-delivery-window[data-has-canvas="true"] .sketch-toolbar > div { margin-right: 0; }
   .workspace-theatre .theatre-stage { padding: 12px 12px 0; }
 }
+
+/* Footer status shares a narrow conversation column with the records button. */
+.workspace-theatre .studio-status-slot:has([data-compact="true"]) { flex: 1 1 170px; }
+.workspace-theatre [data-ai-id="mvp-status-banner"][data-compact="true"] { margin: 0; flex-wrap: wrap; }
+.workspace-theatre [data-ai-id="mvp-status-banner"][data-compact="true"] > div { flex: 1 0 80px !important; }
+.workspace-theatre [data-ai-id="mvp-status-banner"][data-compact="true"] [data-ai-id="export-project-done"] { max-width: 100% !important; }
+
+.progress-card-actions > button { white-space: nowrap; flex-shrink: 0; }

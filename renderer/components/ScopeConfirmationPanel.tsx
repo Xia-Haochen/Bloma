@@ -14,7 +14,7 @@ export const ScopeConfirmationPanel: React.FC<{ scope?: LeanScopeView; summary?:
   } : option)
   return (
   <section className="scope-confirmation" aria-label="需求确认">
-    <header><span>需求已整理</span><h2>这次要做的软件</h2><p>请核对功能、限制和这次先不做的内容。确认后按这份范围准备界面或开始制作。</p></header>
+    <header><span>需求已整理</span><h2>这次要做的软件</h2><p>看看功能和范围是否符合你的想法。有遗漏可以补充，确认后就按这份做。</p></header>
     <div className="scope-confirmation-content">
       {scope ? <><p className="scope-goal">{scope.goal}</p><span className="scope-usage">{scope.usage}</span><h3>包含这些功能</h3>
         <ol>{scope.features.map(feature => <li key={feature.id}><strong>{feature.description}</strong>{feature.expected && <p>{feature.expected}</p>}</li>)}</ol>

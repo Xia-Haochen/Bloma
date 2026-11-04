@@ -139,7 +139,7 @@ describe('ChatPanel 集成（loop 轮次进消息列表）', () => {
     // 两条相邻含工具块消息（assistant(tool_use) + user(tool_result)）→ 合并成 1 个折叠组
     const groups = screen.getAllByTestId('process-block-group')
     expect(groups).toHaveLength(1)
-    expect(groups[0].textContent).toContain('已完成 2 步')
+    expect(groups[0].textContent).toContain('执行记录 · 2 项')
     // 默认折叠：旁白与工具行不渲染
     expect(screen.queryByText('我先把页面写出来。')).toBeNull()
     expect(screen.queryByTestId('tool-call-row')).toBeNull()

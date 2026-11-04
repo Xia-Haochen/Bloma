@@ -198,7 +198,7 @@ export const WorkspaceShell: React.FC<WorkspaceShellProps> = (props) => {
       <section className="theatre-conversation" aria-label="向导与下一步">
 
         <ChatPanel presentation="theatre"
-          actionSlot={<footer className="studio-footer"><button type="button" className="theatre-tool" aria-pressed={localPanel === 'records'} onClick={() => openTool('records')}><Activity />工作记录</button><div className="studio-status-slot"><MvpStatusBanner suppressBlocked /></div>{canConfirmSketch && <button type="button" data-ai-id="confirm-sketch-button" className="studio-primary" disabled={props.confirming} onClick={props.onConfirmSketch}>{props.confirming ? '正在开始制作…' : '开始制作'}<Play size={13} /></button>}{project?.desktop_blocked && <button type="button" className="studio-primary" disabled={busy} onClick={() => props.onSendMessage?.('继续')}>继续制作</button>}</footer>}
+          actionSlot={<footer className="studio-footer"><button type="button" className="theatre-tool" aria-pressed={localPanel === 'records'} onClick={() => openTool('records')}><Activity />工作记录</button><div className="studio-status-slot"><MvpStatusBanner suppressBlocked compact /></div>{canConfirmSketch && <button type="button" data-ai-id="confirm-sketch-button" className="studio-primary" disabled={props.confirming} onClick={props.onConfirmSketch}>{props.confirming ? '正在开始制作…' : '开始制作'}<Play size={13} /></button>}{project?.desktop_blocked && <button type="button" className="studio-primary" disabled={busy} onClick={() => props.onSendMessage?.('继续')}>继续制作</button>}</footer>}
           cardOptions={scopePending ? undefined : props.cardOptions}
           decisionTitle={props.decisionTitle}
           decisionBody={props.decisionBody}

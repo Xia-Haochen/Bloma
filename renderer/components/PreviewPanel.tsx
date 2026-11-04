@@ -240,7 +240,7 @@ export const PreviewPanel: React.FC<PreviewPanelProps> = ({
       >
         <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 'var(--font-size-xs)', fontWeight: 600, color: 'var(--color-text-muted)' }}>
           <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--color-success)', display: 'inline-block' }} />
-          预览 · 安全环境
+          界面预览
         </span>
         <div style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
           {!embedded && stage === 'sketch_ready' && onConfirmSketch && (
@@ -550,7 +550,7 @@ const LoadingState: React.FC<{ label?: string }> = ({ label }) => (
   <div style={stateWrap}>
     <div style={{ width: 42, height: 42, border: '3px solid var(--color-border)', borderTopColor: 'var(--color-quick)', borderRadius: '50%', animation: 'spin 0.8s linear infinite', marginBottom: 'var(--space-5)' }} />
     <p style={{ fontSize: 'var(--font-size-lg)', fontWeight: 600, color: 'var(--color-text)' }}>{label ?? '正在准备预览…'}</p>
-    <p style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)', marginTop: 'var(--space-1)' }}>这个过程只发生在安全环境里</p>
+    <p style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)', marginTop: 'var(--space-1)' }}>预览准备好后会显示在这里。</p>
   </div>
 )
 
@@ -560,7 +560,7 @@ const ErrorState: React.FC<{ label?: string; onRetry?: () => void }> = ({ label,
       <AlertTriangle size={28} />
     </span>
     <p style={{ fontSize: 'var(--font-size-lg)', fontWeight: 600, color: 'var(--color-text)', marginBottom: 'var(--space-1)' }}>预览加载失败</p>
-    <p style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)', maxWidth: 320, marginBottom: 'var(--space-5)' }}>{label ?? '我正在换个方式修复，你的内容没有丢失。'}</p>
+    <p style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)', maxWidth: 320, marginBottom: 'var(--space-5)' }}>{label ?? '暂时无法显示预览。可以重新加载，或在对话中反馈这个问题。'}</p>
     {onRetry && (
       <button onClick={onRetry} style={{
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 'var(--space-1)',
@@ -571,7 +571,7 @@ const ErrorState: React.FC<{ label?: string; onRetry?: () => void }> = ({ label,
         boxShadow: '0 4px 12px -2px rgba(124,58,237,0.4)',
         cursor: 'pointer', transition: 'all var(--transition-fast)',
       }}>
-        重新连接沙箱
+        重新加载预览
       </button>
     )}
   </div>

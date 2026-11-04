@@ -278,7 +278,7 @@ export async function runUxConfirmGate(pending: PendingUxConfirm, feedback?: str
   if (sketchUrl) {
     publish(makeUxEvent(eventInput, 'ux_sketch_ready', { preview_url: sketchUrl, ...(reviewUrl ? { review_url: reviewUrl } : {}), round }))
     publish(makeUxEvent(eventInput, 'message_delta', {
-      text: `第 ${round} 版界面草图已可预览。请核对布局与外观；草图不代表功能已完成，确认后开始制作。`,
+      text: `第 ${round} 版界面草图已可预览。看看布局和外观是否合适。确认后，我会按这个方向制作功能。`,
     }))
   }
 

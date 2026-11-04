@@ -43,7 +43,7 @@ export function buildProcessGroupSummary(items: ProcessItem[]): string {
   for (const item of items) {
     if (item.kind === 'tool' || item.kind === 'delegation') steps += 1
   }
-  return `已完成 ${steps} 步`
+  return `执行记录 · ${steps} 项`
 }
 
 export interface ProcessBlockGroupProps {

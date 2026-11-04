@@ -99,7 +99,7 @@ export const DeliveryPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
     setConfirmRestore(false); void refresh()
     if (result.ok && result.data.started) {
       setNeedsRestart(false)
-      setLaunchState(result.data.detail ?? '程序已启动，请检查是否正常打开。')
+      setLaunchState(result.data.detail ?? '程序已启动。')
     } else {
       setNeedsRestart(result.ok && result.data.needs_restart === true)
       setRestartPrevious(previous)
@@ -240,7 +240,7 @@ export const DeliveryPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
         {project?.mode==='longterm'&&project.workflow_version==='software-v1'&&projectId&&<LongtermProjectPanel key={projectId} projectId={projectId} state={data?.longterm} error={data?.longterm_error} archived={project.status==='archived'||project.status==='abandoned'} refresh={()=>void refresh()} />}
         <SoftwareSuggestions key={projectId} value={data?.improvement_suggestions} refresh={()=>void refresh()} />
         {data?.trial?.state !== 'running' && <ProgramScreenshot />}
-        {!loading && !liveUrl && !project?.longterm_summary && data?.trial?.state !== 'running' && (data || embedded) && <div className="theatre-delivery-hero"><span className="theatre-idea-emblem"><LayoutTemplate size={25} /></span><h3>{project?.current_stage === 'completed' ? '这是你的软件了。' : project?.desktop_blocked ? '制作暂时停止。' : desktopPhase ? '当前处于程序制作阶段。' : '这里，会是你的软件。'}</h3><p>{project?.current_stage === 'completed' ? '启动后在独立窗口使用，随时可以继续改进。' : desktopPhase ? '制作和检查进展可在上方状态与工作记录中查看。' : '先说你想解决什么，我们一起把它做出来。'}</p></div>}
+        {!loading && !liveUrl && !project?.longterm_summary && data?.trial?.state !== 'running' && (data || embedded) && <div className="theatre-delivery-hero"><span className="theatre-idea-emblem"><LayoutTemplate size={25} /></span><h3>{project?.current_stage === 'completed' ? '这是你的软件了。' : project?.desktop_blocked ? '制作暂时停止。' : desktopPhase ? '程序制作与检查' : '这里，会是你的软件。'}</h3><p>{project?.current_stage === 'completed' ? '启动后在独立窗口使用，随时可以继续改进。' : desktopPhase ? '可以查看制作进展，也可以在对话中补充想法。' : '先说你想解决什么，我们一起把它做出来。'}</p></div>}
         {/* 点选纠错（批11 MVP-E，2026-10-08）：入口/会话视图内嵌交付面板；completed 项目
             可用（主进程校验，旧骨架产物返回 unsupported 如实置灰提示） */}
         {(project?.current_stage === 'completed'||data?.trial?.release_id) && (

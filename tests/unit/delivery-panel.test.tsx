@@ -114,7 +114,7 @@ describe('DeliveryPanel', () => {
     const button = screen.getByTestId('delivery-launch-button') as HTMLButtonElement
     expect(button.disabled).toBe(false)
     fireEvent.click(button)
-    await waitFor(() => expect(screen.getByTestId('delivery-launch-state').textContent).toContain('程序已启动，请检查是否正常打开。'))
+    await waitFor(() => expect(screen.getByTestId('delivery-launch-state').textContent).toContain('程序已启动。'))
   })
 
   it('缺 LAUNCH.json → 按钮禁用 + 缺口提示如实', async () => {
