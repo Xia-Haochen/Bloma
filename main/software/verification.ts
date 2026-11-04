@@ -1,3 +1,5 @@
+import { verifyComponentUsage } from './component-usage'
+import { verifyRequiredDesignAssets } from './design-asset-delivery'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join } from 'node:path'
@@ -119,6 +121,8 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
     writeTextFileAtomic(file, JSON.stringify({ version: 1, state: 'running', key: version.key, at: Date.now() } satisfies Receipt))
     if(ownedCandidate){if(ownedCandidate.projectId!==projectId)throw Error('SOFTWARE_VERIFY_CANDIDATE_OWNER_MISMATCH');await verifyReleaseSource(ownedCandidate,signal)}
     const candidate = result.candidate = ownedCandidate??await prepareSoftwareRelease(projectId, findProject(projectId).root_path, signal)
+    verifyComponentUsage(candidate.root, prdScopeFingerprint(readPrdBackplane(projectId)), readPrdBackplane(projectId).requirements.map(f => f.id))
+    verifyRequiredDesignAssets(candidate.root, readPrdBackplane(projectId).lean_brief?.design_assets)
     const security = result.security = runSecurityScan({ project_id: projectId, root_path: candidate.root, profile: 'local-software' })
     writeTextFileAtomic(join(candidate.root, '00_VERIFY/security-scan.json'), JSON.stringify(security))
     if (!security.passed) { result.status = 'failed'; result.summary = security.issues.filter(issue => ['high', 'critical'].includes(issue.severity)).map(issue => `${issue.file}:${issue.line} ${issue.user_visible_summary}`).join('\n'); return result }

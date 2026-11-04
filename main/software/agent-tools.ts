@@ -1,3 +1,5 @@
+import { buildComponentUsageTool } from './component-usage'
+import { buildDesignAssetTool } from './design-asset-delivery'
 import { verifyProjectStage } from './project-stages'
 import { activeSoftwareCommands, stopSoftwareSession } from './process-manager'
 import { closeDebugSessions } from './debug-sessions'
@@ -27,7 +29,7 @@ export function buildSoftwareAgentTools(projectId: string, role: DelegationRunRo
   const files = buildAgentTools({ projectId, role: readonly ? 'research' : 'implement', realFullstackVariant: true, software: true,
     assertFileWrite: policy.assertFileWrite }).filter(tool => FILE_TOOLS.has(tool.name))
   const tools = [...files, buildProductionContextTool(projectId), buildSoftwareImageTool(projectId), buildRepositoryContextTool(projectId),...buildCapabilityTools(projectId,policy,role==='parent')]
-  if (role === 'parent') tools.push(...buildSoftwareExecutionTools(projectId, policy.assertCommand, previewChanged), environmentTool(projectId), prepareEnvironmentTool(projectId, policy), buildSoftwareInspectTool(projectId, policy, previewChanged), buildSoftwareVerifyTool(projectId, policy, previewChanged), buildImprovementSuggestionTool(projectId,suggestionsChanged,policy.assertCommand))
+  if (role === 'parent') tools.push(buildComponentUsageTool(projectId, policy), buildDesignAssetTool(projectId, policy),...buildSoftwareExecutionTools(projectId, policy.assertCommand, previewChanged), environmentTool(projectId), prepareEnvironmentTool(projectId, policy), buildSoftwareInspectTool(projectId, policy, previewChanged), buildSoftwareVerifyTool(projectId, policy, previewChanged), buildImprovementSuggestionTool(projectId,suggestionsChanged,policy.assertCommand))
   let longterm=false
   try{longterm=isLongtermSoftware(projectId)}catch{/* isolated schema clients may build tools before storing a project */}
   if(role==='parent'&&longterm)tools.push({name:'record_longterm_decision',description:'保存当前长期里程碑的重要接口/数据格式/资源/迁移决定和理由。替代旧决定时传supersedes及project-state的decision_revision作为expected_revision；feature_ids引用确认需求。读取project-state可分页查有效决定和历史。不改范围、不验证、不暂停；不要保存密钥或把待办当成本轮授权。',

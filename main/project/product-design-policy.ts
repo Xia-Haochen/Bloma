@@ -9,6 +9,7 @@ export function productDesignPolicy(brief: PrdBackplane) {
     mode: theme ? 'platform_default' : 'legacy_preserve',
     theme: theme ? snapshotProductTheme(theme) : undefined,
     assets: brief.lean_brief.design_assets,
+    asset_preparation: '必须使用的素材先prepare_design_assets复制进产品，再按返回路径与MIME接入。素材必须包含于候选和交付；复制成功不能证明实际呈现。',
     priority: ['explicit_user_style_and_assets', 'confirmed_project_design', 'project_default_theme'],
     user_constraints: brief.constraints ?? [],
     guidance: theme
