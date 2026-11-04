@@ -9,7 +9,17 @@ import { bindScreenshotEvidence } from './browser-evidence.mjs';
 await test('Bloma native application suite', async () => {
     const { browser, page, context } = await connectApp();
     const evidenceDir = bindScreenshotEvidence(page, context);
-    const counts = { interactions: 0, assertions: 0, cases: [] }, cache = new WeakMap(), current = new AsyncLocalStorage();
+    const counts = { interactions: 0, assertions: 0, cases: [] }, cache = new WeakMap(), originals = new WeakMap(), current = new AsyncLocalStorage();
+    // Playwright compares Locator/Frame identities (e.g. filter({has})). Keep
+    // observation wrappers transparent when values re-enter the native API.
+    const unwrap = value => {
+        if (!value || typeof value !== 'object') return value;
+        if (originals.has(value)) return originals.get(value);
+        if (Array.isArray(value)) return value.map(unwrap);
+        if (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
+            return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, unwrap(child)]));
+        return value;
+    };
     const observed = key => { counts[key]++; const active = current.getStore(); if (active)
         active[key]++; };
     const actions = new Set(['fill', 'click', 'dblclick', 'selectOption', 'check', 'uncheck', 'press', 'setInputFiles', 'dragTo', 'type', 'tap', 'hover', 'down', 'up', 'move', 'wheel']);
@@ -24,13 +34,14 @@ await test('Bloma native application suite', async () => {
                 if (typeof member !== 'function')
                     return object(member);
                 return (...args) => {
-                    const result = member.apply(target, args);
+                    const result = member.apply(target, args.map(unwrap));
                     if (actions.has(String(key)))
                         return Promise.resolve(result).then(actual => { observed('interactions'); return actual; });
                     return result?.then ? result.then(object) : object(result);
                 };
             } });
         cache.set(value, proxy);
+        originals.set(proxy, value);
         return proxy;
     };
     const matcher = value => new Proxy(value, { get(target, key) {
@@ -61,7 +72,7 @@ await test('Bloma native application suite', async () => {
         const script = await import(pathToFileURL(process.env.BLOMA_NATIVE_TEST_FILE).href);
         if (typeof script.default !== 'function')
             throw Error('GUI_NATIVE_DEFAULT_FUNCTION_REQUIRED');
-        const checkedExpect = new Proxy(expect, { apply(target, self, args) { return matcher(Reflect.apply(target, self, args)); }, get(target, key) { const member = Reflect.get(target, key); return key === 'poll' ? (...args) => matcher(member(...args)) : member; } });
+        const checkedExpect = new Proxy(expect, { apply(target, self, args) { return matcher(Reflect.apply(target, self, args.map(unwrap))); }, get(target, key) { const member = Reflect.get(target, key); return key === 'poll' ? (...args) => matcher(member(...args.map(unwrap))) : member; } });
         await script.default({ test: checkedTest, page: object(page), context: object(context), expect: checkedExpect, assert: checkedAssert,
             dataDir: process.env.APP_DATA_DIR, evidenceDir, phase: process.env.BLOMA_NATIVE_TEST_PHASE });
     }

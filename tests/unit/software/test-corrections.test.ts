@@ -76,6 +76,17 @@ it('rejects case removal and undeclared features without altering the original t
   expect(readFileSync(join(p.root_path,'acceptance.mjs'),'utf8')).toBe(original)
   expect(pendingTestCorrection(p.project_id)).toBe(false)
 })
+it('composes sequential exact approvals while still checking every original retained contract',()=>{
+  const first=proposal();decideTestCorrection(p.project_id,first.id,decision(first.id));applyTestCorrection(p.project_id,first.id)
+  const intermediate=freezeNativeGuiTests(p.project_id,p.root_path,'acceptance.mjs',['F-001'])
+  const state=readProjectStages(p.project_id);state.revision++;state.attempts.push({...state.attempts[0],id:'intermediate',native:intermediate})
+  writeFileSync(join(home,'software-stage-checks',p.project_id,'state.json'),JSON.stringify({...state,checksum:sha(JSON.stringify(state))}))
+  const second=proposeTestCorrection(p.project_id,{contract_digest:intermediate.digest,file:'acceptance.mjs',old_text:"page.locator('#version')",new_text:"page.locator('#record-version')",feature_ids:['F-001'],reason:'独立核对后的精确定位修订，原创建值断言保持'})
+  decideTestCorrection(p.project_id,second.id,decision(second.id));applyTestCorrection(p.project_id,second.id)
+  const after=freezeNativeGuiTests(p.project_id,p.root_path,'acceptance.mjs',['F-001'])
+  expect(filterApprovedTestChanges(p.project_id,before,after,nativeTestContractChanges(before,after))).toEqual([])
+  expect(readTestContractFile(p.project_id,before.digest,'acceptance.mjs').text).toBe(original)
+})
 it('pending disputes stop another parent model call, and a rejected decision permits diagnosis without authorizing an edit',async()=>{
   const a=proposal(),quality=createQualityReview(p.project_id,'s',createSoftwareCollaborationPolicy(p.project_id,p.root_path,'s'));let calls=0
   const query=quality.wrapQuery(async function*(){calls++;yield{type:'result' as const,subtype:'success' as const}})

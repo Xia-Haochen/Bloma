@@ -3,6 +3,8 @@ import {createTrialRequestRecorder} from './trial-request-recorder'
 import {softwareVerificationFingerprint} from '../main/desktop/verification-fingerprint'
 import {readQualityLedger} from '../main/software/quality-ledger'
 import {ModelRequestRefusal} from '../main/platform/llm/model-request-refusal'
+import {verifyProjectStage} from '../main/software/project-stages'
+import {inspectRetestDoodle} from './personal-doodle-retest-acceptance'
 import { leanBudget } from '../main/desktop/lean-budget'
 import { inspectDoodleFaults } from './personal-doodle-fault-acceptance'
 import { configureSoftwareExecutionLimits } from '../main/software/execution-limits'
@@ -68,7 +70,7 @@ export async function main() {
   const root = resolve(process.env.BLOMA_COMPLEX_TRIAL_ROOT), phase = process.env.BLOMA_COMPLEX_TRIAL_PHASE ?? 'preflight'
   const tasks = trialTasks(), customCases = Boolean(process.env.BLOMA_COMPLEX_TRIAL_CASES)
   const which = process.env.BLOMA_COMPLEX_TRIAL_TASK ?? Object.keys(tasks)[0]
-  if (!['preflight', 'run', 'resume', 'change', 'confirm', 'inspect', 'replan', 'approve-ux', 'retry-ux', 'extend-execution', 'inspect-faults'].includes(phase) || !Object.hasOwn(tasks, which)) throw Error('TRIAL_PHASE_INVALID')
+  if (!['preflight', 'status', 'verify-stage', 'run', 'resume', 'change', 'confirm', 'inspect', 'replan', 'approve-ux', 'retry-ux', 'extend-execution', 'inspect-faults'].includes(phase) || !Object.hasOwn(tasks, which)) throw Error('TRIAL_PHASE_INVALID')
   const task = tasks[which as keyof typeof tasks], home = join(root, 'home'), profile = join(root, 'electron-profile')
   mkdirSync(home, { recursive: true }); mkdirSync(profile, { recursive: true })
   process.env.PROMA_HOME = home; process.env.BLOMA_DISPATCH_EXPERIMENT = '0'; delete process.env.BLOMA_EXPERIMENT_UNLIMITED_MONETARY
@@ -195,9 +197,17 @@ export async function main() {
     persistAssistant: (text: string) => appendSessionMessage(sid, { role: 'assistant', origin: 'agent', content: [{ type: 'text', text }], timestamp: Date.now() }) }
   try {
     save(true)
-    if (phase === 'inspect-faults') {
+    if(phase==='status'){
+      report.execution_budget=leanBudget(project.project_id,'desktop-implement').snapshot()
+    }else if(phase==='verify-stage'){
+      if(!process.env.BLOMA_TRIAL_STAGE||!process.env.BLOMA_TRIAL_STAGE_SCRIPT)throw Error('TRIAL_STAGE_INPUT_REQUIRED')
+      report.stage_verification=await verifyProjectStage(project.project_id,process.env.BLOMA_TRIAL_STAGE,process.env.BLOMA_TRIAL_STAGE_SCRIPT,signal)
+      trace.event('observer_stage_verification',{stage:process.env.BLOMA_TRIAL_STAGE,result:report.stage_verification,source:'independent_host_run_no_model'})
+    } else if (phase === 'inspect-faults') {
       if (which !== 'interaction-doodle') throw Error('FAULT_ADAPTER_NOT_AVAILABLE')
       report.independent = await inspectDoodleFaults(project.project_id, join(taskDir, 'independent'))
+    } else if(phase==='inspect'&&process.env.BLOMA_TRIAL_UI_ADAPTER==='retest-doodle'){
+      report.independent=await inspectRetestDoodle(project.project_id,join(taskDir,'independent'),process.env.BLOMA_TRIAL_MUTE_SELECTOR,process.env.BLOMA_TRIAL_BASELINE_DATA)
     } else if (phase === 'inspect') {
       report.independent=customCases?which==='interaction-doodle'?await inspectDoodle(project.project_id,join(taskDir,'independent')):{status:'unverified',reason:'需按当前样本独立oracle执行实际交互；不使用旧任务的专用验收器冒充通过。'}:which==='primary'?await inspectPrimary(project.project_id,join(taskDir,'independent'),process.env.BLOMA_COMPLEX_REGRESSION==='1'):await inspectDocuments(project.project_id,join(taskDir,'independent'))
     } else if (phase === 'extend-execution') {

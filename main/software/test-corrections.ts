@@ -110,13 +110,23 @@ export function applyTestCorrection(id:string,proposalId:string){
 /** Exact independently approved revisions only. Other assertions, dependencies,
  * case names, entry composition and restart requirements remain protected. */
 export function filterApprovedTestChanges(id:string,before:NativeGuiTests,after:NativeGuiTests,changes:string[]){
-  const decisions=approved(id).filter(p=>{
-    const old=before.files.find(f=>pathOf(before,f.path)===p.file),next=after.files.find(f=>pathOf(after,f.path)===p.file)
-    return old?.sha256===p.old_hash&&next?.sha256===p.new_hash
-  })
-  return changes.filter(change=>!decisions.some(p=>{
-    if(change===p.file)return true
-    const old=p.before.cases.find(c=>change===`case:${c.feature}:${c.name}`),next=old&&p.after.cases.find(c=>c.name===old.name)
-    return old&&next&&before.cases.some(c=>c.name===old.name&&c.signature===old.signature)&&after.cases.some(c=>c.name===next.name&&c.signature===next.signature)
+  const decisions=approved(id),chains:Array<{file:string;revisions:Proposal[]}>=[]
+  for(const old of before.files){
+    const file=pathOf(before,old.path),next=after.files.find(f=>pathOf(after,f.path)===file);if(!next||next.sha256===old.sha256)continue
+    let current=old.sha256;const revisions:Proposal[]=[],seen=new Set<string>()
+    while(current!==next.sha256&&revisions.length<32&&!seen.has(current)){
+      seen.add(current);const matches=decisions.filter(p=>p.file===file&&p.old_hash===current)
+      if(matches.length>1)throw Error('TEST_CORRECTION_CONFLICT')
+      if(!matches.length)break
+      revisions.push(matches[0]);current=matches[0].new_hash
+    }
+    if(current===next.sha256)chains.push({file,revisions})
+  }
+  return changes.filter(change=>!chains.some(chain=>{
+    if(change===chain.file)return true
+    const old=before.cases.find(c=>change===`case:${c.feature}:${c.name}`);if(!old)return false
+    let signature=old.signature
+    for(const p of chain.revisions){const a=p.before.cases.find(c=>c.name===old.name),b=p.after.cases.find(c=>c.name===old.name);if(!a||!b||a.signature!==signature)return false;signature=b.signature}
+    return after.cases.some(c=>c.name===old.name&&c.feature===old.feature&&c.signature===signature)
   }))
 }

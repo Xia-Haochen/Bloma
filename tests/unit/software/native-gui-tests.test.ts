@@ -67,6 +67,26 @@ it('returns partial feature evidence from a real browser without passing a faile
     expect(result.core?.host_gui?.case_results?.map(row=>row.status)).toEqual(['passed','failed','not_run'])
     expect(await recentSoftwareVerification(project.project_id,'partial')).toBeUndefined()
 },90000)
+it('keeps nested locator options and boolean locator composition transparent, while retaining native cross-frame rejection',async()=>{
+    const file=join(project.root_path,'index.html');writeFileSync(file,readFileSync(file,'utf8')+'<div class="row"><span class="child">A</span></div><div class="row"><b>B</b></div><iframe name="embedded" srcdoc="<span>child</span>"></iframe>')
+    writeFileSync(join(project.root_path,'tests/acceptance.mjs'),`export default async({test,page,expect,assert})=>{
+      await test('F-001 save and nested locators',async()=>{
+        await page.locator('#name').fill('Alice');await page.locator('#save').click();await expect(page.locator('#list')).toHaveText('Alice');
+        await expect(page.locator('.row').filter({has:page.locator('.child')})).toHaveCount(1);
+        await expect(page.locator('.row').filter({hasNot:page.locator('.child')})).toHaveCount(1);
+        await expect(page.locator('.row').locator(page.locator('.child'))).toHaveText('A');
+        await expect(page.locator('.row').first().or(page.locator('.row').last())).toHaveCount(2);
+        await expect(page.locator('.row').and(page.locator('div'))).toHaveCount(2);
+        await page.waitForFunction(()=>document.querySelector('iframe').contentDocument.body.textContent.includes('child'));
+        const child=page.frames().find(f=>f.name()==='embedded');assert.ok(child);
+        assert.throws(()=>page.locator('.row').filter({has:child.locator('span')}),/same frame/);
+      });
+      await test('F-002 blank',async()=>{await page.locator('#name').fill('');await page.locator('#save').click();await expect(page.locator('#status')).toHaveText('required')});
+    }`)
+    registerNativeGuiTests(project.project_id,'tests/acceptance.mjs')
+    const result=await verifySoftwareCandidate(project.project_id,'nested-locators',AbortSignal.timeout(60000))
+    expect(result.status,JSON.stringify(result.core?.host_gui?.case_results)??result.summary).toBe('passed')
+},90000)
 it('does not freeze a native draft before its application launch declaration is valid', async () => {
     const launchFile=join(project.root_path,'LAUNCH.json'),original=readFileSync(launchFile,'utf8')
     writeFileSync(launchFile,JSON.stringify({schema_version:2,command:'npm start',ui:true}))
