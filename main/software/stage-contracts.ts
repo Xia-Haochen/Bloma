@@ -40,8 +40,8 @@ export function composesPriorEntry(source: string, entry: string, priorEntry: st
   return previous
 }
 
-export function stageContractChanges(projectId: string, root: string, before: NativeGuiTests, after: NativeGuiTests): string[] {
-  const changes = filterApprovedTestChanges(projectId,before,after,nativeTestContractChanges(before, after))
+export function stageContractChanges(projectId: string, root: string, before: NativeGuiTests, after: NativeGuiTests,retained?:Set<string>): string[] {
+  const changes = filterApprovedTestChanges(projectId,before,after,nativeTestContractChanges(before, after,retained))
   if (!changes.includes('entry')) return changes
   // All old files, test bodies, inputs and restart requirements remain checked by
   // the original comparator. Only this narrowly verified entry indirection differs.

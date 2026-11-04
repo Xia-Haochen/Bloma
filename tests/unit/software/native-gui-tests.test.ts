@@ -235,7 +235,7 @@ it('rejects missing coverage before registration and rejects changed frozen test
     expect(changed.status).not.toBe('passed');
     expect(changed.summary).toContain('FROZEN_INPUT_CHANGED');
 }, 120000);
-it('a confirmed additional feature can append a case while retained cases and shared helpers stay fixed', () => {
+it.each([false,true])('a confirmed additional feature can append a case while retained cases and shared helpers stay fixed (composed=%s)', composed => {
     registerNativeGuiTests(project.project_id, 'tests/acceptance.mjs');
     saveSoftwareRegressionBaseline(project.project_id, 'fixture-baseline');
     const old = readPrdBackplane(project.project_id);
@@ -248,9 +248,11 @@ it('a confirmed additional feature can append a case while retained cases and sh
     syncDocuments({ request_id: 'new-scope', project_id: project.project_id, session_id: 's', checkpoint: 'requirement_confirmed' }, parsed.brief);
     const next = markPrdUserConfirmed(project.project_id)!, scope = prdScopeFingerprint(next);
     updateProject(project.project_id, { ux_confirmation: { prd_fingerprint: scope, design_hash: scope, html_hash: null } });
-    const added = script.replace(/\n}$/, `\n await test('F-003 delete',async()=>{await page.locator('#delete').click();await expect(page.locator('#list')).toHaveText('')});\n}`);
-    writeFileSync(join(project.root_path, 'tests/acceptance.mjs'), added);
-    expect(registerNativeGuiTests(project.project_id, 'tests/acceptance.mjs').covers).toContain('F-003');
+    const addition=`await test('F-003 delete',async()=>{await page.locator('#delete').click();await expect(page.locator('#list')).toHaveText('')});`
+    let entry='tests/acceptance.mjs'
+    if(composed){writeFileSync(join(project.root_path,'tests/extra.mjs'),`export default async({test,page,expect})=>{${addition}}`);writeFileSync(join(project.root_path,'tests/new-entry.mjs'),`import old from './acceptance.mjs';import added from './extra.mjs';export default async(ctx)=>{await old(ctx);await added(ctx)}`);entry='tests/new-entry.mjs'}
+    else writeFileSync(join(project.root_path,entry),script.replace(/\n}$/,`\n${addition}\n}`))
+    expect(registerNativeGuiTests(project.project_id, entry).covers).toContain('F-003');
 });
 it('a real bad result fails the host checks rather than becoming a verifier success', async () => {
     registerNativeGuiTests(project.project_id, 'tests/acceptance.mjs');

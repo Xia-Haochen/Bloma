@@ -45,6 +45,11 @@ it('keeps medium visual defects blocking until a passing check matches current s
   expect(findingNeedsClosure(f, { ...identity, source: 'changed' }, 'rules')).toBe(true)
   expect(findingNeedsClosure(f, identity, 'changed-rules')).toBe(true)
 })
+it('never ignores an actually reproduced agreed-case failure merely because the reviewer rated it low',()=>{
+  const f=finding({severity:'low',review_kind:'code',disposition:'confirmed',checks:[{at:'',identity,case_name:'saved-data',rules:'rules',outcome:'failed',observation:'actual mismatch'}]})
+  expect(findingNeedsClosure(f,identity,'rules')).toBe(true)
+  expect(qualityCloseout(ledger([f]),identity,undefined,'rules').must_fix).toEqual(['f'])
+})
 it('does not promote a single screenshot observation or repeated category into complete visual coverage', () => {
   expect(visualCoverageComplete([{ area: 'content' }])).toBe(false)
   expect(visualCoverageComplete(Array(4).fill({ area: 'layout' }))).toBe(false)
@@ -57,4 +62,9 @@ it('does not confirm a finding from a timeout after earlier successful assertion
   } } }) as never
   expect(observedQualityFinding(result(), finding(), 'save')).toBe('unverified')
   expect(observedQualityFinding(result({ expected: 1, actual: 0 }), finding(), 'save')).toBe('failed')
+})
+it('recognizes an explicit first failed assertion without requiring a previously successful assertion',()=>{
+  const result=(assertion?:object)=>({status:'failed',summary:'failed',core:{host_gui:{method:'node:test',case_results:[{name:'first',feature:'F-001',assertions:0,status:'failed'}],steps:[{passed:false,actual:{test:'first',assertion}}]}}}) as never
+  expect(observedQualityFinding(result({expected:true,actual:false}),finding(),'first')).toBe('failed')
+  expect(observedQualityFinding(result(),finding(),'first')).toBe('unverified')
 })

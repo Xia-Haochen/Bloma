@@ -14,7 +14,6 @@ export function findingNeedsInvestigation(f: QualityFinding, current: Identity, 
 
 export function findingNeedsClosure(f: QualityFinding, current: Identity, rules: string, independentRules?: string) {
   return f.disposition !== 'superseded'
-    && importantFinding(f)
     && f.checks.some(c => c.outcome === 'failed')
     && !(f.disposition === 'closed' && f.checks.at(-1)?.outcome === 'passed'
       && sameIdentity(f.checks.at(-1)!.identity, current)
@@ -52,7 +51,7 @@ export function qualityWorkQueue(ledger: Ledger, current: Identity, gate: string
 export function observedQualityFinding(result: SoftwareVerification, finding: QualityFinding, caseName: string): 'passed' | 'failed' | 'unverified' {
   const host = result.core?.host_gui
   const gui = host?.case_results?.filter(c => c.name === caseName && c.feature === finding.requirement)
-  if (gui?.length === 1 && gui[0].assertions > 0 && ['passed', 'failed'].includes(gui[0].status)) {
+  if (gui?.length === 1 && (gui[0].assertions > 0 || gui[0].status==='failed') && ['passed', 'failed'].includes(gui[0].status)) {
     if (host?.failure_kind === 'runtime' || host?.source_unchanged === false) return 'unverified'
     if (gui[0].status === 'failed' && host?.method === 'node:test') {
       const step = host.steps.find(step => !step.passed && step.actual && typeof step.actual === 'object'

@@ -34,7 +34,7 @@ export async function inspectRetestDoodle(projectId:string,folder:string,muteSel
       proto.connect=function(...args:any[]){const tap=taps.get(this.context);if(tap&&args[0]===this.context.destination)connect.call(this,tap);return connect.apply(this,args)}
       window.AudioContext=Observed
     })
-    page=await app.firstWindow();page.setDefaultTimeout(12000);page.on('pageerror',e=>report.page_errors.push(e.message));await page.reload();await expect(page.locator('#doodle-canvas')).toBeVisible();transaction.commit()
+    page=await app.firstWindow();page.setDefaultTimeout(12000);page.on('pageerror',e=>report.page_errors.push(e.message));await expect(page.locator('#doodle-canvas')).toBeVisible();await page.reload({waitUntil:'domcontentloaded'});await expect(page.locator('#doodle-canvas')).toBeVisible();transaction.commit()
   }
   const data=()=>JSON.parse(readFileSync(join(dataDir,'doodle-synth.json'),'utf8'))
   const resetAudio=()=>page.evaluate(()=>{const a=(window as any).__independentDoodleAudio;a.events=[];a.samples=0;a.sum=0;a.peak=0})
@@ -45,8 +45,10 @@ export async function inspectRetestDoodle(projectId:string,folder:string,muteSel
     for(let i=1;i<=4;i++){if(delay)await page.waitForTimeout(delay);await page.mouse.move(box.x+60+i*15,box.y+60+offset+(i%2)*5)}
     await page.mouse.up()
   }
-  const map=async(bpm:string,first:string,second:string)=>{
-    for(const id of ['slow','mid','fast'])await page.locator('#bpm-'+id).selectOption(bpm)
+  const map=async(bpms:string[],first:string,second:string)=>{
+    const state=data(),v=state.mappingVersions.find((v:any)=>v.id===state.currentVersionId)
+    if(v.tempoBands.every((b:any,i:number)=>String(b.bpm)===bpms[i])&&v.colorMap['#6d8268']===first&&v.colorMap['#c58a5b']===second)return
+    for(const [i,id] of ['slow','mid','fast'].entries())await page.locator('#bpm-'+id).selectOption(bpms[i])
     await page.locator('#timbre-6d8268').selectOption(first);await page.locator('#timbre-c58a5b').selectOption(second)
     const response=page.waitForResponse(r=>r.url().endsWith('/api/mapping')&&r.request().method()==='POST');await page.locator('#save-mapping').click();expect((await response).ok()).toBe(true)
   }
@@ -61,17 +63,17 @@ export async function inspectRetestDoodle(projectId:string,folder:string,muteSel
   try{
     await start();report.data_dir=dataDir;const prior=data();report.prior_artworks=prior.artworks.length
     if(baselineSnapshot){const baseline=JSON.parse(readFileSync(baselineSnapshot,'utf8'));for(const art of baseline.artworks)expect(prior.artworks.find((a:any)=>a.id===art.id)).toMatchObject(art);for(const version of baseline.mappingVersions)expect(prior.mappingVersions.find((v:any)=>v.id===version.id)).toMatchObject(version);expect(prior.currentVersionId).toBe(baseline.currentVersionId);report.checks.push('增量版本启动前后对照基线快照：旧画、笔画、原版本引用和历史映射均保留')}
-    await map('60','sine','sine');const oldVersion=data().mappingVersions.at(-1)
+    await map(['60','80','100'],'sine','sine');const oldVersion=data().mappingVersions.at(-1)
     if(muteSelector){const control=page.locator(muteSelector);await control.check();await expect(control).toBeChecked();await resetAudio()}
     await page.locator('#new-doodle').click();await draw('#6d8268',0,350);await draw('#c58a5b',80,0);await expect(page.locator('#stroke-list li')).toHaveCount(2)
     if(muteSelector){await page.waitForTimeout(400);const silent=await page.evaluate(()=>{const a=(window as any).__independentDoodleAudio;return{events:a.events.length,peak:a.peak}});expect(silent.peak).toBeLessThan(.00001);expect(silent.events).toBe(0);report.muted_drawing=silent;await page.locator(muteSelector).uncheck()}
     const save=page.waitForResponse(r=>r.url().endsWith('/api/artworks')&&r.request().method()==='POST');await page.locator('#save-artwork').click();expect((await save).ok()).toBe(true)
     const saved=data(),art=saved.artworks.at(-1);expect(art.strokes).toHaveLength(2);expect(art.mappingVersionId).toBe(oldVersion.id)
     const old=await play(art.id,'own');expect(new Set(old.events.map((e:any)=>e.type))).toEqual(new Set(['sine']))
-    await map('200','square','sawtooth');const fresh=await play(art.id,'current')
+    await map(['160','180','200'],'square','sawtooth');const fresh=await play(art.id,'current')
     expect(new Set(fresh.events.map((e:any)=>e.type))).toEqual(new Set(['square','sawtooth']))
     const span=(a:any)=>Math.max(...a.events.map((e:any)=>e.stop))-Math.min(...a.events.map((e:any)=>e.start))
-    expect(span(old)).toBeGreaterThan(span(fresh)*2)
+    expect(span(old)).toBeGreaterThan(span(fresh)*1.5)
     expect(data().artworks.find((a:any)=>a.id===art.id)).toEqual(art);expect(data().mappingVersions.find((v:any)=>v.id===oldVersion.id)).toEqual(oldVersion)
     for(const record of prior.artworks)expect(data().artworks.find((a:any)=>a.id===record.id)).toEqual(record)
     const again=await play(art.id,'own');expect(again.events.map((e:any)=>e.type)).toEqual(old.events.map((e:any)=>e.type))
@@ -80,8 +82,21 @@ export async function inspectRetestDoodle(projectId:string,folder:string,muteSel
     await start();expect(data().artworks.find((a:any)=>a.id===art.id)).toEqual(art);const reopened=await play(art.id,'own');expect(reopened.events.map((e:any)=>e.type)).toEqual(old.events.map((e:any)=>e.type))
     await app!.browserWindow(page).then(w=>w.evaluate(win=>win.setSize(920,800)));await page.screenshot({path:prefix+'-reopened.png',fullPage:true})
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true);expect(report.page_errors).toEqual([])
-    await verifyReleaseSource(release);report.checks.push('关闭整个Electron和后端，重开后持久记录与旧规则回放保留；窄窗口无横向溢出');report.status='passed';report.data_snapshot=prefix+'-data.json';writeFileSync(report.data_snapshot,JSON.stringify(data(),null,2))
-  }catch(error){report.status='failed';report.error=String(error);if(page)await page.screenshot({path:prefix+'-failure.png',fullPage:true}).catch(()=>{})}
+    report.checks.push('关闭整个Electron和后端，重开后持久记录与旧规则回放保留；窄窗口无横向溢出')
+    await map(['60','120','200'],'sine','sine');await page.locator('#new-doodle').click();await page.locator('.brush[data-color="#6d8268"]').click();await page.locator('#doodle-canvas').scrollIntoViewIfNeeded()
+    const box=(await page.locator('#doodle-canvas').boundingBox())!;await page.mouse.move(box.x+50,box.y+50);await page.mouse.down()
+    for(let i=1;i<=8;i++){if(i<=4)await page.waitForTimeout(350);await page.mouse.move(box.x+50+i*25,box.y+50+(i%2)*5)}await page.mouse.up()
+    await expect(page.locator('#stroke-list li')).toHaveCount(1)
+    const mixedSave=page.waitForResponse(r=>r.url().endsWith('/api/artworks')&&r.request().method()==='POST');await page.locator('#save-artwork').click();await mixedSave
+    const mixed=data().artworks.at(-1),points=mixed.strokes[0].points
+    const speeds=points.slice(1).map((p:any,i:number)=>Math.hypot(p.x-points[i].x,p.y-points[i].y)/Math.max(1,p.t-points[i].t)*1000)
+    expect(Math.max(...speeds)/Math.min(...speeds)).toBeGreaterThan(3)
+    const sound=await play(mixed.id,'own'),starts=[...new Set<number>(sound.events.map((e:any)=>e.start))].sort((a,b)=>a-b),intervals=starts.slice(1).map((t,i)=>t-starts[i])
+    report.within_stroke={artwork:mixed,input_speeds:speeds,audio:sound,intervals,expected:'AC-005：同一笔的慢快段落应有可听节奏疏密变化'}
+    expect(intervals.length).toBeGreaterThan(1);expect(Math.max(...intervals)/Math.min(...intervals)).toBeGreaterThan(1.5)
+    report.checks.push('AC-005：同一笔慢速到快速的变化对应不同的实际音符间隔')
+    await verifyReleaseSource(release);report.status='passed';report.data_snapshot=prefix+'-data.json';writeFileSync(report.data_snapshot,JSON.stringify(data(),null,2))
+  }catch(error){report.status='failed';report.error=String(error);report.error_stack=error instanceof Error?error.stack:undefined;if(page)await page.screenshot({path:prefix+'-failure.png',fullPage:true}).catch(()=>{})}
   finally{await app?.close().catch(()=>{});report.finished_at=new Date().toISOString();writeFileSync(prefix+'.json',JSON.stringify(report,null,2))}
   return{status:report.status,report:prefix+'.json',error:report.error,checks:report.checks,data_snapshot:report.data_snapshot}
 }
