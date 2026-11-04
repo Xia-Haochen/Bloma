@@ -27,9 +27,9 @@ export function createRequestBudget(env: Record<string, string>, limits: Limits)
         rate.cache_rmb_per_million > rate.input_rmb_per_million) throw new Error('invalid rate')
     }
   } catch { setupError = 'MONETARY_POLICY_UNAVAILABLE' }
-  const reservations: Array<{ upper: number; rate?: Rate; reported: boolean }> = []
+  const reservations: Array<{ upperMicro: number; rate?: Rate; reported: boolean }> = []
   let queries = 0, physicalStarts = 0
-  const used = () => reservations.reduce((sum, row) => sum + row.upper, 0)
+  const used = () => reservations.reduce((sum, row) => sum + row.upperMicro, 0)
   const wrap = (query: SDKQuery): SDKQuery => async function* (prompt, options) {
     if (setupError) throw new MonetaryBudgetError(setupError)
     if (++queries > limits.requests) throw new MonetaryBudgetError('REQUEST_BUDGET_EXHAUSTED')
@@ -51,9 +51,9 @@ export function createRequestBudget(env: Record<string, string>, limits: Limits)
           const rate = matches?.[0]
           const images = /"type":"(?:image|image_url)"/.test(request.body)
           const inputUpper = rate ? (images ? rate.context_tokens : Math.min(rate.context_tokens, Buffer.byteLength(request.body) + 4096)) : 0
-          const upper = rate ? (Math.ceil(inputUpper * rate.input_rmb_per_million) + Math.ceil(body.max_tokens * rate.output_rmb_per_million)) / 1e6 : 0
-          if (rate && used() + upper > limits.rmb) throw new MonetaryBudgetError('MONETARY_OPERATION_EXHAUSTED')
-          latest = { upper, rate, reported: false }; reservations.push(latest)
+          const upperMicro = rate ? Math.ceil(inputUpper * rate.input_rmb_per_million) + Math.ceil(body.max_tokens * rate.output_rmb_per_million) : 0
+          if (rate && used() + upperMicro > Math.floor(limits.rmb * 1e6)) throw new MonetaryBudgetError('MONETARY_OPERATION_EXHAUSTED')
+          latest = { upperMicro, rate, reported: false }; reservations.push(latest)
         } })) {
         if (message.usage) usage = { ...usage, ...message.usage }
         if (message.type === 'result') completed = message.subtype === 'success'
@@ -65,17 +65,17 @@ export function createRequestBudget(env: Record<string, string>, limits: Limits)
         latest.reported = true
         if (latest.rate) {
           const r = latest.rate
-          const actual = (Math.ceil((usage.input_tokens + (usage.cache_creation_input_tokens ?? 0)) * r.input_rmb_per_million) +
-            Math.ceil((usage.cache_read_input_tokens ?? 0) * r.cache_rmb_per_million) + Math.ceil(usage.output_tokens * r.output_rmb_per_million)) / 1e6
+          const actualMicro = (Math.ceil((usage.input_tokens + (usage.cache_creation_input_tokens ?? 0)) * r.input_rmb_per_million) +
+            Math.ceil((usage.cache_read_input_tokens ?? 0) * r.cache_rmb_per_million) + Math.ceil(usage.output_tokens * r.output_rmb_per_million))
           // Unexpected usage never releases a reservation or admits further requests.
-          if (actual > latest.upper) setupError = 'MONETARY_USAGE_EXCEEDS_RESERVATION'
-          latest.upper = actual
+          if (actualMicro > latest.upperMicro) setupError = 'MONETARY_USAGE_EXCEEDS_RESERVATION'
+          latest.upperMicro = actualMicro
         }
       }
     }
   }
   return { wrap, snapshot: () => ({ logical_queries: queries, physical_requests: physicalStarts, admitted_requests: reservations.length,
     monetary_control: uncappedExperiment ? 'uncapped_experiment' : setupError ? 'unavailable' : rates ? 'verified_policy' : 'not_configured',
-    ...(rates ? { upper_rmb: used(), limit_rmb: limits.rmb } : {}), max_requests: limits.requests, max_output_tokens: outputTokens,
+    ...(rates ? { upper_rmb: used() / 1e6, limit_rmb: limits.rmb } : {}), max_requests: limits.requests, max_output_tokens: outputTokens,
     unreported_requests: reservations.filter(row => !row.reported).length }) }
 }

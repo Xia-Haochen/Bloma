@@ -330,7 +330,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
         if (runSignal.aborted || !admissionStopped || !existsSync(registered)) throw detailedError
         if(!continuation&&originalSource===softwareVerificationFingerprint(project.root_path)&&!(await recentSoftwareVerification(input.projectId,input.requestId,runSignal)))throw detailedError
         modelBudgetStop = reason
-        emit('message_delta', { text: `${monetaryStopMessage(detailedError) ?? '模型请求额度已到，当前进度已保留。'}已有验收规则，我会停止模型调用，继续运行宿主检查；只有实际通过才交付。` })
+        emit('message_delta', { text: `${monetaryStopMessage(detailedError) ?? (admissionCode === 'MONETARY_OPERATION_EXHAUSTED' ? '当前操作的费用预留未放行请求，进度已保留。' : admissionCode === 'HARNESS_OUTPUT_BUDGET_EXHAUSTED' ? '当前累计输出额度未放行请求，进度已保留。' : '当前请求次数额度未放行请求，进度已保留。')}已有验收规则，我会停止模型调用，继续运行宿主检查；只有实际通过才交付。` })
       }
       initial = false
       if (scopePending) { checkpoint('waiting_user'); deps.complete(input.sessionId, input.projectId, 'incomplete'); return }

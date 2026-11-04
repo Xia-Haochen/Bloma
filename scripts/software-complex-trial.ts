@@ -116,6 +116,7 @@ export async function main() {
     console.log(safe({ status: 'ready', balance_rmb: cny.total_balance, cap_rmb: capRmb, model: binding.modelName, generation_requests: 0 })); return
   }
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  if (manifest.aggregation_status && manifest.aggregation_status !== 'active') throw Error('TRIAL_MERGE_NOT_ACTIVE')
   if (manifest.authorization?.cap_rmb !== capRmb || JSON.stringify(manifest.tasks)!==JSON.stringify(tasks) || manifest.selector_sha256 !== hash(readFileSync(source)) || manifest.policy_sha256 !== hash(readFileSync(policy))) throw Error('TRIAL_AUTHORIZATION_OR_CONFIGURATION_CHANGED')
   const policyRate = JSON.parse(readFileSync(policy, 'utf8')).models.find((r: any) => r.host === 'api.deepseek.com' && r.model === binding.modelName)
   if (!policyRate || policyRate.cap_rmb !== capRmb) throw Error('TRIAL_POLICY_CAP_MISMATCH')
@@ -123,13 +124,15 @@ export async function main() {
   for (const old of manifest.old_accounting) if (hash(readFileSync(old.path)) !== old.sha256) throw Error('OLD_ACCOUNTING_CHANGED')
   process.env.BLOMA_MONETARY_POLICY = policy; process.env.BLOMA_MONETARY_EPOCH_DIR = windowId ? join(root, 'epochs', windowId) : join(root, 'epochs')
   const existing = existsSync(policy + '.state.json') ? JSON.parse(readFileSync(policy + '.state.json', 'utf8')).entries.length : 0
-  if (existing >= 512) throw Error('TRIAL_REQUEST_LIMIT')
+  const requestLimit = manifest.execution_request_limit ?? 512
+  if (!Number.isSafeInteger(requestLimit) || requestLimit < 1 || requestLimit > 4096) throw Error('TRIAL_REQUEST_LIMIT_INVALID')
+  if (existing >= requestLimit) throw Error('TRIAL_REQUEST_LIMIT')
   const money = () => {
     if (existsSync(policy + '.state.json')) return readMonetaryBudget(policy)
     if (existsSync(startedMarker)) throw Error('TRIAL_ACCOUNTING_MISSING')
     return []
   }
-  const control = createRequestBudget(binding.env, { requests: 512 - existing, outputTokens: requestMaxTokens, rmb: capRmb })
+  const control = createRequestBudget(binding.env, { requests: requestLimit - existing, outputTokens: requestMaxTokens, rmb: capRmb })
   const paid = control.wrap(anthropicMessagesQueryViaProviders), signal = AbortSignal.timeout(45 * 60000)
   const query: SDKQuery = async function* (prompt, options) {
     if(existsSync(join(root,'pause-generation')))throw Error('TRIAL_PAUSED_BETWEEN_REQUESTS')

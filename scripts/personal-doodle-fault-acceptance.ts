@@ -55,16 +55,34 @@ export async function inspectDoodleFaults(projectId:string,folder:string){
     }finally{releaseSecond();await page.unroute('**/api/artworks/*',second)}
     await page.screenshot({path:join(root,'race.png'),fullPage:true});await app.close();app=undefined
     const require=createRequire(import.meta.url),modulePath=join(release.root,'server.js')
-    for(const [name,bytes]of [['invalid-json',Buffer.from('{broken')],['invalid-record',Buffer.from(JSON.stringify({...seed,artworks:[{...seed.artworks[0],strokes:'broken'},...seed.artworks.slice(1)]}))]] as const){
+    const invalidRule = structuredClone(seed); invalidRule.rules[0].noteSpeed.slow = 'unrecognized-note'
+    for(const [name,bytes]of [['invalid-json',Buffer.from('{broken')],['invalid-record',Buffer.from(JSON.stringify({...seed,artworks:[{...seed.artworks[0],strokes:'broken'},...seed.artworks.slice(1)]}))],['invalid-rule-enum',Buffer.from(JSON.stringify(invalidRule))]] as const){
       const dir=join(root,name);mkdirSync(dir);const file=join(dir,'studio-data.json');writeFileSync(file,bytes)
       delete require.cache[require.resolve(modulePath)]
       const {server,port}=await require(modulePath).startServer({port:0,dataDir:dir,quiet:true})
       try{
-        expect((await fetch(`http://127.0.0.1:${port}/api/state`)).status).toBe(503)
+        const response=await fetch(`http://127.0.0.1:${port}/api/state`),body=await response.json()
+        // Partial readable data may open explicitly read-only; HTTP 200 alone is
+        // neither success nor failure. Require the warning and blocked writes.
+        if(response.status===200)expect(body.loadWarning).toMatch(/只读/)
+        else{expect(response.status).toBe(503);expect(body.loadFailed).toBe(true)}
         expect((await fetch(`http://127.0.0.1:${port}/api/rules`,{method:'POST',headers:{'content-type':'application/json'},body:'{}'})).status).toBe(409)
         expect(readFileSync(file).equals(bytes)).toBe(true)
       }finally{server.closeAllConnections();await new Promise<void>(done=>server.close(()=>done()))}
-      report.checks.push(name+': 明确拒绝读取/写入，损坏原始字节保持不变')
+      if(name==='invalid-rule-enum'){
+        app=await _electron.launch({...entry,args:[...entry.args,`--user-data-dir=${join(root,'fault-profile')}`],cwd:release.root,env:softwareEnvironment(projectId,dir,release.root),timeout:30000})
+        const faultPage=await app.firstWindow();faultPage.setDefaultTimeout(10000)
+        await expect(faultPage.getByText('只读保护',{exact:true})).toBeVisible()
+        await expect(faultPage.locator('#save-btn')).toBeDisabled()
+        await faultPage.screenshot({path:join(root,'read-only.png'),fullPage:true})
+        const layout=await faultPage.evaluate(()=>({viewport:innerWidth,width:document.documentElement.scrollWidth,
+          canvas:document.querySelector('#doodle-canvas')?.getBoundingClientRect().toJSON()}))
+        report.read_only_layout=layout
+        expect(layout.width).toBeLessThanOrEqual(layout.viewport+1)
+        expect(layout.canvas?.right).toBeLessThanOrEqual(layout.viewport+1)
+        await app.close();app=undefined;expect(readFileSync(file).equals(bytes)).toBe(true)
+      }
+      report.checks.push(name+': 明确报错或只读提示、拒绝写入，损坏原始字节保持不变')
     }
     expect(readFileSync(join(softwareDataDirectory(projectId),'studio-data.json')).equals(original)).toBe(true)
     await verifyReleaseSource(release);report.status='passed'

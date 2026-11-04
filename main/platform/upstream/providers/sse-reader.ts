@@ -99,7 +99,7 @@ class HTTPError extends Error {
 
 /** Host admission/validation failures must never turn into transport retries. */
 class RequestGuardError extends Error {
-  constructor(error: unknown) { super(error instanceof Error ? error.message : String(error)); this.name = 'RequestGuardError' }
+  constructor(readonly original: unknown) { super(original instanceof Error ? original.message : String(original)); this.name = 'RequestGuardError' }
 }
 
 /** Provider 在 200 流内返回的语义错误，通常不是瞬时网络问题，不应自动重试。 */
@@ -187,7 +187,7 @@ export async function streamSSE(options: StreamSSEOptions): Promise<StreamSSERes
       // 已发出过事件：重试会导致内容重复
       if (hasEmitted) throw error
       // 永久性错误（4xx 等）或已达重试上限：直接抛出
-      if (!isRetriableError(error) || attempt >= MAX_SSE_RETRIES) throw error
+      if (!isRetriableError(error) || attempt >= MAX_SSE_RETRIES) throw error instanceof RequestGuardError ? error.original : error
 
       const delay = getSSERetryDelayMs(attempt, elapsedRetryDelayMs)
       if (delay <= 0) throw error // 等待预算耗尽

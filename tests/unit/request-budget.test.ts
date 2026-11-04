@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { createRequestBudget } from '../../main/platform/llm/request-budget'
 import { streamSSE, setSseRetryWaitBudgetForTests } from '../../main/platform/upstream/providers/sse-reader'
 import { ANTHROPIC_SSE_ADAPTER } from '../../main/platform/upstream/providers/anthropic-sse-adapter'
+import { MonetaryBudgetError } from '../../main/platform/llm/monetary-budget'
 import type { SDKQuery, SDKQueryOptions } from '../../main/orchestration/stages/orchestration-contracts'
 
 describe('operation request budget', () => {
@@ -26,6 +27,19 @@ describe('operation request budget', () => {
   const options = (): SDKQueryOptions => ({ env: {}, sessionId: 'budget', signal: new AbortController().signal, maxTokens: 100 })
   const drain = async (query: SDKQuery) => { for await (const _ of query('test', options())) {} }
   const request = { url: 'https://test.invalid/messages', headers: {}, body: JSON.stringify({ model: 'test', max_tokens: 100, messages: [] }) }
+  it('admits an exact micro-RMB boundary after many receipts and rejects the next micro-RMB',async()=>{
+    writeFileSync(process.env.BLOMA_MONETARY_POLICY!,JSON.stringify({version:1,models:[{host:'test.invalid',model:'test',cap_rmb:5,context_tokens:100,input_rmb_per_million:0,output_rmb_per_million:1,cache_rmb_per_million:0}]}))
+    const budget=createRequestBudget({}, {requests:20,outputTokens:100,rmb:.00001})
+    const one:SDKQuery=async function*(_p,opt){opt.requestGuard!({...request,body:JSON.stringify({model:'test',max_tokens:1,messages:[]})});yield{type:'result',subtype:'success',usage:{input_tokens:0,output_tokens:1}}}
+    for(let n=0;n<10;n++)await drain(budget.wrap(one))
+    expect(budget.snapshot().upper_rmb).toBe(.00001)
+    await expect(drain(budget.wrap(one))).rejects.toThrow('MONETARY_OPERATION_EXHAUSTED')
+  })
+  it('preserves the typed pre-transport refusal through the SSE guard wrapper',async()=>{
+    const fetchFn=vi.fn()
+    await expect(streamSSE({request,adapter:ANTHROPIC_SSE_ADAPTER,onEvent:()=>{},fetchFn,requestGuard:()=>{throw new MonetaryBudgetError('MONETARY_OPERATION_EXHAUSTED')}})).rejects.toBeInstanceOf(MonetaryBudgetError)
+    expect(fetchFn).not.toHaveBeenCalled()
+  })
 
   it('explicitly uncapped experiments skip shared and operation RMB policies but retain request admission', async () => {
     vi.stubEnv('BLOMA_DISPATCH_EXPERIMENT', '1')
