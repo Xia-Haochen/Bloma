@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { runtimeInventory } from '../../../main/software/release-store'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:net'
@@ -26,6 +27,20 @@ const html = `<!doctype html><meta charset="utf-8"><title>Debug fixture</title><
 const client=window.api||{count:()=>fetch('/count').then(r=>r.text()),inc:()=>fetch('/count',{method:'POST'}),version:()=>fetch('/version').then(r=>r.text())};async function refresh(){document.querySelector('#count').textContent=await client.count();document.querySelector('#version').textContent=await client.version()}document.querySelector('#inc').onclick=async()=>{await client.inc();await refresh()};document.querySelector('#crash').onclick=()=>{console.error('Authorization: Bearer PRIVATE_BEARER');console.log('api_key=PRIVATE_KEY token=PRIVATE_TOKEN');fetch('/fail?token=QUERY_SECRET').catch(()=>{});setTimeout(()=>{throw Error('real-renderer-bug')},0)};refresh()</script><input id="file" type="file"><pre id="file-text"></pre><script>document.querySelector('#file').onchange=async e=>document.querySelector('#file-text').textContent=await e.target.files[0].text()</script>`
 const serverSource = (version: string) => `const fs=require('fs'),path=require('path'),file=path.join(process.env.APP_DATA_DIR,'count');require('http').createServer((q,s)=>{if(q.url==='/count'){if(q.method==='POST')fs.writeFileSync(file,String(Number(fs.existsSync(file)?fs.readFileSync(file):0)+1));s.end(fs.existsSync(file)?fs.readFileSync(file):'0')}else if(q.url==='/version')s.end('${version}');else if(q.url.startsWith('/fail')){setTimeout(()=>{s.writeHead(500);s.end('deliberate error')},125)}else if(q.url.startsWith('/slow'))setTimeout(()=>s.end('slow actual response'),1100);else{s.setHeader('Content-Type','text/html');s.end(fs.readFileSync('index.html'))}}).listen(Number(process.argv[2]),'127.0.0.1')`
 const mainSource = (version: string) => `const{app,BrowserWindow,ipcMain}=require('electron'),fs=require('fs'),path=require('path'),file=path.join(process.env.APP_DATA_DIR,'count');ipcMain.handle('count',()=>fs.existsSync(file)?fs.readFileSync(file,'utf8'):'0');ipcMain.handle('inc',()=>fs.writeFileSync(file,String(Number(fs.existsSync(file)?fs.readFileSync(file):0)+1)));ipcMain.handle('version',()=>'${version}');app.whenReady().then(()=>{const window=new BrowserWindow({webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false}});window.webContents.setWindowOpenHandler(()=>({action:'allow',overrideBrowserWindowOptions:{webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false}}}));window.loadFile('index.html')});app.on('window-all-closed',()=>app.quit())`
+it('runs real diagnostic code outside the candidate without changing its identity or issuing acceptance', async()=>{
+  const root=project.root_path,p=await freePort()
+  writeFileSync(join(root,'index.html'),html);writeFileSync(join(root,'server.cjs'),serverSource('v1'))
+  writeFileSync(join(root,'LAUNCH.json'),JSON.stringify({schema_version:2,ui:'browser',command:['node','server.cjs',String(p)],url:`http://127.0.0.1:${p}`}))
+  const before=(await runtimeInventory(root)).digest,tool=buildSoftwareInspectTool(project.project_id,createSoftwareCollaborationPolicy(project.project_id,root,'s'))
+  const result=await tool.execute({script_source:'export default async({page,expect})=>{await page.locator("#inc").click();await expect(page.locator("#count")).toHaveText("1")} '},ctx())
+  expect(result.isError,result.output).not.toBe(true)
+  expect(result.output).toContain('browser-script');expect(result.output).toContain('"passed":true')
+  expect((await runtimeInventory(root)).digest).toBe(before)
+  const workspace=debugWorkspace(project.project_id,'s')
+  expect(readdirSync(workspace).some(n=>n.startsWith('diagnostic-')&&n.endsWith('.mjs'))).toBe(true)
+  const mixed=await tool.execute({script_source:'export default()=>{}',script:'outside.mjs'},ctx())
+  expect(mixed.isError).toBe(true);expect(mixed.output).toContain('BROWSER_SCRIPT_SOURCE_INVALID')
+},45000)
 it.skipIf(process.platform !== 'win32' || !existsSync(electron))('reports the real Electron backend port conflict and owned process exit instead of a generic page timeout', async () => {
   const root = project.root_path, occupied = createServer()
   await new Promise<void>(done => occupied.listen(0, '127.0.0.1', done))

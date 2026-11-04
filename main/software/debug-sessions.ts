@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:net'
@@ -291,7 +291,8 @@ export async function openDebugSession(input: { projectId: string; sessionId: st
     await closeDebugSession(input.projectId, input.sessionId, id); session.snapshot.state = 'failed'; persist(session); throw error
   }
 }
-export async function actDebugSession(input: { projectId: string; sessionId: string; id: string; steps?: GuiAcceptanceSuite['steps']; script?: string; phase?:'initial'|'reopened'; nativeTests?: { file: string; phase: string; report: string; trace: string }; timeoutMs?: number; reload?: boolean; signal: AbortSignal }): Promise<DebugSnapshot> {
+export async function actDebugSession(input: { projectId: string; sessionId: string; id: string; steps?: GuiAcceptanceSuite['steps']; script?: string; scriptSource?: string; phase?:'initial'|'reopened'; nativeTests?: { file: string; phase: string; report: string; trace: string }; timeoutMs?: number; reload?: boolean; signal: AbortSignal }): Promise<DebugSnapshot> {
+  if(input.scriptSource!==undefined&&(typeof input.scriptSource!=='string'||!input.scriptSource.trim()||Buffer.byteLength(input.scriptSource)>65536||input.script||input.nativeTests||input.steps))throw Error('BROWSER_SCRIPT_SOURCE_INVALID')
   const session = owned(input.projectId, input.sessionId, input.id)
   if (session.snapshot.state !== 'ready' || !session.page || session.page.isClosed()) throw Error('DEBUG_SESSION_NOT_READY')
   if (session.busy) throw Error('DEBUG_SESSION_BUSY')
@@ -334,9 +335,18 @@ export async function actDebugSession(input: { projectId: string; sessionId: str
       try { const actual = await observeGuiStep(session.page, step, { data: session.data, fixtures: session.snapshot.fixtures, nativeProcessRoot: session.nativeRoot, signal: input.signal }); session.snapshot.steps.push({ id: step.id, passed: true, actual: bounded(actual) }) }
       catch (error) { session.snapshot.steps.push({ id: step.id, passed: false, actual: bounded((error as { actual?: unknown }).actual ?? String(error)) }); log(session, 'action.failed', String(error)); break }
     }
-    if (input.script) {
-      const script = realpathSync(resolve(session.root, input.script)), rel = relative(realpathSync(session.root), script)
-      if (!rel || rel === '..' || rel.startsWith('..\\') || rel.startsWith('../') || isAbsolute(rel) || !/\.(?:c|m)?js$/i.test(script)) throw Error('BROWSER_SCRIPT_PROJECT_FILE_REQUIRED')
+    if (input.script || input.scriptSource) {
+      let script: string
+      if(input.scriptSource){
+        // Diagnostic artifacts belong to the host, not the release candidate.
+        // Same isolated browser runner and stripped environment as project scripts.
+        script=join(session.workspace,`diagnostic-${randomUUID()}.mjs`)
+        writeFileSync(script,input.scriptSource,{flag:'wx'})
+      }else{
+        script = realpathSync(resolve(session.root, input.script!))
+        const rel = relative(realpathSync(session.root), script)
+        if (!rel || rel === '..' || rel.startsWith('..\\') || rel.startsWith('../') || isAbsolute(rel) || !/\.(?:c|m)?js$/i.test(script)) throw Error('BROWSER_SCRIPT_PROJECT_FILE_REQUIRED')
+      }
       if (!session.cdpEndpoint) throw Error('BROWSER_SCRIPT_CONNECTION_UNAVAILABLE')
       session.activeAction = 'browser-script'
       const native=isNativeGuiTestModule(script), report=join(session.workspace,`development-${Date.now()}.jsonl`),trace=report+'.trace.json'

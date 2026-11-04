@@ -5,7 +5,11 @@ import type { AgentLoopToolCallRecord } from './agent-loop'
 /** Only stable public failure identities are used; no tool output or secrets
  * are retained in progress records. Distinct assertion failures stay distinct. */
 export function toolFailureKey(name: string, output: string): string | undefined {
-  if (!['verify_app', 'inspect_app', 'register_gui_check', 'register_cli_check', 'run_command', 'start_service'].includes(name)) return
+  if(output.startsWith('Validation failed for tool ')){
+    const fields=output.split('Received arguments:')[0].split('\n').filter(line=>/^\s*- /.test(line)).map(line=>line.replace(/\b\d+\b/g,'#').trim()).sort()
+    return 'TOOL_SCHEMA_INVALID:'+createHash('sha256').update(JSON.stringify(fields)).digest('hex').slice(0,16)
+  }
+  if (!['verify_app', 'inspect_app', 'register_gui_check', 'register_cli_check', 'run_command', 'start_service', 'submit_quality_findings','check_quality_finding','start_quality_review','start_visual_review'].includes(name)) return
   let body: { code?: string; summary?: string; input_version?: string; failure?: { code?: string; step?: string; actual?: unknown } } = {}
   try { body = JSON.parse(output.replace(/^<tool-feedback>[\s\S]*?<\/tool-feedback>\s*/, '')) } catch { /* text errors still carry public codes */ }
   const code = body?.failure?.code ?? body?.code ?? output.match(/\b[A-Z][A-Z_]{5,}\b/)?.[0]
@@ -13,6 +17,21 @@ export function toolFailureKey(name: string, output: string): string | undefined
   const identity = typeof body?.input_version === 'string' ? body.input_version
     : body?.failure ? JSON.stringify([body.failure.step, body.failure.actual, code === 'PRODUCT_CHECK_FAILED' ? body.summary : undefined]) : ''
   return `${code}:${createHash('sha256').update(identity).digest('hex').slice(0, 16)}`
+}
+
+/** Read-only reviewers also need a stop condition for an unchanged protocol
+ * error. Successful reads are not correction of a rejected submission. */
+export function createProtocolFailureGuard(){
+  const failures=new Map<string,number>()
+  return(calls:AgentLoopToolCallRecord[])=>{
+    for(const call of calls){
+      if(call.status==='ok')for(const key of failures.keys())if(key.startsWith(call.name+':'))failures.delete(key)
+      if(call.status!=='error'||!call.failureKey||!(call.failureKey.startsWith('TOOL_SCHEMA_INVALID:')||call.name==='submit_quality_findings'))continue
+      const key=call.name+':'+call.failureKey,count=(failures.get(key)??0)+1;failures.set(key,count)
+      if(failures.size>32)failures.delete(failures.keys().next().value!)
+      if(count>=3)return{key,count}
+    }
+  }
 }
 
 export function commandProgressKey(name: string, input: Record<string, unknown>): string | undefined {
@@ -87,6 +106,31 @@ export function pruneDuplicateReads(messages: ConversationTurn[]): number {
       if (!seen.has(key)) { seen.add(key); return block }
       removed += block.content.length
       return { ...block, content: '[相同版本的重复读取已省略；本会话后续同参数调用保留完整结果，原始输出仍在会话记录。]' }
+    })
+  }
+  return removed
+}
+
+/** Host state snapshots supersede earlier snapshots, unlike file reads or user
+ * instructions. Keep all original audit entries and every tool pair; only the
+ * provider projection omits obsolete bodies. Failed reads never replace facts. */
+export function pruneSupersededHostReads(messages: ConversationTurn[]): number {
+  const calls = new Map<string,string>()
+  for(const message of messages)if(Array.isArray(message.content))for(const block of message.content){
+    if(block.type!=='tool_use'||!block.id)continue
+    const args=block.input as Record<string,unknown>|undefined
+    if(block.name==='read_quality_findings'&&!args?.finding_id || block.name==='inspect_collaboration_plan'
+      || block.name==='read_production_context'&&['working-state','project-state'].includes(String(args?.topic)))calls.set(block.id,`${block.name}:${JSON.stringify(args??{})}`)
+  }
+  const seen=new Set<string>();let removed=0
+  for(let i=messages.length-1;i>=0;i--){
+    const message=messages[i];if(!Array.isArray(message.content))continue
+    message.content=message.content.map(block=>{
+      if(block.type!=='tool_result'||!block.tool_use_id||block.is_error||typeof block.content!=='string')return block
+      const key=calls.get(block.tool_use_id);if(!key)return block
+      if(!seen.has(key)){seen.add(key);return block}
+      removed+=block.content.length
+      return{...block,content:'[宿主状态快照已由后续同参数读取更新；旧意见/失败/身份仍完整保留在宿主台账，按finding_id读取。不要依据过期快照重放修复。]'}
     })
   }
   return removed

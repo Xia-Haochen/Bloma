@@ -42,6 +42,43 @@ function tool(name: string, execute: AgentLoopTool['execute']): AgentLoopTool {
 function nativeFile() { return piSessionPath('test-project', 'test-session', 'desktop-implement:', process.cwd()) }
 
 describe('real upstream Pi AgentSession integration', () => {
+  it('stops an unchanged review submission protocol failure in read-only mode before the turn ceiling',async()=>{
+    const q=scripted([[call('submit','submit_quality_findings')]])
+    const result=await runAgentLoop(input(q.query,{maxTurns:48,tools:[tool('submit_quality_findings',async()=>({output:'INTENT_CONCERN_FINDING_REQUIRED',isError:true}))]}))
+    expect(q.received).toHaveLength(3);expect(result.status).toBe('budget_exhausted')
+    expect(result.termination_detail).toMatchObject({reason:'no_progress',observed:3})
+  })
+  it('hands verified tool work to the host without buying a final parent declaration', async () => {
+    const q=scripted([[call('check','verify_app')],[text('this extra model call must not happen')]])
+    const result=await runAgentLoop(input(q.query,{tools:[tool('verify_app',async()=>({output:'host receipt'}))],
+      afterTools:async(_ctx,calls)=>calls.some(c=>c.name==='verify_app'&&c.status==='ok')?{complete:true}:undefined}))
+    expect(result.status).toBe('completed');expect(q.received).toHaveLength(1)
+    expect(readFileSync(nativeFile(),'utf8')).toContain('host receipt')
+  })
+  it('host feedback from tools continues repair and is not treated as completion', async () => {
+    const q=scripted([[call('check','verify_app')],[text('need repair')]])
+    const result=await runAgentLoop(input(q.query,{tools:[tool('verify_app',async()=>({output:'unverified'}))],
+      afterTools:async()=>({feedback:'HOST_REPRODUCTION_REQUIRED'})}))
+    expect(result.status).toBe('completed');expect(q.received).toHaveLength(2)
+    expect(JSON.stringify(q.received[1].messages)).toContain('HOST_REPRODUCTION_REQUIRED')
+  })
+  it('keeps obsolete host snapshots in native history while sending only current state to the model',async()=>{
+    let reads=0
+    const q=scripted([[call('old-state','read_quality_findings')],[call('new-state','read_quality_findings')],[text('done')]])
+    await runAgentLoop(input(q.query,{workMode:'implementation',tools:[tool('read_quality_findings',async()=>({output:++reads===1?'OLD_HOST_QUEUE_123':'CURRENT_HOST_QUEUE_456'}))]}))
+    const wire=JSON.stringify(q.received[2].messages),native=readFileSync(nativeFile(),'utf8')
+    expect(wire).not.toContain('OLD_HOST_QUEUE_123');expect(wire).toContain('CURRENT_HOST_QUEUE_456')
+    expect(native).toContain('OLD_HOST_QUEUE_123');expect(native).toContain('CURRENT_HOST_QUEUE_456')
+  })
+  it('does not let host closeout swallow a user correction arriving while verification is awaited',async()=>{
+    const q=scripted([[call('check','verify_app')],[text('processed correction')]])
+    await runAgentLoop(input(q.query,{tools:[tool('verify_app',async()=>({output:'receipt'}))],afterTools:async()=>{
+      enqueueSteer('test-session',{queueMessageId:'during-closeout',content:'保留新增的纠正要求',enqueuedAt:Date.now()})
+      return{complete:true}
+    }}))
+    expect(q.received).toHaveLength(2)
+    expect(JSON.stringify(q.received[1].messages)).toContain('保留新增的纠正要求')
+  })
   it('does not enter host completion or spawn reviews for a failed provider turn', async () => {
     const beforeComplete=vi.fn(async()=>undefined)
     const query:SDKQuery=async function*(){throw new Error('REQUEST_BUDGET_EXHAUSTED')}

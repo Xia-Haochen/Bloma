@@ -66,14 +66,14 @@ async function review(findings: Record<string, unknown>[] = [finding], intent?: 
 it('actual Pi C submits host-bound findings; a real injected CLI defect fails, is repaired, and closes only after same-case host retest', async () => {
   await review()
   const initial = readQualityLedger(project.project_id).findings[0]
-  expect(initial.disposition).toBe('suspected'); expect(await quality.gate()).toBeUndefined()
+  expect(initial.disposition).toBe('suspected'); expect(await quality.gate()).toContain('REPRODUCTION_REQUIRED')
   const check = quality.parentTools.find(t => t.name === 'check_quality_finding')!
   await expect(check.execute({ finding_id: initial.id, case_name: 'sum', status: 'passed' }, ctx())).rejects.toThrow('INVALID')
   await check.execute({ finding_id: initial.id, case_name: 'sum' }, ctx())
   expect(readQualityLedger(project.project_id).findings[0].disposition).toBe('confirmed')
   expect(await quality.gate()).toContain('FINDINGS_OPEN')
   writeFileSync(join(project.root_path, 'app.cjs'), 'console.log(Number(process.argv[2])+Number(process.argv[3]))')
-  expect(await quality.gate()).toContain('REVIEW_REQUIRED')
+  expect(await quality.gate()).toContain('FINDINGS_OPEN')
   await check.execute({ finding_id: initial.id, case_name: 'sum' }, ctx())
   const repaired = readQualityLedger(project.project_id).findings[0]
   expect(repaired.disposition).toBe('closed'); expect(repaired.checks.map(c => c.outcome)).toEqual(['failed', 'passed'])
@@ -121,9 +121,29 @@ it('review freezes writers and commands; external source changes and cancellatio
 it('a later cancelled review cannot revive a prior completed review of identical bytes', async () => {
   await review([]); expect(await quality.gate()).toBeUndefined()
   register(async function* () { await new Promise(() => {}) })
-  await quality.begin(ctx()); disposeParentDelegationState(parent)
+  writeFileSync(join(project.root_path, 'app.cjs'), 'console.log(2)')
+  await quality.begin(ctx())
+  writeFileSync(join(project.root_path, 'app.cjs'), 'console.log(999)')
+  disposeParentDelegationState(parent)
   expect(await quality.gate()).toContain('REVIEW_REQUIRED')
 })
+it('does not buy a duplicate complete review and cannot erase important doubts by editing then reviewing', async () => {
+  await review([])
+  expect(await quality.begin(ctx())).toMatchObject({already_reviewed:true})
+  expect(readQualityLedger(project.project_id).reviews).toHaveLength(1)
+  writeFileSync(join(project.root_path,'app.cjs'),'console.log(998)')
+  await review()
+  writeFileSync(join(project.root_path,'app.cjs'),'console.log(Number(process.argv[2])+Number(process.argv[3]))')
+  await expect(quality.begin(ctx())).rejects.toThrow('REPRODUCTION_REQUIRED')
+  const f=readQualityLedger(project.project_id).findings[0]
+  await quality.parentTools.find(t=>t.name==='check_quality_finding')!.execute({finding_id:f.id,case_name:'sum'},ctx())
+  const observed=readQualityLedger(project.project_id).findings[0]
+  expect(observed.disposition).toBe('not_reproduced')
+  expect(observed.checks).toHaveLength(1)
+  expect(observed.checks[0].observation).toContain('"current_candidate_only":true')
+  expect(observed.identity).toEqual(f.identity)
+  expect(await quality.gate()).toContain('REVIEW_REQUIRED')
+},60000)
 it('a model saying PASS without reading material and submitting the protocol cannot satisfy the completion gate', async () => {
   register(async function* () {
     yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'PASS，所有问题已经修复。' }] } }
@@ -193,6 +213,7 @@ it('complete production runs C, reproduces and repairs a finding, reruns C on th
   expect(findProject(project.project_id).desktop_blocked, JSON.stringify(readQualityLedger(project.project_id))).toBeUndefined()
   expect(findProject(project.project_id).status).toBe('completed')
   expect(cReviews).toBe(2)
+  expect(parentStep).toBe(4) // After the actual passing retest, host owns C and publication.
   const ledger = readQualityLedger(project.project_id)
   expect(ledger.findings[0].disposition).toBe('closed')
   expect(ledger.findings[0].checks.map(c => c.outcome)).toEqual(['failed', 'passed'])

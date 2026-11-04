@@ -5,7 +5,7 @@ import { compactReviewManifest, reviewChangeContext, repeatedReviewFailure } fro
 import { canonicalFindingReference } from './quality-reference'
 import { validateIntentObservations } from './intent-review'
 import { productDesignPolicy } from '../project/product-design-policy'
-import { findingNeedsClosure, qualityCloseout, observedQualityFinding } from './quality-closeout'
+import { findingNeedsClosure, findingNeedsInvestigation, importantFinding, sameQualityScope, qualityCloseout, qualityWorkQueue, observedQualityFinding } from './quality-closeout'
 import { visualReviewChecklist, visualCoverageComplete } from './visual-review-checklist'
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
@@ -87,6 +87,15 @@ export function createQualityReview(projectId: string, parent: string, policy: R
     const security = defaultQuickSecurityGate(projectId)
     if (!security || !security.passed || security.blocking) throw Error('QUALITY_LOCAL_CHECK_REQUIRED: 先处理本机静态检查，再审阅稳定候选。' + (security?.listing ?? '扫描未完成'))
     const binding = await identity(projectId, ctx.signal), id = randomUUID(), ledger = readQualityLedger(projectId)
+    const work = qualityCloseout(ledger, binding, undefined, rulesVersion(projectId), independentDesignVersion(projectId))
+    if (work.must_fix.length || work.required_investigation.length) throw Error('QUALITY_FINDING_REPRODUCTION_REQUIRED: 先用冻结案例复现或复测重要问题，不通过重新审阅代替闭合。' + JSON.stringify(work))
+    const previous = ledger.reviews.filter(r => (r.kind ?? 'code') === kind).at(-1)
+    if (previous?.status === 'complete' && same(previous.identity,binding) && (previous.intent_observations??[]).every(o=>o.status==='supported')) {
+      if (kind === 'code' || previous.visual && previous.image && previous.child && previous.visual_delivery?.image_hash === previous.visual.image_hash) {
+        if (kind === 'visual') validateVisualGrant(previous.visual!,previous.child!,previous.image!)
+        return { delegation_id: previous.delegation!, child_session_id: previous.child!, review_id: previous.id, already_reviewed: true }
+      }
+    }
     let visual: VisualMaterial | undefined
     try {
       if (kind === 'visual') {
@@ -169,7 +178,7 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       validateVisualGrant(review.visual, ctx.sessionId, review.image); imagesRequested.add(ctx.sessionId)
       return { output: JSON.stringify({ sha256: review.visual.image_hash, candidate: review.identity, visual_review: 'image_attached_not_reviewed' }), images: [review.image] }
     } }]
-  const check: AgentLoopTool = { name: 'check_quality_finding', description: '宿主实际运行现有冻结验收，按case_name与需求编号记录复现/复测。第一次须在原审阅候选复现失败，后续相同案例/规则在新候选通过才关闭。无证据和争议不能确认；模型不能指定结果。必要案例先通过现有登记入口追加。',
+  const check: AgentLoopTool = { name: 'check_quality_finding', description: '宿主实际运行冻结验收，按case_name与需求记录结果。未确认疑点允许在同目标/环境的当前候选核对（含新增复现测试后）；通过只记当前未复现，不声称原版已失败。已有失败基线必须同案例同规则复测后才关闭。无实际断言不得解决，模型不能指定结果。',
     input_schema: { type: 'object', additionalProperties: false, required: ['finding_id', 'case_name'], properties: { finding_id: { type: 'string' }, case_name: { type: 'string' } } },
     execute: async (input, ctx) => exclusive(async () => {
       assertParent(ctx)
@@ -185,14 +194,14 @@ export function createQualityReview(projectId: string, parent: string, policy: R
         return { output: JSON.stringify({ finding: updated, status: result.status, summary: result.summary }), isError: result.status !== 'passed' || updated.disposition !== 'closed' }
       }
       const before = await identity(projectId, ctx.signal), rules = rulesVersion(projectId), baseline = finding.checks.find(c => c.outcome === 'failed')
-      if (!baseline && !same(finding.identity, before)) throw Error('QUALITY_REPRODUCTION_CANDIDATE_STALE')
+      if (!baseline && !sameQualityScope(finding.identity, before)) throw Error('QUALITY_REPRODUCTION_SCOPE_CHANGED')
       if (baseline && (baseline.case_name !== input.case_name || baseline.rules !== rules || baseline.identity.target !== before.target || baseline.identity.environment !== before.environment)) throw Error('QUALITY_RETEST_CONTRACT_CHANGED')
       const result = await verifySoftwareCandidate(projectId, ctx.requestId, ctx.signal, true)
       const after = await identity(projectId, ctx.signal)
       if (!same(before, after) || rules !== rulesVersion(projectId)) throw Error('QUALITY_CHECK_INPUT_CHANGED')
       const outcome = observedQualityFinding(result, finding, input.case_name)
       finding.checks.push({ at: new Date().toISOString(), identity: before, case_name: input.case_name, rules, outcome, report: result.report_path, candidate: result.candidate?.id,
-        observation: redactSoftwareOutput(JSON.stringify({ status: result.status, summary: result.summary,
+        observation: redactSoftwareOutput(JSON.stringify({ status: result.status, summary: result.summary, original_review_source: finding.identity.source, current_candidate_only: !baseline && !same(finding.identity,before),
           gui: result.core?.host_gui?.case_results?.filter(c => c.name === input.case_name), cli: result.core?.host_cli?.cases.filter(c => c.name === input.case_name) })) })
       finding.disposition = outcome === 'failed' ? 'confirmed' : outcome === 'passed' && baseline && result.status === 'passed' ? 'closed'
         : baseline ? 'confirmed' : outcome === 'passed' ? 'not_reproduced' : 'suspected'
@@ -206,12 +215,14 @@ export function createQualityReview(projectId: string, parent: string, policy: R
     if(design?.contract){const semantics=currentIndependentSemantics(projectId,design.contract);if(!semantics.ready)return `QUALITY_INDEPENDENT_SEMANTICS_UNRESOLVED: B预期或覆盖争议尚待澄清，不能改目标或断言过关：${JSON.stringify(semantics)}`}
     const current = await identity(projectId, signal), ledger = readQualityLedger(projectId)
     const selection = await selectQualityCollaboration(projectId,current,signal)
+    const investigations = ledger.findings.filter(f => importantFinding(f) && findingNeedsInvestigation(f,current,rulesVersion(projectId),independentDesignVersion(projectId)))
+    if (investigations.length) return 'QUALITY_FINDING_REPRODUCTION_REQUIRED: 重要疑点尚无当前候选的实际案例结果。' + JSON.stringify(investigations.map(f => f.id))
+    const open = ledger.findings.filter(f => findingNeedsClosure(f,current,rulesVersion(projectId),independentDesignVersion(projectId)))
+    if (open.length) return 'QUALITY_FINDINGS_OPEN: 先复测已确认缺陷，再重新审阅。' + JSON.stringify(open.map(f => f.id))
     const latest = ledger.reviews.filter(r => (r.kind ?? 'code') === 'code').at(-1)
     if (selection.required.includes('code') && (!latest || latest.status !== 'complete' || !same(latest.identity, current))) return 'QUALITY_REVIEW_REQUIRED: 当前候选尚无所需的有效结构化C审阅；用start_quality_review，等待并处理台账。'
     const unresolvedIntent = (['code', 'visual'] as const).flatMap(kind => { const r = ledger.reviews.filter(r => (r.kind ?? 'code') === kind).at(-1); return r && same(r.identity, current) && r.status === 'complete' ? [r] : [] }).flatMap(r => r.intent_observations ?? []).filter(o => o.status === 'unverified' || o.status === 'concern' && (!o.finding_ids?.length || o.finding_ids.some(id => { const f = ledger.findings.find(f => f.id === id); return !f || !['closed','not_reproduced'].includes(f.disposition) || f.checks.at(-1)?.outcome !== 'passed' || !same(f.checks.at(-1)!.identity, current) || f.checks.at(-1)!.rules !== (f.independent ? independentDesignVersion(projectId) : rulesVersion(projectId)) })))
     if (unresolvedIntent.length) return 'QUALITY_INTENT_UNRESOLVED: 核心体验仍有未验证或未闭合观察，先核对实际旅程和对应finding，不以通用界面替代：' + JSON.stringify(unresolvedIntent)
-    const blocking = ledger.findings.filter(f => findingNeedsClosure(f, current, rulesVersion(projectId), independentDesignVersion(projectId)))
-    if (blocking.length) return `QUALITY_FINDINGS_OPEN: 重要已确认缺陷尚未在当前候选闭合：${JSON.stringify(blocking)}`
     if (selection.required.includes('visual')) {
       const visual = ledger.reviews.filter(r => r.kind === 'visual').at(-1)
       if (visual?.visual_error === 'MODEL_IMAGE_INPUT_UNSUPPORTED' && visual.visual_route === activeRoute) return 'QUALITY_VISUAL_MODEL_UNSUPPORTED: 当前模型已实际拒绝图片输入，V仍未验证；请更换支持图片的当前制作路由后继续，不能改用文字或自动重试同一路由。'
@@ -228,7 +239,7 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       if (Object.keys(input).some(k => k !== 'debug_session_id') || input.debug_session_id !== undefined && typeof input.debug_session_id !== 'string') throw Error('VISUAL_INPUT_INVALID')
       return { output: JSON.stringify(await begin(ctx, 'visual', input.debug_session_id as string | undefined)) }
     } },
-    { name: 'read_quality_findings', description: '读取宿主finding台账与当前交付缺口；疑点不等于真实缺陷，失败记录保留。', input_schema: { type: 'object', properties: {} }, execute: async (_input, ctx) => { assertParent(ctx); const reason = await gate(ctx.signal), current = await identity(projectId, ctx.signal), ledger = readQualityLedger(projectId); return { output: JSON.stringify({ ledger: { ...ledger, reviews: ledger.reviews.map(({ source_manifest: _manifest, ...review }) => review) }, gate: reason, closeout: qualityCloseout(ledger, current, reason, rulesVersion(projectId), independentDesignVersion(projectId)) }) } } }, check]
+    { name: 'read_quality_findings', description: '默认读取当前必修/待复现队列和审阅状态；历史建议保留但不自动扩大范围。finding_id按需读取单条完整历史证据。', input_schema: { type: 'object', additionalProperties:false, properties: {finding_id:{type:'string'}} }, execute: async (input, ctx) => { assertParent(ctx); const reason = await gate(ctx.signal), current = await identity(projectId, ctx.signal), ledger = readQualityLedger(projectId); if(input.finding_id!==undefined){const finding=ledger.findings.find(f=>f.id===input.finding_id);if(!finding)throw Error('QUALITY_FINDING_UNKNOWN');return{output:JSON.stringify({finding,gate:reason})}}return { output: JSON.stringify({ ...qualityWorkQueue(ledger,current,reason,rulesVersion(projectId),independentDesignVersion(projectId)), gate: reason }) } } }, check]
   const reviewTools = (tools: AgentLoopTool[], child?: string): AgentLoopTool[] => child && readQualityLedger(projectId).reviews.find(r => r.id === children.get(child))?.kind === 'visual' ? childProtocol : [...tools.filter(t => ['read_file', 'list_files', 'find', 'grep'].includes(t.name)).map(tool => ({
     ...tool, execute: async (input: Record<string, unknown>, ctx: ToolContext) => {
       if (readQualityLedger(projectId).reviews.find(r => r.id === children.get(ctx.sessionId))?.kind === 'visual') throw Error('VISUAL_SOURCE_READ_DENIED: V只使用授权图片和操作事实')

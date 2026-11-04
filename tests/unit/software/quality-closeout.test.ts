@@ -1,13 +1,33 @@
 import { expect, it } from 'vitest'
-import { findingNeedsClosure, qualityCloseout, observedQualityFinding } from '../../../main/software/quality-closeout'
+import { findingNeedsClosure, qualityCloseout, qualityWorkQueue, observedQualityFinding } from '../../../main/software/quality-closeout'
 import { visualCoverageComplete } from '../../../main/software/visual-review-checklist'
 import type { Identity, Ledger, QualityFinding } from '../../../main/software/quality-ledger'
+import replay from '../../fixtures/quality-convergence-replay-20261104.json'
 
 const identity: Identity = { source: 'source', target: 'target', environment: 'env' }
 const finding = (changes: Partial<QualityFinding> = {}): QualityFinding => ({ id: 'f', review: 'r', identity,
   requirement: 'F-001', expected_source: 'confirmed', category: 'data', severity: 'high', location: 'form',
   trigger: 'save', evidence: 'record', reproduction: 'save/reopen', unknowns: '', disposition: 'suspected', checks: [], ...changes })
 const ledger = (findings: QualityFinding[]): Ledger => ({ version: 1, reviews: [], findings })
+it('replays real decision fields: historical important doubts remain work after the final source edit',()=>{
+  const rows=replay.findings.map(f=>({expected_source:'omitted in projection',category:'projection',location:'omitted',trigger:'omitted',evidence:'omitted',reproduction:'omitted',unknowns:'',...f})) as QualityFinding[]
+  const result=qualityCloseout(ledger(rows),replay.current_identity,'QUALITY_REVIEW_REQUIRED','current-rules')
+  const required=rows.filter(f=>f.disposition==='suspected'&&(f.severity==='high'||f.severity==='critical'||f.review_kind==='visual'&&f.severity==='medium'))
+  expect(required.length).toBeGreaterThan(0)
+  expect(result.required_investigation).toEqual(required.map(f=>f.id))
+  expect(result.next_tool).toBe('check_quality_finding')
+  expect(rows.every(f=>f.checks.length===0)).toBe(true)
+})
+it('carries important suspicions across edits and gives current evidence priority over repeated review',()=>{
+  const f=finding(),changed={...identity,source:'edited'}
+  const facts=ledger([f,...Array.from({length:100},(_,i)=>finding({id:'idea'+i,disposition:'suggestion',evidence:'historical prose'.repeat(100)}))])
+  const queue=qualityWorkQueue(facts,changed,'QUALITY_REVIEW_REQUIRED','rules')
+  expect(queue.closeout.next_tool).toBe('check_quality_finding')
+  expect(queue.closeout.required_investigation).toEqual(['f'])
+  expect(queue.findings).toEqual([f]);expect(queue.history.findings).toBe(101)
+  expect(JSON.stringify(queue).length).toBeLessThan(JSON.stringify(facts).length/10)
+  expect(qualityCloseout(facts,{...changed,target:'different goal'},undefined,'rules').required_investigation).toEqual([])
+})
 it('orders real defects before repeated reviews and defers enhancements without deleting evidence', () => {
   const rows = [finding(), finding({ id: 'idea', disposition: 'suggestion' }), finding({ id: 'dispute', disposition: 'disputed' })]
   const facts = ledger(rows), before = JSON.stringify(facts)

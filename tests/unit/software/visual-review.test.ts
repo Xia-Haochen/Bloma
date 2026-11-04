@@ -127,7 +127,7 @@ it('sends actual candidate PNG through Pi/native HTTP, records V findings in the
   expect(readQualityLedger(project.project_id).findings[0].disposition).toBe('confirmed')
   expect(await quality.gate()).toContain('FINDINGS_OPEN')
   writeFileSync(join(project.root_path, 'index.html'), html(false))
-  expect(await quality.gate()).toContain('REVIEW_REQUIRED')
+  expect(await quality.gate()).toContain('FINDINGS_OPEN')
   await check.execute({ finding_id: finding.id, case_name: 'total' }, ctx())
   expect(readQualityLedger(project.project_id).findings[0].checks.map(c => c.outcome)).toEqual(['failed', 'passed'])
   expect(readQualityLedger(project.project_id).findings[0].disposition).toBe('closed')

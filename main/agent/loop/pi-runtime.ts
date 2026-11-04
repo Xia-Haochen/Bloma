@@ -12,7 +12,7 @@ import { feedbackForTool } from './tool-feedback'
 import { persistentBudgetBlocked, retainedToolFeedback } from '../../../shared/tool-feedback-policy'
 import { formatToolFeedback, type ToolFeedback } from '../../../shared/tool-feedback'
 import { isDegenerateText } from '../../coding/output-integrity'
-import { commandProgressKey, createWorkProgress, isPendingToolExecution, pruneDuplicateReads, toolFailureKey } from './work-progress'
+import { commandProgressKey, createWorkProgress, createProtocolFailureGuard, isPendingToolExecution, pruneDuplicateReads, pruneSupersededHostReads, toolFailureKey } from './work-progress'
 import { createDsmlDisplayFilter } from './dsml-display-filter'
 import { drainSteerQueue, markSteerMerged, pendingSteerCount, settleSteerEntry, steerConfirmEnabled, wrapSteerContent, type SteerEntry } from './steer-queue'
 import { estimateTokenCount } from './usage-guard'
@@ -52,6 +52,7 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
   const queuedSteers: Array<{ entry: SteerEntry; text: string }> = []
   const injectedSteerTexts: string[] = []
   const progress = input.workMode === 'implementation' ? createWorkProgress() : undefined
+  const protocolGuard = createProtocolFailureGuard()
   const turnsUsage: NonNullable<AgentLoopResult['turnsUsage']> = []
   let turns = 0, compactions = 0, auxiliaryCalls = 0, inputTokens = 0, outputTokens = 0, turnsWithUsage = 0
   let compacting = false, finalText = '', status: AgentLoopResult['status'] = 'completed'
@@ -182,6 +183,7 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
       if (!progress) return converted
       const transport = toTransportTurns({ messages: converted })
       pruneDuplicateReads(transport)
+      pruneSupersededHostReads(transport)
       const systemMessage = getCurrentSystemMessage(converted)
       return [...(systemMessage ? [systemMessage] : []), ...importLegacyTurns(transport, model)]
     }
@@ -195,6 +197,13 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
       if (input.signal.aborted) { status = 'cancelled'; return true }
       if (status !== 'completed') return true
       const calls = toolCalls.filter(call => call.turn === turns)
+      const protocolFailure = protocolGuard(calls)
+      if(protocolFailure){status='budget_exhausted';termination={reason:'no_progress',limit:3,observed:protocolFailure.count};input.publish('message_delta',{text:'工具协议重复失败，停止当前执行并保留记录：'+protocolFailure.key});return true}
+      if (toolResults.length && input.afterTools && !pendingSteerCount(input.sessionId)) {
+        const handoff = await input.afterTools(ctx, calls)
+        if (handoff?.complete && !pendingSteerCount(input.sessionId)) return true
+        if (handoff?.feedback) activeSession.agent.steer({ role: 'user', content: handoff.feedback, timestamp: Date.now() })
+      }
       budgetStalls = budgetHitThisTurn ? budgetStalls + 1 : 0
       if (budgetStalls >= 2) { status = 'budget_exhausted'; return true }
       if (message.stopReason === 'length') {

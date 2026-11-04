@@ -1,8 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { commandProgressKey, createWorkProgress, isPendingToolExecution, pruneDuplicateReads, toolFailureKey } from '../../../main/agent/loop/work-progress'
+import { commandProgressKey, createWorkProgress, isPendingToolExecution, pruneDuplicateReads, pruneSupersededHostReads, toolFailureKey } from '../../../main/agent/loop/work-progress'
 import type { ConversationTurn } from '../../../main/orchestration/stages/orchestration-contracts'
 
 describe('writable executor progress', () => {
+  it('projects only the latest successful host state, preserving failures, explicit history and audit pairs', () => {
+    const result=(id:string,name:string,body:string,input={},is_error=false):ConversationTurn[]=>[
+      {role:'assistant',content:[{type:'tool_use',id,name,input}]},
+      {role:'user',content:[{type:'tool_result',tool_use_id:id,content:body,is_error}]}]
+    const messages=[...result('old','read_quality_findings','old issues'),...result('new','read_quality_findings','current issues'),
+      ...result('bad','read_quality_findings','read failed',{},true),...result('detail','read_quality_findings','historical evidence',{finding_id:'old'}),
+      ...result('write','edit_file','write receipt')]
+    const audit=JSON.stringify(messages)
+    expect(pruneSupersededHostReads(messages)).toBe('old issues'.length)
+    expect(JSON.stringify(messages[1])).toContain('宿主状态快照')
+    for(const text of ['current issues','read failed','historical evidence','write receipt'])expect(JSON.stringify(messages)).toContain(text)
+    expect(messages).toHaveLength(10);expect(audit).toContain('old issues')
+  })
   it('does not stop bounded polling of a real pending command or clear an unresolved verifier failure with pending feedback', () => {
     expect(isPendingToolExecution('read_process', '{"kind":"command","execution_status":"running"}')).toBe(true)
     expect(isPendingToolExecution('read_process', '{"kind":"command","execution_status":"completed"}')).toBe(false)

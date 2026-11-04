@@ -21,7 +21,7 @@ export function buildSoftwareInspectTool(projectId: string, policy: ReturnType<t
   return { name: 'inspect_app', description: '实际操作Electron/浏览器程序。script填写项目内JS模块路径，export default async({page,context,expect,assert,dataDir})使用标准Playwright；脚本在不注入平台密钥的独立工程进程执行，支持交互、等待、上传下载及断言。steps兼容旧动作，与script二选一。默认复用实例并自动重载变化；read显示源码检查点、current_source与差异；restore用checkpoint_id/expected_source/paths还原所选文件并备份旧内容。mode=once仅旧steps单次现场。调试和恢复均不等于验收，通过规则后verify_app。',
     input_schema: { type: 'object', properties: { mode: { type: 'string', enum: ['once', 'open', 'act', 'read', 'reload', 'close', 'restore'] },
       debug_session_id: { type: 'string' }, process_id: { type: 'string' }, since_seq: { type: 'integer', minimum: 0 },
-      script: { type: 'string', minLength: 1, maxLength: 512 }, timeout_ms: { type: 'integer', minimum: 100, maximum: 300000 },
+      script: { type: 'string', minLength: 1, maxLength: 512 }, script_source: {type:'string',minLength:1,maxLength:65536,description:'临时观察脚本正文，export default async({page,expect,assert,dataDir})。宿主保存到隔离诊断目录，不改候选源码，不作为正式验收。与script/steps互斥。'}, timeout_ms: { type: 'integer', minimum: 100, maximum: 300000 },
       phase:{type:'string',enum:['initial','reopened'],description:'node:test开发检查可区分初次与重开；正式verify_app自动管理两次执行。'},
       checkpoint_id: { type: 'string' }, expected_source: { type: 'string' }, paths: { type: 'array', minItems: 1, maxItems: 100, items: { type: 'string' } },
       include_image: { type: 'boolean' }, fixtures: GUI_FIXTURE_SCHEMA, steps: guiStepsSchema(32, SOFTWARE_GUI_ACTION_KINDS) } },
@@ -31,7 +31,7 @@ export function buildSoftwareInspectTool(projectId: string, policy: ReturnType<t
       try {
         policy.assertCommand(ctx)
         if (input.mode === 'restore') {
-          if (input.script !== undefined || input.steps !== undefined || typeof input.checkpoint_id !== 'string' || typeof input.expected_source !== 'string' || !Array.isArray(input.paths)) throw Error('SOURCE_RESTORE_ARGUMENTS_REQUIRED: 提供checkpoint_id、read返回的current_source和要恢复的paths')
+          if (input.script !== undefined || input.script_source !== undefined || input.steps !== undefined || typeof input.checkpoint_id !== 'string' || typeof input.expected_source !== 'string' || !Array.isArray(input.paths)) throw Error('SOURCE_RESTORE_ARGUMENTS_REQUIRED: 提供checkpoint_id、read返回的current_source和要恢复的paths')
           for (const path of input.paths) { if (typeof path !== 'string') throw Error('SOURCE_RESTORE_PATH_INVALID'); policy.assertFileWrite(path, ctx) }
           const before = sourceCheckpointChanges(projectId, ctx.sessionId, findProject(projectId).root_path, input.checkpoint_id)
           if (before.current_source !== input.expected_source) throw Error('SOURCE_RESTORE_CURRENT_CHANGED')
@@ -42,6 +42,7 @@ export function buildSoftwareInspectTool(projectId: string, policy: ReturnType<t
           return { output: JSON.stringify(result), feedback: { schema_version: 1, execution: 'completed', verification: 'not_applicable', source: 'host', scope: 'source_restore' } }
         }
         if (input.script !== undefined && (typeof input.script !== 'string' || !input.script || input.steps !== undefined || ['once', 'read', 'close'].includes(String(input.mode)))) throw Error('BROWSER_SCRIPT_INPUT_INVALID: script需项目内JS模块路径，与steps二选一；不能用于once/read/close')
+        if(input.script_source!==undefined&&(typeof input.script_source!=='string'||!input.script_source.trim()||Buffer.byteLength(input.script_source)>65536||input.script!==undefined||input.steps!==undefined||['once','read','close'].includes(String(input.mode))))throw Error('BROWSER_SCRIPT_SOURCE_INVALID: 临时脚本与script/steps互斥，仅用于实际观察')
         let mode = input.mode
         const explicitDebugSession = Boolean(input.debug_session_id)
         if (mode === undefined || ['open', 'act', 'reload'].includes(String(mode))) {
@@ -99,12 +100,12 @@ export function buildSoftwareInspectTool(projectId: string, policy: ReturnType<t
             snapshot = await openDebugSession({ projectId, sessionId: ctx.sessionId, root, launch, signal: ctx.signal, processId: input.process_id as string | undefined })
             openingDebugId = snapshot.id
             if (additions) installDebugFixtures(projectId, ctx.sessionId, snapshot.id, additions)
-            snapshot = await actDebugSession({ ...args, id: snapshot.id, script: input.script as string | undefined, timeoutMs: input.timeout_ms as number | undefined,
+            snapshot = await actDebugSession({ ...args, id: snapshot.id, script: input.script as string | undefined, scriptSource:input.script_source as string|undefined, timeoutMs: input.timeout_ms as number | undefined,
               phase:input.phase as 'initial'|'reopened'|undefined,
-              steps: input.script ? undefined : steps ?? [{ id: 'screen', kind: 'expect', selector: 'body', nonempty: true }] })
+              steps: input.script || input.script_source ? undefined : steps ?? [{ id: 'screen', kind: 'expect', selector: 'body', nonempty: true }] })
           } else if (mode === 'close') snapshot = await closeDebugSession(projectId, ctx.sessionId, args.id)
           else if (mode === 'read') snapshot = readDebugSession(projectId, ctx.sessionId, args.id, Number(input.since_seq ?? 0))
-          else { if (additions) installDebugFixtures(projectId, ctx.sessionId, args.id, additions); snapshot = await actDebugSession({ ...args, steps, script: input.script as string | undefined, phase:input.phase as 'initial'|'reopened'|undefined, timeoutMs: input.timeout_ms as number | undefined, reload: mode === 'reload' }) }
+          else { if (additions) installDebugFixtures(projectId, ctx.sessionId, args.id, additions); snapshot = await actDebugSession({ ...args, steps, script: input.script as string | undefined, scriptSource:input.script_source as string|undefined, phase:input.phase as 'initial'|'reopened'|undefined, timeoutMs: input.timeout_ms as number | undefined, reload: mode === 'reload' }) }
           if (mode === 'act' || mode === 'reload') snapshot = readDebugSession(projectId, ctx.sessionId, args.id, Number(cursor))
           if (mode === 'open' && snapshot.url) previewChanged?.(snapshot.url)
           if (mode === 'close') previewChanged?.(activeSoftwarePreview(projectId, ctx.sessionId))

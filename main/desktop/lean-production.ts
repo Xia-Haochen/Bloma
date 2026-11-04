@@ -235,6 +235,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     ...(brief.project_plan ? ['已确认阶段计划：'+JSON.stringify(brief.project_plan)+'。先read_production_context(project-stages)核对进度。Electron/浏览器GUI按顺序用verify_project_stage检查，每次包含之前阶段的累计案例；通过后继续返回的next_stage，无需用户反复催继续。局部通过不是交付，最后仍用verify_app检查全部需求。命令/其它运行时沿完整目标制作和验收，不伪造阶段通过。'] : []),
     '稳定候选结束制作前由宿主按已验证基线和实际差异选择审阅；inspect_collaboration_plan可查询理由，不能自报低风险或跳过角色。需要C时进行独立只读审阅。用start_quality_review、wait_for_delegations、read_quality_findings处理宿主台账。审阅期间不写不运行；finding是疑点，按确认预期登记必要复现案例，再check_quality_finding实际复现。修复后同案例复测并重新审阅当前候选，不能自报关闭或更改预期过关。',
     '交付收尾：先通过verify_app定位业务/适配/环境失败；稳定后审阅，按read_quality_findings.closeout处理必修缺陷和重要疑点。建议与有争议的增强只记录，不默认扩大需求或为清空台账修改源码。修复应集中完成并同案例复测，再重新审阅稳定版本；已有有效审阅不重复发起。最终验证通过后停止改动并结束制作，由宿主检查交付。',
+    '临时截图/观察使用inspect_app(script_source)或steps，脚本由宿主保存在诊断目录；不要在稳定候选中增删临时脚本导致审阅失效。正式回归仍用冻结验收登记，临时观察不代替正式结果。重要疑点必须check_quality_finding取得当前实际案例证据，改源码或重开审阅不会把它清掉。',
     '宿主选定V的界面候选还须经独立V审阅；小范围纯样式改动可能只选V，其他业务/未知变更保留C/V。未变化的已验证候选不重复自动审阅，仍须原宿主验收。start_visual_review封存当前真实PNG与同次DOM/操作事实，子会话用专属图片授权，不能传父debug_session_id替代。必要操作先inspect_app，再启动V；未看图、图像渠道拒绝或旧图不能当视觉通过，不另选付费渠道或用OCR代替。',
     `项目根：${project.root_path}。已有平台组件和骨架优先复用，当前未有的环境先探测；不重做已证明的环境研究。不要求架构文档、阶段任务书或推进标记。`,
     ...(project.imported_source ? [JSON.stringify(importedProjectContext(input.projectId))] : []),
@@ -283,6 +284,25 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   runSignal.addEventListener('abort', cancelChildren, { once: true })
   let task = input.observedSoftwareVersion ? trialFeedbackText(input.projectId, input.observedSoftwareVersion, input.content) : input.content
   let initial = true
+  const advanceCloseout = async (ctx: import('../agent/loop/agent-loop').ToolContext) => {
+    const waiting = await guardDispatcherCompletion(ctx)
+    if (waiting) return waiting
+    for (let count = 0; count < 2; count++) {
+      const action = await quality.completionAction(ctx.signal), gap = action.gate
+      if (action.next_tool === 'check_quality_finding') return 'QUALITY_FINDING_REPRODUCTION_REQUIRED: ' + JSON.stringify(action)
+      if (gap?.startsWith('QUALITY_INDEPENDENT_SEMANTICS_UNRESOLVED') || gap?.startsWith('QUALITY_VISUAL_MODEL_UNSUPPORTED')) throw Error(gap)
+      if (!gap?.startsWith('QUALITY_REVIEW_REQUIRED') && !gap?.startsWith('QUALITY_VISUAL_REVIEW_REQUIRED')) return gap
+      const visual = gap.startsWith('QUALITY_VISUAL_REVIEW_REQUIRED')
+      await quality.begin(ctx, visual ? 'visual' : 'code')
+      const summary = await guardDispatcherCompletion(ctx), after = await quality.completionAction(ctx.signal)
+      if (after.gate?.startsWith(visual ? 'QUALITY_VISUAL_REVIEW_REQUIRED' : 'QUALITY_REVIEW_REQUIRED')) {
+        return after.gate + '\n本次审阅没有完成，先诊断实际交接，不自动重开同一审阅。\n' + (summary ?? '')
+      }
+      if (!after.gate && after.next_tool === 'verify_app') return undefined
+    }
+    const action = await quality.completionAction(ctx.signal)
+    return action.next_tool === 'check_quality_finding' ? 'QUALITY_FINDING_REPRODUCTION_REQUIRED: ' + JSON.stringify(action) : action.gate
+  }
   try {
     for (;;) {
       runSignal.throwIfAborted()
@@ -297,29 +317,14 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
         materials: sessionMaterials(input.projectId, input.sessionId), images: initial ? input.images : undefined,
         initialMessagePersisted: initial ? input.initialMessagePersisted : false,
         shouldPause: () => scopePending,
-        beforeComplete: async ctx => {
-          const waiting = await guardDispatcherCompletion(ctx)
-          if (waiting) return waiting
-          // At most C and V on this stable candidate. Do not buy another parent
-          // turn merely to read nonblocking suggestions after both gates clear.
-          for (let reviewCount = 0; reviewCount < 2; reviewCount++) {
-            const action = await quality.completionAction(ctx.signal), gap = action.gate
-            if (action.next_tool === 'check_quality_finding') return 'QUALITY_FINDING_REPRODUCTION_REQUIRED: 先核对当前重要疑点或复测已确认缺陷：' + JSON.stringify(action)
-            if (gap?.startsWith('QUALITY_INDEPENDENT_SEMANTICS_UNRESOLVED') || gap?.startsWith('QUALITY_VISUAL_MODEL_UNSUPPORTED')) throw Error(gap)
-            if (!gap?.startsWith('QUALITY_REVIEW_REQUIRED') && !gap?.startsWith('QUALITY_VISUAL_REVIEW_REQUIRED')) return gap
-            const visual = gap.startsWith('QUALITY_VISUAL_REVIEW_REQUIRED')
-            await quality.begin(ctx, visual ? 'visual' : 'code')
-            const summary = await guardDispatcherCompletion(ctx)
-            const after = await quality.completionAction(ctx.signal)
-            if (after.gate?.startsWith(visual ? 'QUALITY_VISUAL_REVIEW_REQUIRED' : 'QUALITY_REVIEW_REQUIRED')) {
-              return after.gate + '\n本次审阅没有完成，先诊断实际交接，不自动重开同一审阅。\n' + (summary ?? '')
-            }
-            if (!after.gate && after.next_tool === 'verify_app') return undefined
-          }
-          const action = await quality.completionAction(ctx.signal)
-          return action.next_tool === 'check_quality_finding'
-            ? 'QUALITY_FINDING_REPRODUCTION_REQUIRED: ' + JSON.stringify(action) : action.gate
-
+        beforeComplete: advanceCloseout,
+        afterTools: async (ctx, calls) => {
+          // Only an actual full verification for this request and exact inputs
+          // starts closeout. Partial stage checks and self-reported success do not.
+          if (scopePending || !calls.some(c => c.status === 'ok' && !c.pending && ['verify_app','check_quality_finding'].includes(c.name))) return
+          if (!await recentSoftwareVerification(input.projectId,input.requestId,ctx.signal)) return
+          const feedback = await advanceCloseout(ctx)
+          return feedback ? { feedback } : { complete: true }
         }, recoveryContext: () => renderSoftwareWorkingContext(input.projectId), publish: emit }) }
       catch (error) {
         const reason = error instanceof Error ? error.message : String(error)
