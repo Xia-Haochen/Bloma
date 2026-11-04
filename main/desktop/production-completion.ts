@@ -10,21 +10,29 @@ interface Dependencies {
 /** No completion/advance is manufactured. Await active work without spending parent
  * model calls, then return the actual handoffs so the parent can decide its next step. */
 export async function guardDispatcherCompletion(ctx: ToolContext, limitMs = 1_800_000,
-  deps: Dependencies = { list: listDelegations, wait: waitForDelegations, summary: getDelegationSummary }): Promise<string | undefined> {
+  deps: Dependencies = { list: listDelegations, wait: waitForDelegations, summary: getDelegationSummary },
+  acceptedHandoff?: (delegationId:string,childSessionId:string)=>boolean): Promise<string | undefined> {
   const commands = activeSoftwareCommands(ctx.projectId, ctx.sessionId)
   if (commands.length) return '【宿主完成条件】已有命令仍在运行，不能结束制作或重复启动。用read_process读取这些会话的实际结果：\n' + JSON.stringify(commands)
-  let running = deps.list(ctx.sessionId).filter(r => r.status === 'running')
+  const active=()=>deps.list(ctx.sessionId).filter(r=>r.projectId===ctx.projectId&&r.status==='running')
+  let running = active()
   if (!running.length) return undefined
+  const awaited=new Set(running.map(r=>r.delegationId))
   const deadline = Date.now() + limitMs
   while (running.length && !running.some(r => r.pendingQuestion)) {
     ctx.signal.throwIfAborted()
     const remaining = deadline - Date.now()
     if (remaining <= 0) throw new Error('DISPATCHER_CHILD_COMPLETION_TIMEOUT')
     await deps.wait(ctx, { delegationIds: running.map(r => r.delegationId), strategy: 'all', timeout_ms: Math.min(60_000, remaining) })
-    running = deps.list(ctx.sessionId).filter(r => r.status === 'running')
+    running = active()
+    for(const record of running)awaited.add(record.delegationId)
   }
   ctx.signal.throwIfAborted()
-  const summaries = deps.list(ctx.sessionId).map(r => deps.summary(r))
+  // Structured C/V handoffs are already consumed by their host ledger. Their
+  // intentional "not a product PASS" text is not another implementation task.
+  const unresolved=deps.list(ctx.sessionId).filter(r=>awaited.has(r.delegationId)&&!(r.status==='completed'&&!r.pendingQuestion&&acceptedHandoff?.(r.delegationId,r.childSessionId)))
+  if(!unresolved.length)return
+  const summaries = unresolved.map(r => deps.summary(r))
   return '【宿主完成条件】上一条无工具回复时仍有子任务在运行，不能据此结束制作。宿主已等待完成或待回答问题，没有取消执行器。以下是实际状态与交接；请只处理缺口、必要代答或完成收口，不无变化重复验证。执行结束不等于产品验收通过，请依据实际结果处理剩余工作。\n'
     + JSON.stringify(summaries.map(s => ({ ...s, result_summary: s.result_summary?.slice(0, 3000) })))
 }

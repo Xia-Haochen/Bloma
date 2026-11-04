@@ -220,6 +220,25 @@ it('complete production runs C, reproduces and repairs a finding, reruns C on th
   expect(ledger.reviews.filter(r => r.status === 'complete')).toHaveLength(2)
 }, 120000)
 
+it('a manually requested C enters host closeout without another discretionary implementation turn',async()=>{
+  const {enterDesktopLine}=await import('../../../main/desktop/desktop-route'),{findProject}=await import('../../../main/project/project-service')
+  const source='console.log(Number(process.argv[2]||2)+Number(process.argv[3]||3))';writeFileSync(join(project.root_path,'app.cjs'),source)
+  let parentCalls=0,unexpected='';const children=new Set<string>()
+  const use=(name:string,input:Record<string,unknown>)=>({type:'tool_use' as const,id:`manual-${parentCalls}-${name}`,name,input})
+  const query:SDKQuery=async function*(_prompt,options){
+    let content
+    if(JSON.stringify(options.messages?.filter(m=>m.role==='system')).includes('独立只读代码/数据审阅C')){
+      if(!children.has(options.sessionId)){children.add(options.sessionId);content=[use('read_quality_review',{}),use('read_file',{path:'app.cjs'}),use('submit_quality_findings',{findings:[]})]}
+      else content=[{type:'text' as const,text:'结构化审阅已提交。'}]
+    }else{parentCalls++;if(parentCalls>1){unexpected=JSON.stringify(options.messages).slice(-5000);throw Error('TEST_UNEXPECTED_IMPLEMENTATION_TURN')}content=[use('start_quality_review',{})]}
+    yield{type:'assistant',message:{role:'assistant',content}};yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
+  }
+  await enterDesktopLine({projectId:project.project_id,sessionId:parent,requestId:'manual-review',content:'完成当前稳定候选',maxTokens:2048,signal:AbortSignal.timeout(60000)},query,{},
+    {publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
+  expect(parentCalls,unexpected).toBe(1);expect(children.size).toBe(1);expect(readFileSync(join(project.root_path,'app.cjs'),'utf8')).toBe(source)
+  expect(findProject(project.project_id).status).toBe('completed')
+},90000)
+
 it('keeps uncertain experience observations open and permits a new current review to resolve them', async () => {
   const brief = readPrdBackplane(project.project_id)
   const model = organizedPrd(brief.requirements, '核心体验需核对').requirements_model

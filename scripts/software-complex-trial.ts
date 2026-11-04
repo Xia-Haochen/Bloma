@@ -85,6 +85,9 @@ export async function main() {
   cpSync(source, copied)
   const binding = resolveDelegationChannelOverride({ channelId: 'c0711f40-a244-4df1-96bd-b06a323b829e', modelId: 'deepseek-flash' })!
   if (binding.modelName !== 'deepseek-flash' || binding.env.ANTHROPIC_BASE_URL !== 'https://api.deepseek.com/anthropic') throw Error('TRIAL_ROUTE_CHANGED')
+  const trialThinking=process.env.BLOMA_COMPLEX_TRIAL_THINKING??'low'
+  if(trialThinking!=='low'&&trialThinking!=='off')throw Error('TRIAL_THINKING_MODE_INVALID')
+  binding.env.BLOMA_LOOP_THINKING=trialThinking
   const generationMaxTokens = resolveGenerationMaxTokens({ max_tokens: binding.maxTokens })
   const key = binding.env.ANTHROPIC_AUTH_TOKEN ?? binding.env.ANTHROPIC_API_KEY
   if (!key) throw Error('KEY_UNAVAILABLE')
@@ -153,7 +156,7 @@ export async function main() {
     if(existsSync(join(root,'pause-generation')))throw new ModelRequestRefusal('TRIAL_PAUSED_BETWEEN_REQUESTS')
     writeFileSync(startedMarker, 'started')
     const briefText: string[] = []
-    try { for await (const message of paid(prompt, { ...options, monetaryPolicyPath: policy, thinkingLevel: 'low', signal: AbortSignal.any([options.signal, signal]),
+    try { for await (const message of paid(prompt, { ...options, monetaryPolicyPath: policy, thinkingLevel: trialThinking, signal: AbortSignal.any([options.signal, signal]),
       requestGuard: request => {
         options.requestGuard?.(request)
         const body = JSON.parse(request.body)
@@ -176,7 +179,7 @@ export async function main() {
   const sid = `complex-${which}`, runId = randomUUID(), reportPath = join(taskDir, `${phase}-${runId}.json`)
   if (phase === 'run') writeFileSync(projectFile, JSON.stringify({ project_id: project.project_id, session_id: sid, root: project.root_path }))
   recordSessionActivity(sid, project.project_id)
-  const report: any = { version: 1, phase, task: which, project_id: project.project_id, session_id: sid, started_at: new Date().toISOString(), status: 'running', paid_cap_rmb: capRmb, budget_window: windowId || 'initial', runtime_sha256: hash(readFileSync(fileURLToPath(import.meta.url))) }
+  const report: any = { version: 1, phase, task: which, project_id: project.project_id, session_id: sid, started_at: new Date().toISOString(), status: 'running', paid_cap_rmb: capRmb, budget_window: windowId || 'initial', thinking_mode:trialThinking, runtime_sha256: hash(readFileSync(fileURLToPath(import.meta.url))) }
   let lastSave=0
   const save = (force=false) => { if(!force&&Date.now()-lastSave<500)return; lastSave=Date.now();writeTextFileAtomic(reportPath, safe({ ...report, operation: control.snapshot(), money: money() })) }
   const cards: AgentEvent[] = []

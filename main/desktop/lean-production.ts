@@ -38,6 +38,7 @@ import { closeDebugSessions, retainedDebugVersion } from '../software/debug-sess
 import { prepareSoftwareRelease, promoteSoftwareRelease, sealSoftwareRelease, verifyReleaseSource } from '../software/release-store'
 import { saveSoftwareRegressionBaseline } from '../software/regression-baseline'
 import { verifySoftwareCandidate, recentSoftwareVerification } from '../software/verification'
+import { verificationToolReport } from '../software/verification-report'
 import { importedProjectContext } from '../software/import-project'
 import { saveSoftwareRunState, readSoftwareRunState, recordSoftwareRepair, type SoftwareRunStatus } from '../software/run-state'
 import { monetaryStopMessage, monetaryInputBlocked } from '../platform/llm/monetary-budget'
@@ -285,8 +286,9 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   runSignal.addEventListener('abort', cancelChildren, { once: true })
   let task = input.observedSoftwareVersion ? trialFeedbackText(input.projectId, input.observedSoftwareVersion, input.content) : input.content
   let initial = true
+  const waitForProductionChildren=(ctx:import('../agent/loop/agent-loop').ToolContext)=>guardDispatcherCompletion(ctx,undefined,undefined,quality.acceptedHandoff)
   const advanceCloseout = async (ctx: import('../agent/loop/agent-loop').ToolContext) => {
-    const waiting = await guardDispatcherCompletion(ctx)
+    const waiting = await waitForProductionChildren(ctx)
     if (waiting) return waiting
     for (let count = 0; count < 2; count++) {
       const action = await quality.completionAction(ctx.signal), gap = action.gate
@@ -295,7 +297,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
       if (!gap?.startsWith('QUALITY_REVIEW_REQUIRED') && !gap?.startsWith('QUALITY_VISUAL_REVIEW_REQUIRED')) return gap
       const visual = gap.startsWith('QUALITY_VISUAL_REVIEW_REQUIRED')
       await quality.begin(ctx, visual ? 'visual' : 'code')
-      const summary = await guardDispatcherCompletion(ctx), after = await quality.completionAction(ctx.signal)
+      const summary = await waitForProductionChildren(ctx), after = await quality.completionAction(ctx.signal)
       if (after.gate?.startsWith(visual ? 'QUALITY_VISUAL_REVIEW_REQUIRED' : 'QUALITY_REVIEW_REQUIRED')) {
         return after.gate + '\n本次审阅没有完成，先诊断实际交接，不自动重开同一审阅。\n' + (summary ?? '')
       }
@@ -322,8 +324,18 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
         afterTools: async (ctx, calls) => {
           // Only an actual full verification for this request and exact inputs
           // starts closeout. Partial stage checks and self-reported success do not.
-          if (scopePending || !calls.some(c => c.status === 'ok' && !c.pending && ['verify_app','check_quality_finding'].includes(c.name))) return
-          if (!await recentSoftwareVerification(input.projectId,input.requestId,ctx.signal)) return
+          const reviewed=calls.some(c=>c.status==='ok'&&['start_quality_review','start_visual_review'].includes(c.name))
+          if (scopePending || !reviewed&&!calls.some(c => c.status === 'ok' && !c.pending && ['verify_app','check_quality_finding'].includes(c.name))) return
+          // A manually requested review is the same closeout transition as a
+          // host-requested one. Wait for it, then establish current full evidence
+          // before returning control; otherwise A can drift into optional edits
+          // between C and V and invalidate the very candidate just reviewed.
+          if(reviewed){const waiting=await waitForProductionChildren(ctx);if(waiting)return{feedback:waiting}}
+          if (!await recentSoftwareVerification(input.projectId,input.requestId,ctx.signal)) {
+            if(!reviewed)return
+            const checked=await verifySoftwareCandidate(input.projectId,input.requestId,ctx.signal)
+            if(checked.status!=='passed')return{feedback:'QUALITY_CLOSEOUT_CHECK_REQUIRED: '+JSON.stringify(verificationToolReport(input.projectId,checked))}
+          }
           const feedback = await advanceCloseout(ctx)
           return feedback ? { feedback } : { complete: true }
         }, recoveryContext: () => renderSoftwareWorkingContext(input.projectId), publish: emit }) }

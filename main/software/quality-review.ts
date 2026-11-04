@@ -300,7 +300,7 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       stored.visual_delivery = { at: new Date().toISOString(), image_hash: review.visual.image_hash, request_hash: requestHash }; save(ledger)
     }
   }
-  return { prepare, system, gate, begin, completionAction: async (signal?: AbortSignal) => { const reason = await gate(signal), current = await identity(projectId, signal); return qualityCloseout(readQualityLedger(projectId), current, reason, rulesVersion(projectId), independentDesignVersion(projectId)) }, parentTools, reviewTools, wrapQuery, isQualityChild: (child: string) => children.has(child),
+  return { prepare, system, gate, begin, acceptedHandoff:(delegation:string,child:string)=>readQualityLedger(projectId).reviews.some(r=>r.delegation===delegation&&r.child===child&&r.status==='complete'), completionAction: async (signal?: AbortSignal) => { const reason = await gate(signal), current = await identity(projectId, signal); return qualityCloseout(readQualityLedger(projectId), current, reason, rulesVersion(projectId), independentDesignVersion(projectId)) }, parentTools, reviewTools, wrapQuery, isQualityChild: (child: string) => children.has(child),
     // The role-only tool builder cannot know the child ID until execute. Protocol
     // tools authenticate the actual session, including against parent forgeries.
     childProtocol }
