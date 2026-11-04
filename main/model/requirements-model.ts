@@ -1,9 +1,11 @@
+import { experienceIssues, type PersonalExperience } from './personal-intent'
 import type { PrdBackplane, SketchRequirement } from './prd-backplane'
 import { validRequirementCapabilities } from './requirement-capabilities'
 
 /** Sources belong to the host; the model may reference them but may not invent user statements. */
 export interface RequirementSource { id: string; text: string }
 export interface RequirementsModel {
+  experience?: PersonalExperience
   version: 1
   goal: string
   target_users: string[]
@@ -109,6 +111,11 @@ export function validateRequirementsModel(raw: unknown, features: SketchRequirem
   for (const rule of rules) for (const id of list(rule.feature_ids)) {
     if (!scenarios.some(row => row.feature_id === id && row.not_applicable === undefined && list(row.rule_ids).includes(rule.id))) issues.push(`${rule.id} 未在关联功能 ${id} 的验收中覆盖`)
   }
+  issues.push(...experienceIssues(raw.experience, featureIds, sourceIds, new Set(scenarios.filter(s => s.not_applicable === undefined).map(s => String(s.id)))))
+  if (record(raw.experience) && Array.isArray(raw.experience.commitments)) for (const c of raw.experience.commitments) {
+    if (record(c) && Array.isArray(c.scenario_ids) && Array.isArray(c.feature_ids)
+      && c.scenario_ids.some(id => !scenarios.some(s => s.id === id && (c.feature_ids as unknown[]).includes(s.feature_id)))) issues.push('核心体验场景与功能不匹配')
+  }
   const covered = new Set<string>()
   for (const row of list(raw.coverage)) {
     if (!record(row)) { issues.push('来源覆盖条目无效'); continue }
@@ -174,6 +181,7 @@ export function renderRequirementsDocument(backplane: PrdBackplane): string {
   const model = backplane.requirements_model!
   const lines = [`# PRD：${backplane.name || backplane.positioning}`, '', '## 目标与范围', model.goal,
     `目标用户：${model.target_users.join('、')}`, `产品定位：${backplane.positioning}`, '', '## 核心对象与关系']
+  if (model.experience) lines.push('', '## 核心体验', model.experience.summary, ...model.experience.commitments.map(c => `- ${c.id} ${c.statement}；不能替代为：${c.unacceptable_substitute}`))
   for (const entity of model.entities) lines.push(`- [${entity.id}] ${entity.name}：${entity.description}；属性：${entity.attributes.join('、') || '无额外属性'}`)
   for (const relation of model.relations) lines.push(`- ${relation.from} → ${relation.to}：${relation.description}`)
   if (!model.entities.length) lines.push('- 本产品无需要独立管理的业务对象')

@@ -549,7 +549,7 @@ export interface GenerationGuardrails {
 export interface PrdBackplane {
   project_plan?: { version: 1; stages: Array<{ id: string; title: string; feature_ids: string[] }>; current: string }
   /** Small production brief, with source provenance; no synthetic requirements graph. */
-  lean_brief?: { design_theme?: import('../../shared/product-design-theme').ProductDesignTheme; version: 1; ui: 'required' | 'none'; delivery?: 'desktop' | 'browser' | 'command'; distribution?: 'local' | 'portable' | 'installer' | 'source'; preview?: 'skip' | 'reuse'; reference_html_hash?: string; source_session_id: string; source_sha256: string }
+  lean_brief?: { design_assets?: import('./design-assets').DesignAsset[]; design_theme?: import('../../shared/product-design-theme').ProductDesignTheme; version: 1; ui: 'required' | 'none'; delivery?: 'desktop' | 'browser' | 'command'; distribution?: 'local' | 'portable' | 'installer' | 'source'; preview?: 'skip' | 'reuse'; reference_html_hash?: string; source_session_id: string; source_sha256: string }
   /** Structured business requirements; old projects without this field remain readable. */
   requirements_model?: import('./requirements-model').RequirementsModel
   project_id: string

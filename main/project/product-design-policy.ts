@@ -8,6 +8,7 @@ export function productDesignPolicy(brief: PrdBackplane) {
   return {
     mode: theme ? 'platform_default' : 'legacy_preserve',
     theme: theme ? snapshotProductTheme(theme) : undefined,
+    assets: brief.lean_brief.design_assets,
     priority: ['explicit_user_style_and_assets', 'confirmed_project_design', 'project_default_theme'],
     user_constraints: brief.constraints ?? [],
     guidance: theme

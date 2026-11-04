@@ -1,3 +1,4 @@
+import { sessionMaterials } from '../platform/attachments/material-context'
 import { prepareGuiAcceptance } from '../desktop/gui-acceptance-preparation'
 import { ConfirmationMap, loadGuideConfirmationForResume, archiveGuideConfirmation, clearGuideConfirmationFilesForTests } from './confirmation-journal'
 /**

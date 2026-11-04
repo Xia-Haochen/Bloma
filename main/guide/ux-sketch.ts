@@ -1,3 +1,6 @@
+import type { MaterialContext } from '../../shared/attachment-types'
+import { ATTACHMENT_LIMITS } from '../../shared/attachment-types'
+import { materialImageRefs, renderMaterialContext } from '../platform/attachments/material-context'
 import { productDesignPolicy } from '../project/product-design-policy'
 /**
  * UX 外观草图生成（2026-10-04 确认门新规，实施稿《Bloma-确认门与呈现层-20261004》）。
@@ -188,6 +191,7 @@ function escapeHtml(text: string): string {
 }
 
 export interface UxSketchOptions {
+  materials?: MaterialContext
   visualDirection?: string
   feedbackSource?: 'user' | 'visual_review'
   attempts?: 1 | 2 | 3 | 4
@@ -208,7 +212,17 @@ export interface UxSketchOptions {
 }
 export async function generateUxSketch(options: UxSketchOptions): Promise<UxSketchResult> {
   if (options.signal?.aborted) throw new Error('UX_SKETCH_ABORTED')
-  const prompt = buildSketchPrompt(options) + (options.backplane?.lean_brief ? '\n项目视觉策略：' + JSON.stringify(productDesignPolicy(options.backplane)) : '')
+  const boundAssets = options.backplane?.lean_brief?.design_assets?.filter(a => a.role !== 'content') ?? []
+  let materials = options.materials
+  if (materials && (materials.project_id !== options.project_id || materials.owner_session_id !== options.session_id)) throw Error('UX_MATERIAL_OWNER_MISMATCH')
+  if (boundAssets.length) {
+    if (boundAssets.some(a => !materials?.attachments.some(m => m.attachment_id === a.attachment_id && m.sha256 === a.sha256))) throw Error('UX_REQUIRED_MATERIAL_UNAVAILABLE')
+    materials = { ...materials!, attachments: materials!.attachments.filter(m => boundAssets.some(a => a.attachment_id === m.attachment_id)) }
+  }
+  if (materials && materials.attachments.filter(m => m.kind !== 'text').length > ATTACHMENT_LIMITS.images) throw Error('UX_REFERENCE_IMAGE_CAPACITY: 参考图超过单次容量，需分批设计，不得静默忽略')
+  const referenceImages = materials ? materialImageRefs(materials) : []
+  const referenceText = materials ? renderMaterialContext(materials, options.session_id, true) : ''
+  const prompt = buildSketchPrompt(options) + (referenceText ? '\n用户设计材料（用途以确认策略为准）：' + referenceText : '') + (options.backplane?.lean_brief ? '\n项目视觉策略：' + JSON.stringify(productDesignPolicy(options.backplane)) : '')
   const lean = Boolean(options.backplane?.lean_brief)
   const structured = Boolean(options.backplane && !lean)
   const resolvedPrompt = loadPromptWithSource('sketch-system', lean ? LEAN_SKETCH_PROMPT : UX_SKETCH_SYSTEM_PROMPT)
@@ -244,7 +258,7 @@ export async function generateUxSketch(options: UxSketchOptions): Promise<UxSket
   const llm = await callLlmForJson<UxSketchResult>({
     systemPrompt,
     prompt,
-    query: options.query,
+    query: (prompt, queryOptions) => options.query(prompt, { ...queryOptions, ...(referenceImages.length ? { images: referenceImages } : {}) }),
     env: options.env,
     sessionId: options.session_id,
     maxTokens: options.maxTokens,

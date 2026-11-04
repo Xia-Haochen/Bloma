@@ -242,7 +242,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     '局部外观和缺陷直接修改。用户新增、删除业务能力或改变业务预期时，先用propose_scope_change保留原功能及新增预期并等待确认，不能在旧任务单下宣称新增功能已验收。',
     JSON.stringify({ goal: brief.positioning, requirements: brief.requirements.map(row => ({ id: row.id, description: row.description,
       expected: brief.acceptance[row.id], requirement_hash: requirementEvidenceHash(brief, row) })), constraints: brief.constraints,
-      out_of_scope: brief.out_of_scope, assumptions: brief.assumptions, design_policy: productDesignPolicy(brief), delivery: brief.lean_brief.delivery, distribution: brief.lean_brief.distribution ?? 'local' }),
+      intent: brief.requirements_model && { experience: brief.requirements_model.experience, rules: brief.requirements_model.rules, workflows: brief.requirements_model.workflows }, out_of_scope: brief.out_of_scope, assumptions: brief.assumptions, design_policy: productDesignPolicy(brief), delivery: brief.lean_brief.delivery, distribution: brief.lean_brief.distribution ?? 'local' }),
     '保留真实用户数据与配置；测试使用隔离数据目录。预期依据已确认目标，不能改预期掩盖失败。特殊能力登记与执行细节可通过read_production_context按需读取。',
     '不强制额外测试脚本或自报PASS。特殊能力需要时在CORE_CHECK.json只登记实际入口，例如llm/speech；用read_production_context按需查看协议。未实现或未验证的必需能力如实保留。',
     brief.lean_brief.ui === 'required' ? `界面任务登记register_gui_check：steps需id/kind/selector，expect用equals；仅留存任务加restart且重开后仍需expect。${'宿主绑定已确认预期，不用复制expectations；只提交steps和acceptance_refs（expect步骤id→F编号数组）。'}宿主独立操作应用，登记不等于通过。` : '无界面任务登记register_cli_check：固定args与stdout/exit_code，宿主调用实际LAUNCH入口。一次性命令在LAUNCH写mode:"command"，服务默认保持运行。',

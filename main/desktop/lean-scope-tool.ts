@@ -1,3 +1,4 @@
+import { sessionMaterials } from '../platform/attachments/material-context'
 import type { AgentLoopTool } from '../agent/loop/agent-loop'
 import { parseLeanBrief } from '../guide/lean-brief'
 import { authorizesSkipPreview, stageLeanScope } from '../guide/lean-scope'
@@ -17,12 +18,14 @@ export function buildLeanScopeTool(projectId: string, source: string, emit: Para
       requirements: { type: 'array', items: { type: 'object', required: ['description', 'expected'], properties: {
         id: { type: 'string' }, description: { type: 'string' }, expected: { type: 'string' } } } },
       constraints: { type: 'array', items: { type: 'string' } }, out_of_scope: { type: 'array', items: { type: 'string' } },
+      requirements_model: { type: 'object', description: '沿用features上下文的完整需求模型并按用户改意更新；已有模型不能省略。来源由宿主回填。' },
+      design_assets: { type: 'array', items: { type: 'object' } },
       assumptions: { type: 'array', items: { type: 'string' } },
     } }, execute: async (input, ctx) => {
       if (ctx.projectId !== projectId) return { output: 'SCOPE_PROJECT_MISMATCH', isError: true }
       if (listDelegations(ctx.sessionId).some(row => row.status === 'running')) return { output: '请先等待或停止正在执行的子任务，再更新范围。', isError: true }
       const previous = readPrdBackplane(projectId)
-      const parsed = parseLeanBrief(JSON.stringify({ ...input, action: 'brief' }), { projectId, sessionId: ctx.sessionId, source, previous, software: isSoftwareProject(projectId) })
+      const parsed = parseLeanBrief(JSON.stringify({ ...input, action: 'brief' }), { projectId, sessionId: ctx.sessionId, source, previous, assets: sessionMaterials(projectId, ctx.sessionId).attachments, software: isSoftwareProject(projectId) })
       if (!parsed || parsed.action !== 'brief') return { output: 'SCOPE_INVALID_BRIEF', isError: true }
       if (prdScopeFingerprint(previous) === prdScopeFingerprint(parsed.brief)) return { output: '范围未变化，直接处理本次局部修改。' }
       if (authorizesSkipPreview(source)) parsed.brief.lean_brief!.preview = 'skip'

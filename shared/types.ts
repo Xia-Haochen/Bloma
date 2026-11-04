@@ -1148,6 +1148,8 @@ export interface LeanScopeSuggestion {
 }
 
 export interface LeanScopeView {
+  intent?: { experience?: import('./personal-intent-types').PersonalExperience; rules: Array<{ id: string; statement: string }> }
+  design_assets?: import('./personal-intent-types').DesignAsset[]
   goal: string
   features: Array<{ id: string; description: string; expected: string }>
   constraints: string[]

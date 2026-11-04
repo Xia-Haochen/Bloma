@@ -7,6 +7,14 @@ import { ScopeConfirmationPanel } from '../../renderer/components/ScopeConfirmat
 import { loadSessionHistory, agentStreamStateFamily, activeAgentSessionIdAtom, previewUrlsAtom } from '../../renderer/agent-atoms'
 import type { ElectronAPI } from '../../shared/types'
 afterEach(() => { cleanup(); delete window.electronAPI; delete window.__jotai_store__ })
+it('shows the distinctive experience, exception and asset role before confirmation', () => {
+  render(<ScopeConfirmationPanel scope={{ goal: '收藏辩论', usage: '本机', features: [], constraints: [], out_of_scope: [],
+    intent: { experience: { summary: '不同收藏表达不同立场', commitments: [{ id: 'EXP-001', statement: '每件收藏参与辩论', unacceptable_substitute: '只列清单', source_ids: [], feature_ids: [], scenario_ids: [] }] }, rules: [{ id: 'BR-001', statement: '纪念品改名后仍豁免' }] },
+    design_assets: [{ attachment_id: 'asset', sha256: 'abc', role: 'style_reference', usage: '借鉴纸张质感', transformations: '不作背景' }] }} options={[]} onSelect={() => {}} busy={false} />)
+  expect(screen.getByText('纪念品改名后仍豁免')).toBeTruthy()
+  expect(screen.getByText('不能替代为：只列清单')).toBeTruthy()
+  expect(screen.getByText(/借鉴纸张质感.*风格参考/)).toBeTruthy()
+})
 it('shows readable structured goals and acceptance in the main panel without developer feature ids', () => {
   const select = vi.fn()
   render(<ScopeConfirmationPanel scope={{ goal: '课程笔记', usage: '在本机浏览器使用', features: [{ id: 'F-001', description: '自动保存', expected: '重开后仍保留' }], constraints: ['无需联网'], out_of_scope: ['账号'] }}

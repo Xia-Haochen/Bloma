@@ -46,7 +46,7 @@ export function softwareWorkingContext(projectId: string, busy = true) {
   catch { budget = { accounting_available: false, error: '当前计量记录不可读；以请求/金额准入保护为准，不从旧索引推断剩余额度。' } }
   return { project_id: projectId, operation_id: project.lean_operation_id, session_id: current?.sessionId ?? project.last_session_id,
     project_state_topic: 'project-state', goal_excerpt: brief.positioning.slice(0, 600), confirmed: Boolean(brief.user_confirmed_at), scope_hash: prdScopeFingerprint(brief), feature_ids: brief.requirements.slice(0, 128).map(r => r.id), feature_count: brief.requirements.length,
-    status: softwareStatusView(projectId, busy), current_source: source, checkpoint_source: current?.source,
+    intent: brief.requirements_model && { experience: brief.requirements_model.experience, rules: brief.requirements_model.rules }, status: softwareStatusView(projectId, busy), current_source: source, checkpoint_source: current?.source,
     source_changed_since_checkpoint: source && current?.source ? source !== current.source : undefined,
     pending_commands: activeSoftwareCommands(projectId, current?.sessionId ?? project.last_session_id ?? ''),
     current_error: current?.error?.slice(0, 800), historical_failure: current?.last_failure && { ...current.last_failure, error: current.last_failure.error.slice(0, 800) },
@@ -62,7 +62,7 @@ export function renderSoftwareWorkingContext(projectId: string) {
   return '【宿主工作状态摘要】\n' + (encoded.length <= 7400 ? encoded : JSON.stringify({
     project_id: facts.project_id, operation_id: facts.operation_id, scope_hash: facts.scope_hash, current_source: facts.current_source,
     execution_status: facts.status.execution.status, verification_status: facts.status.verification.status, goal_status: facts.status.goal.status,
-    budget: facts.budget, pending_commands: facts.pending_commands, context_truncated: true,
+    budget: facts.budget, pending_commands: facts.pending_commands, context_truncated: true, intent: facts.intent,
     instruction: '完整现场按需读取working-state；当前摘要不代表通过，不重放安装或其它副作用。',
   }))
 }

@@ -110,7 +110,7 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       materialsRead.add(ctx.sessionId)
       return { output: JSON.stringify({ review, root: findProject(projectId).root_path, goal: brief.positioning, constraints: brief.constraints, confirmed_ux: ux, design_policy: productDesignPolicy(brief),
         confirmed_design: review.kind === 'visual' && ux?.html_path ? { html: readFileSync(join(findProject(projectId).root_path, ux.html_path), 'utf8').slice(0, 64000), bounded_characters: 64000 } : undefined,
-        visual_facts: visual, visual_checklist: review.kind === 'visual' ? visualReviewChecklist : undefined,
+        intent: brief.requirements_model, visual_facts: visual, visual_checklist: review.kind === 'visual' ? visualReviewChecklist : undefined,
         requirements: brief.requirements.map(r => ({ id: r.id, description: r.description, expected_source: trustedAcceptance(brief, r) })), out_of_scope: brief.out_of_scope }) }
     } }, { name: 'submit_quality_findings', description: '提交只读疑点，不得指定状态或PASS。expected_source逐字引用确认预期；无依据增强标suggestion，预期有争议标disputed。宿主生成ID、绑定候选；只能提交一次。',
     input_schema: { type: 'object', additionalProperties: false, required: ['findings'], properties: { visual_observations: { type: 'array', maxItems: 16, items: { type: 'object', additionalProperties: false, required: ['image_sha256', 'area', 'region', 'observed'], properties: { area: { type: 'string', enum: Object.keys(visualReviewChecklist) }, image_sha256: { type: 'string' }, region: { type: 'string', maxLength: 1000 }, observed: { type: 'string', maxLength: 2000 } } } }, findings: { type: 'array', maxItems: 32, items: { type: 'object', additionalProperties: false,

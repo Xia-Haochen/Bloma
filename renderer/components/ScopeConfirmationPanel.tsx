@@ -18,6 +18,9 @@ export const ScopeConfirmationPanel: React.FC<{ scope?: LeanScopeView; summary?:
     <div className="scope-confirmation-content">
       {scope ? <><p className="scope-goal">{scope.goal}</p><span className="scope-usage">{scope.usage}</span><h3>包含这些功能</h3>
         <ol>{scope.features.map(feature => <li key={feature.id}><strong>{feature.description}</strong>{feature.expected && <p>{feature.expected}</p>}</li>)}</ol>
+        {scope.intent?.experience && <><h3>核心体验</h3><p>{scope.intent.experience.summary}</p><ul>{scope.intent.experience.commitments.map(c => <li key={c.id}>{c.statement}<p>不能替代为：{c.unacceptable_substitute}</p></li>)}</ul></>}
+        {Boolean(scope.intent?.rules.length) && <><h3>关键规则与例外</h3><ul>{scope.intent!.rules.map(r => <li key={r.id}>{r.statement}</li>)}</ul></>}
+        {Boolean(scope.design_assets?.length) && <><h3>素材用途</h3><ul>{scope.design_assets!.map(a => <li key={a.attachment_id}>{a.usage}（{{required_asset:'必须使用',style_reference:'风格参考',content:'业务内容'}[a.role]}；{a.transformations}）</li>)}</ul></>}
         {scope.constraints?.length > 0 && <><h3>需要遵守</h3><ul>{scope.constraints.map(text => <li key={text}>{text}</li>)}</ul></>}
         {scope.out_of_scope?.length > 0 && <><h3>这次先不做</h3><ul>{scope.out_of_scope.map(text => <li key={text}>{text}</li>)}</ul></>}
         {Boolean(scope.suggestions?.length) && <div className="scope-suggestions" role="group" aria-labelledby={headingId}>
