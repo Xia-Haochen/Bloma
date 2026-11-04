@@ -23,6 +23,7 @@ import { debugWorkspace } from './debug-workspace'
 import { saveSourceCheckpoint } from './source-checkpoints'
 import { isNativeGuiTestModule } from './native-gui-tests'
 import { softwareStartupError, waitForSoftwareWindow } from './startup-diagnostics'
+import { isolateNativeTestWindows } from './native-window-isolation'
 
 export interface DebugObservation { seq: number; at: string; version: number; action?: string; kind: string; message: string;
   duration_ms?: number; method?: string; url?: string; status?: number }
@@ -140,6 +141,7 @@ async function openManagedElectron(session: DebugSession, signal: AbortSignal) {
   if (!session.browser) throw Error('DEBUG_BROWSER_CONTEXT_MISSING')
   session.browser.on('page', page => observePage(session, page))
   session.page = await waitForSoftwareWindow(session.browser, () => softwareProcess(session.snapshot.projectId, process.id, session.owner), signal)
+  if (session.formal && session.nativeRoot) log(session, 'environment.input_isolation', JSON.stringify(await isolateNativeTestWindows(session.nativeRoot, signal)))
   observePage(session, session.page)
 }
 export function hasDebugSession(projectId: string, sessionId: string): boolean {
