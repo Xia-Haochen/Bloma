@@ -118,6 +118,9 @@ it('sends actual candidate PNG through Pi/native HTTP, records V findings in the
   expect(wireBodies.map(body => visualHash(body))).toContain(visual.visual_delivery?.request_hash)
   expect(wireBodies.some(body => body.includes('"type":"image"'))).toBe(true)
   const imageBody = wireBodies.find(body => body.includes('"type":"image"'))!
+  const visualSubmit=JSON.parse(imageBody).tools.find((tool:{name:string})=>tool.name==='submit_quality_findings').input_schema
+  expect(visualSubmit.properties).not.toHaveProperty('intent_observations')
+  expect(visualSubmit.required).toContain('visual_observations')
   expect(assertVisualRequest(imageBody, visual.visual!.image_hash)).toMatch(/^[a-f0-9]{64}$/)
   const finding = ledger.findings[0]; expect(finding.review_kind).toBe('visual'); expect(finding.disposition).toBe('suspected')
   const artifacts = join(process.cwd(), 'run-artifacts', 'q2-visual'); mkdirSync(artifacts, { recursive: true })

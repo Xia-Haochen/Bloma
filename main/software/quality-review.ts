@@ -5,7 +5,7 @@ import { defaultQuickSecurityGate } from '../desktop/production-contracts'
 import { runtimeInventory } from './release-store'
 import { compactReviewManifest, reviewChangeContext, repeatedReviewFailure } from './quality-review-context'
 import { canonicalFindingReference } from './quality-reference'
-import { validateIntentObservations } from './intent-review'
+import { validateIntentObservations, bindIntentFindings } from './intent-review'
 import { productDesignPolicy } from '../project/product-design-policy'
 import { findingNeedsClosure, findingNeedsInvestigation, importantFinding, sameQualityScope, qualityCloseout, qualityWorkQueue, observedQualityFinding } from './quality-closeout'
 import { visualReviewChecklist, visualCoverageComplete } from './visual-review-checklist'
@@ -133,10 +133,10 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       materialsRead.add(ctx.sessionId)
       return { output: JSON.stringify({ review, root: findProject(projectId).root_path, goal: brief.positioning, constraints: brief.constraints, assumptions: brief.assumptions, confirmed_ux: ux, design_policy: productDesignPolicy(brief),
         confirmed_design: review.kind === 'visual' && ux?.html_path ? { html: readFileSync(join(findProject(projectId).root_path, ux.html_path), 'utf8').slice(0, 64000), bounded_characters: 64000 } : undefined,
-        review_focus: review.kind === 'visual' ? undefined : reviewChangeContext(ledger, review.identity, review.source_manifest, review.id), intent: brief.requirements_model, intent_review_protocol: review.kind === 'visual' ? 'V仅按当前真实图片和同次操作事实检查布局/交互/内容/覆盖范围；不得声称核对全部长期业务。核心体验上下文用于识别偏题，具体疑点提交finding。无需提交intent_observations。' : '有experience时逐项提交intent_observations:{commitment_id,status:supported|concern|unverified,evidence,limitations}；核对禁止替代。supported只是审阅意见，不代表真实运行通过。concern需关联finding；证据不足保留unverified。', visual_facts: visual, visual_checklist: review.kind === 'visual' ? visualReviewChecklist : undefined,
+        review_focus: review.kind === 'visual' ? undefined : reviewChangeContext(ledger, review.identity, review.source_manifest, review.id), intent: brief.requirements_model, intent_review_protocol: review.kind === 'visual' ? 'V仅按当前真实图片和同次操作事实检查布局/交互/内容/覆盖范围；不得声称核对全部长期业务。核心体验上下文用于识别偏题，具体疑点提交finding。截图可能保留用户或测试修改后的状态，当前数值不等于出厂默认；明确区分所见事实与推断。可自定义设置按已确认范围判断，不擅自把默认偏好变成禁止修改的约束。无需提交intent_observations。' : '有experience时逐项提交intent_observations:{commitment_id,status:supported|concern|unverified,evidence,limitations}；核对禁止替代。supported只是审阅意见，不代表真实运行通过。concern须提供finding_indices，填本次findings数组中对应问题的0起始索引，只关联真正影响该体验的问题；证据不足保留unverified。', visual_facts: visual, visual_checklist: review.kind === 'visual' ? visualReviewChecklist : undefined,
         requirements: brief.requirements.map(r => ({ id: r.id, description: r.description, expected_source: trustedAcceptance(brief, r) })), out_of_scope: brief.out_of_scope }) }
     } }, { name: 'submit_quality_findings', description: '提交只读疑点，不得指定状态或PASS。requirement只填F编号，expected_source从read_quality_review的expected_source逐字复制（不写来源说明或编号拼接）；无依据增强标suggestion，预期有争议标disputed。宿主生成ID、绑定候选；只能提交一次。',
-    input_schema: { type: 'object', additionalProperties: false, required: ['findings'], properties: { intent_observations: { type: 'array', maxItems: 32, items: { type: 'object', additionalProperties: false, required: ['commitment_id','status','evidence','limitations'], properties: { commitment_id: {type:'string'}, status:{type:'string',enum:['supported','concern','unverified']}, evidence:{type:'string'}, limitations:{type:'string'} } } }, visual_observations: { type: 'array', maxItems: 16, items: { type: 'object', additionalProperties: false, required: ['image_sha256', 'area', 'region', 'observed'], properties: { area: { type: 'string', enum: Object.keys(visualReviewChecklist) }, image_sha256: { type: 'string' }, region: { type: 'string', maxLength: 1000 }, observed: { type: 'string', maxLength: 2000 } } } }, findings: { type: 'array', maxItems: 32, items: { type: 'object', additionalProperties: false,
+    input_schema: { type: 'object', additionalProperties: false, required: ['findings'], properties: { intent_observations: { type: 'array', maxItems: 32, items: { type: 'object', additionalProperties: false, required: ['commitment_id','status','evidence','limitations'], properties: { commitment_id: {type:'string'}, status:{type:'string',enum:['supported','concern','unverified']}, evidence:{type:'string'}, limitations:{type:'string'}, finding_indices:{type:'array',maxItems:32,uniqueItems:true,items:{type:'integer',minimum:0},description:'concern必填；对应本次findings数组的0起始索引，不关联同功能的无关建议'} } } }, visual_observations: { type: 'array', maxItems: 16, items: { type: 'object', additionalProperties: false, required: ['image_sha256', 'area', 'region', 'observed'], properties: { area: { type: 'string', enum: Object.keys(visualReviewChecklist) }, image_sha256: { type: 'string' }, region: { type: 'string', maxLength: 1000 }, observed: { type: 'string', maxLength: 2000 } } } }, findings: { type: 'array', maxItems: 32, items: { type: 'object', additionalProperties: false,
       required: ['expected_source', 'category', 'severity', 'location', 'trigger', 'evidence', 'reproduction', 'unknowns', 'kind'], anyOf: [{ required: ['requirement'] }, { required: ['requirement_id'] }],
       properties: { ...Object.fromEntries(['requirement', 'expected_source', 'category', 'location', 'trigger', 'evidence', 'reproduction', 'unknowns'].map(key => [key, { type: 'string', maxLength: 4000 }])),
         requirement_id: { type: 'string', enum: [...readPrdBackplane(projectId).requirements.map(r => r.id), 'unscoped'], description: 'requirement的兼容别名；同时提供时必须相同。' },
@@ -169,8 +169,7 @@ export function createQualityReview(projectId: string, parent: string, policy: R
         return { ...finding, id: randomUUID(), review: review.id, review_kind: review.kind ?? 'code', visual_material_hash: review.visual?.manifest_hash, identity: review.identity, disposition, checks: [] } as unknown as QualityFinding
       })
       const intent = validateIntentObservations(input.intent_observations, review.kind === 'visual' ? undefined : brief.requirements_model?.experience)
-      if (intent?.some(o => o.status === 'concern' && !rows.some(f => brief.requirements_model!.experience!.commitments.find(c => c.id === o.commitment_id)!.feature_ids.includes(f.requirement)))) throw Error('INTENT_CONCERN_FINDING_REQUIRED')
-      review.intent_observations = intent?.map(o => ({ ...o, finding_ids: rows.filter(f => brief.requirements_model!.experience!.commitments.find(c => c.id === o.commitment_id)!.feature_ids.includes(f.requirement)).map(f => f.id) }))
+      review.intent_observations = bindIntentFindings(intent,brief.requirements_model?.experience,rows)
       ledger.findings.push(...rows); review.status = 'submitted'; save(ledger)
       return { output: JSON.stringify({ submitted: true, findings: rows, verification: 'unverified' }) }
     } }, { name: 'view_quality_image', description: '读取本视觉子会话获宿主授权的当前候选真实PNG。无path或debug_session_id参数；跨会话、过期、换图拒绝。附图之后还须实际核对并提交具体可见观察，图片本身不签发PASS。', input_schema: { type: 'object', additionalProperties: false, properties: {} }, execute: async (input, ctx) => {
@@ -243,14 +242,23 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       return { output: JSON.stringify(await begin(ctx, 'visual', input.debug_session_id as string | undefined)) }
     } },
     { name: 'read_quality_findings', description: '默认读取当前必修/待复现队列和审阅状态；历史建议保留但不自动扩大范围。finding_id按需读取单条完整历史证据。', input_schema: { type: 'object', additionalProperties:false, properties: {finding_id:{type:'string'}} }, execute: async (input, ctx) => { assertParent(ctx); const reason = await gate(ctx.signal), current = await identity(projectId, ctx.signal), ledger = readQualityLedger(projectId); if(input.finding_id!==undefined){const finding=ledger.findings.find(f=>f.id===input.finding_id);if(!finding)throw Error('QUALITY_FINDING_UNKNOWN');return{output:JSON.stringify({finding,gate:reason})}}return { output: JSON.stringify({ ...qualityWorkQueue(ledger,current,reason,rulesVersion(projectId),independentDesignVersion(projectId)), gate: reason }) } } }, check]
-  const reviewTools = (tools: AgentLoopTool[], child?: string): AgentLoopTool[] => child && readQualityLedger(projectId).reviews.find(r => r.id === children.get(child))?.kind === 'visual' ? childProtocol : [...tools.filter(t => ['read_file', 'list_files', 'find', 'grep'].includes(t.name)).map(tool => ({
+  const reviewProtocol=(kind?:'code'|'visual')=>childProtocol.map(tool=>{
+    if(!kind||tool.name!=='submit_quality_findings')return tool
+    const schema=tool.input_schema as {properties:Record<string,unknown>;required?:string[]}
+    const properties={...schema.properties};delete properties[kind==='visual'?'intent_observations':'visual_observations']
+    const required=[...(schema.required??[])]
+    if(kind==='visual')required.push('visual_observations')
+    else if(readPrdBackplane(projectId).requirements_model?.experience)required.push('intent_observations')
+    return{...tool,input_schema:{...tool.input_schema,properties,required}}
+  })
+  const reviewTools = (tools: AgentLoopTool[], child?: string): AgentLoopTool[] => child && readQualityLedger(projectId).reviews.find(r => r.id === children.get(child))?.kind === 'visual' ? reviewProtocol('visual') : [...tools.filter(t => ['read_file', 'list_files', 'find', 'grep'].includes(t.name)).map(tool => ({
     ...tool, execute: async (input: Record<string, unknown>, ctx: ToolContext) => {
       if (readQualityLedger(projectId).reviews.find(r => r.id === children.get(ctx.sessionId))?.kind === 'visual') throw Error('VISUAL_SOURCE_READ_DENIED: V只使用授权图片和操作事实')
       const result = await tool.execute(input, ctx)
       if (tool.name === 'read_file' && !result.isError && children.has(ctx.sessionId)) sourceRead.add(ctx.sessionId)
       return result
     }
-  })), ...childProtocol]
+  })), ...reviewProtocol(child?'code':undefined)]
   const wrapQuery = (query: SDKQuery): SDKQuery => async function* (prompt, options) {
     const route = hash([options.env.ANTHROPIC_BASE_URL, options.env.ANTHROPIC_MODEL, options.env.ANTHROPIC_PROVIDER_TYPE, options.providerType])
     activeRoute = route

@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest'
 import { deriveExpected } from '../../../main/software/independent-oracles'
 import { assessIndependentCases, parseIndependentCases } from '../../../main/software/independent-semantics'
-import { validateIntentObservations } from '../../../main/software/intent-review'
+import { validateIntentObservations, bindIntentFindings } from '../../../main/software/intent-review'
 import { organizedPrd } from '../../support/organized-prd'
 import { bindAcceptance, requirementEvidenceHash } from '../../../main/project/requirement-contract'
 
@@ -31,4 +31,15 @@ it('requires each distinctive commitment to receive evidence and limitations, ne
   expect(()=>validateIntentObservations([],experience)).toThrow('REQUIRED')
   expect(()=>validateIntentObservations([{commitment_id:'EXP-001',status:'PASS',evidence:'好',limitations:'无'}],experience)).toThrow('INVALID')
   expect(validateIntentObservations([{commitment_id:'EXP-001',status:'unverified',evidence:'只有静态截图',limitations:'未见轮次切换'}],experience)?.[0].status).toBe('unverified')
+})
+it('binds a core concern only to explicitly cited findings, not every suggestion sharing its feature',()=>{
+  const experience={summary:'互动',commitments:[{id:'EXP-001',statement:'轮流辩论',source_ids:['S-001'],feature_ids:['F-001'],scenario_ids:['AC-001'],unacceptable_substitute:'通用聊天框'}]}
+  const observation={commitment_id:'EXP-001',status:'concern',evidence:'轮次未切换',limitations:'未运行'}
+  const findings=[{id:'unrelated-suggestion',requirement:'F-001'},{id:'actual-concern',requirement:'F-001'},{id:'foreign',requirement:'F-002'}]
+  expect(()=>validateIntentObservations([observation],experience)).toThrow('INDICES_REQUIRED')
+  const parsed=validateIntentObservations([{...observation,finding_indices:[1]}],experience)
+  expect(bindIntentFindings(parsed,experience,findings)?.[0].finding_ids).toEqual(['actual-concern'])
+  for(const index of [2,9])expect(()=>bindIntentFindings(validateIntentObservations([{...observation,finding_indices:[index]}],experience),experience,findings)).toThrow('REFERENCE_INVALID')
+  expect(()=>validateIntentObservations([{...observation,finding_indices:[1,1]}],experience)).toThrow('INVALID')
+  expect(()=>validateIntentObservations([{...observation,finding_indices:[-1]}],experience)).toThrow('INVALID')
 })
