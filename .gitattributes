@@ -2,3 +2,6 @@
 outputs/experiment-report-20261017/** -text whitespace=cr-at-eol
 tests/fixtures/software-import/*.pdf -text
 tests/fixtures/software-import/*.docx -text
+
+# Personal-wish requests and assets carry byte hashes; do not rewrite line endings.
+tests/fixtures/personal-wish/** -text
