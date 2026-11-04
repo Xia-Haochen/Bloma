@@ -55,7 +55,7 @@ export async function inspectDoodleFaults(projectId:string,folder:string){
     }finally{releaseSecond();await page.unroute('**/api/artworks/*',second)}
     await page.screenshot({path:join(root,'race.png'),fullPage:true});await app.close();app=undefined
     const require=createRequire(import.meta.url),modulePath=join(release.root,'server.js')
-    const invalidRule = structuredClone(seed); invalidRule.rules[0].noteSpeed.slow = 'unrecognized-note'
+    const invalidRule = structuredClone(seed); invalidRule.rules[0].noteSpeed.slow = '<b id="independent-invalid-markup">unrecognized-note</b>'
     for(const [name,bytes]of [['invalid-json',Buffer.from('{broken')],['invalid-record',Buffer.from(JSON.stringify({...seed,artworks:[{...seed.artworks[0],strokes:'broken'},...seed.artworks.slice(1)]}))],['invalid-rule-enum',Buffer.from(JSON.stringify(invalidRule))]] as const){
       const dir=join(root,name);mkdirSync(dir);const file=join(dir,'studio-data.json');writeFileSync(file,bytes)
       delete require.cache[require.resolve(modulePath)]
@@ -74,6 +74,13 @@ export async function inspectDoodleFaults(projectId:string,folder:string){
         const faultPage=await app.firstWindow();faultPage.setDefaultTimeout(10000)
         await expect(faultPage.getByText('只读保护',{exact:true})).toBeVisible()
         await expect(faultPage.locator('#save-btn')).toBeDisabled()
+        const badRule=faultPage.locator(`#rule-options label[data-id="${invalidRule.rules[0].id}"]`)
+        await expect(badRule).toContainText(/不完整|不可用|无法/)
+        if(await badRule.locator('input').isEnabled()){
+          await badRule.click()
+          await expect(faultPage.locator('#play-btn')).toBeDisabled()
+        }
+        await expect(faultPage.locator('#independent-invalid-markup')).toHaveCount(0)
         await faultPage.screenshot({path:join(root,'read-only.png'),fullPage:true})
         const layout=await faultPage.evaluate(()=>({viewport:innerWidth,width:document.documentElement.scrollWidth,
           canvas:document.querySelector('#doodle-canvas')?.getBoundingClientRect().toJSON()}))

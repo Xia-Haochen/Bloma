@@ -16,7 +16,7 @@ export async function inspectDoodle(projectId: string, folder: string) {
   const release=published??await prepareSoftwareRelease(projectId,project.root_path)
   if(release.launch.ui!=='electron')throw Error('INDEPENDENT_EXPECTED_DESKTOP')
   const artworkName='独立验收双色曲-'+randomUUID().slice(0,6)
-  const prefix=join(folder,'doodle-'+randomUUID()),report:any={version:1,status:'running',release:release.id,
+  const prefix=join(folder,'doodle-'+randomUUID()),report:any={version:1,status:'running',release:release.id,source:release.source.digest,
     delivery:published?'published':'unreleased_candidate',scope:'real Electron UI, digital audio, persistent user-data path; no physical speaker claim',checks:[],page_errors:[]}
   let app:ElectronApplication|undefined,page!:Page,dataDir=''
   const start=async()=>{

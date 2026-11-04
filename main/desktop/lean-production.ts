@@ -396,7 +396,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
       }
       runSignal.throwIfAborted()
       if (failure) {
-        if (modelBudgetStop) { blocked(`模型请求额度已到，宿主检查未通过，未再调用模型：\n${failure}`); return }
+        if (modelBudgetStop) { blocked(`${modelBudgetStop.startsWith('MONETARY_') ? '当前费用预留不足以放行下一次调用' : modelBudgetStop === 'HARNESS_OUTPUT_BUDGET_EXHAUSTED' ? '当前累计输出额度未放行调用' : '当前请求次数额度未放行调用'}，宿主检查未通过，未再调用模型：\n${failure}`); return }
         if (core.status === 'environment_blocked' && !cleanEnvironmentPending) { blocked(failure); return }
         {
           const progress = recordSoftwareRepair({ projectId: input.projectId, sessionId: input.sessionId, runId, error: failure,category:failureCategory,

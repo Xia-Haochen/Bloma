@@ -1,4 +1,5 @@
 import { withAbort } from '../agent/loop/agent-loop'
+import { defaultQuickSecurityGate } from '../desktop/production-contracts'
 import { runtimeInventory } from './release-store'
 import { compactReviewManifest, reviewChangeContext, repeatedReviewFailure } from './quality-review-context'
 import { canonicalFindingReference } from './quality-reference'
@@ -81,6 +82,10 @@ export function createQualityReview(projectId: string, parent: string, policy: R
   }
   const begin = async (ctx: ToolContext, kind: ReviewKind = 'code', debugId?: string) => exclusive(async () => {
     assertParent(ctx)
+    // Reject known local delivery blockers before paying for C/V. This is the
+    // existing delivery scan, not a second policy or a substitute review PASS.
+    const security = defaultQuickSecurityGate(projectId)
+    if (!security || !security.passed || security.blocking) throw Error('QUALITY_LOCAL_CHECK_REQUIRED: 先处理本机静态检查，再审阅稳定候选。' + (security?.listing ?? '扫描未完成'))
     const binding = await identity(projectId, ctx.signal), id = randomUUID(), ledger = readQualityLedger(projectId)
     let visual: VisualMaterial | undefined
     try {

@@ -20,6 +20,11 @@ let home: string, oldHome: string | undefined, project: ReturnType<typeof create
 const parent = 'quality-parent'
 const ctx = (sessionId = parent): ToolContext => ({ projectId: project.project_id, sessionId, requestId: 'r', state: createToolState(), signal: AbortSignal.timeout(60000) })
 const finding = { requirement: 'F-001', expected_source: '2加3得5', category: 'data', severity: 'high', location: 'app.cjs:1', trigger: '输入2与3', evidence: '实现输出999', reproduction: '正常入口传2与3', unknowns: '', kind: 'suspected' }
+it.each(['code','visual'] as const)('rejects known local blockers before creating a paid %s review', async kind => {
+  writeFileSync(join(project.root_path, 'unsafe.js'), 'document.body.innerHTML = location.hash')
+  await expect(quality.begin(ctx(),kind)).rejects.toThrow('QUALITY_LOCAL_CHECK_REQUIRED')
+  expect(readQualityLedger(project.project_id).reviews).toHaveLength(0)
+})
 beforeEach(async () => {
   oldHome = process.env.PROMA_HOME; home = mkdtempSync(join(tmpdir(), 'bloma-quality-')); process.env.PROMA_HOME = home
   project = createProject({ request_id: 'c', mode: 'quick' }, { workflowVersion: 'software-v1' })
