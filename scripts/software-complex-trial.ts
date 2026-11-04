@@ -2,6 +2,7 @@ import { trialOutputCap } from './trial-output-cap'
 import {createTrialRequestRecorder} from './trial-request-recorder'
 import {softwareVerificationFingerprint} from '../main/desktop/verification-fingerprint'
 import {readQualityLedger} from '../main/software/quality-ledger'
+import {ModelRequestRefusal} from '../main/platform/llm/model-request-refusal'
 import { leanBudget } from '../main/desktop/lean-budget'
 import { inspectDoodleFaults } from './personal-doodle-fault-acceptance'
 import { configureSoftwareExecutionLimits } from '../main/software/execution-limits'
@@ -142,7 +143,7 @@ export async function main() {
   },policyRate)
   const paid = control.wrap(anthropicMessagesQueryViaProviders), signal = AbortSignal.timeout(45 * 60000)
   const rawQuery: SDKQuery = async function* (prompt, options) {
-    if(existsSync(join(root,'pause-generation')))throw Error('TRIAL_PAUSED_BETWEEN_REQUESTS')
+    if(existsSync(join(root,'pause-generation')))throw new ModelRequestRefusal('TRIAL_PAUSED_BETWEEN_REQUESTS')
     writeFileSync(startedMarker, 'started')
     const briefText: string[] = []
     try { for await (const message of paid(prompt, { ...options, monetaryPolicyPath: policy, thinkingLevel: 'low', signal: AbortSignal.any([options.signal, signal]),

@@ -21,6 +21,8 @@ import { buildSoftwareVerifyTool } from './verification-tool'
 import { buildImprovementSuggestionTool } from './improvement-suggestions'
 import { buildCapabilityTools } from './capability-tools'
 import { isLongtermSoftware, recordLongtermDecision } from './longterm-state'
+import {buildTestCorrectionTools} from './test-correction-tools'
+import {verificationRefusalFeedback} from './verification-report'
 
 type Policy = ReturnType<typeof createSoftwareCollaborationPolicy>
 const FILE_TOOLS = new Set(['read_file', 'list_files', 'find', 'grep', 'web_fetch', 'write_file', 'edit_file'])
@@ -45,9 +47,10 @@ export function buildSoftwareAgentTools(projectId: string, role: DelegationRunRo
         if(activeSoftwareCommands(projectId,ctx.sessionId).length)throw Error('PROJECT_STAGE_WAIT_FOR_COMMANDS')
         await closeDebugSessions(projectId,ctx.sessionId);await stopSoftwareSession(projectId,ctx.sessionId)
         const result=await verifyProjectStage(projectId,input.stage_id,input.script,ctx.signal,input.restart===true)
-        return{output:JSON.stringify(result),isError:result.status!=='passed'}
-      }catch(error){return{output:String(error),isError:true}}
+        return{output:JSON.stringify(result),isError:result.status!=='passed',feedback:result.feedback}
+      }catch(error){return{output:String(error),isError:true,feedback:verificationRefusalFeedback(error)}}
     }})
+  if(role==='parent')tools.push(...buildTestCorrectionTools(projectId,policy))
   return tools
 }
 

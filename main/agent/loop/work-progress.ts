@@ -1,10 +1,15 @@
 import { createHash } from 'node:crypto'
 import type { ConversationTurn } from '../../orchestration/stages/orchestration-contracts'
 import type { AgentLoopToolCallRecord } from './agent-loop'
+import {readToolFeedback} from '../../../shared/tool-feedback'
 
 /** Only stable public failure identities are used; no tool output or secrets
  * are retained in progress records. Distinct assertion failures stay distinct. */
 export function toolFailureKey(name: string, output: string): string | undefined {
+  const feedback=readToolFeedback(output)
+  // Typed host refusal applies to every tool, not a growing tool-name allowlist.
+  if(feedback?.source==='host'&&feedback.category==='invalid_input'&&feedback.reason)return 'TOOL_PROTOCOL_REFUSAL:'+feedback.reason+':'+(feedback.fingerprint??'')
+  if(feedback?.source==='host'&&feedback.verification!=='passed'&&feedback.fingerprint&&feedback.reason)return 'HOST_VERIFICATION_FAILURE:'+feedback.reason+':'+feedback.fingerprint
   if(output.startsWith('Validation failed for tool ')){
     const fields=output.split('Received arguments:')[0].split('\n').filter(line=>/^\s*- /.test(line)).map(line=>line.replace(/\b\d+\b/g,'#').trim()).sort()
     return 'TOOL_SCHEMA_INVALID:'+createHash('sha256').update(JSON.stringify(fields)).digest('hex').slice(0,16)
@@ -26,7 +31,7 @@ export function createProtocolFailureGuard(){
   return(calls:AgentLoopToolCallRecord[])=>{
     for(const call of calls){
       if(call.status==='ok')for(const key of failures.keys())if(key.startsWith(call.name+':'))failures.delete(key)
-      if(call.status!=='error'||!call.failureKey||!(call.failureKey.startsWith('TOOL_SCHEMA_INVALID:')||call.name==='submit_quality_findings'))continue
+      if(call.status!=='error'||!call.failureKey||!(/^(TOOL_SCHEMA_INVALID|TOOL_PROTOCOL_REFUSAL|HOST_VERIFICATION_FAILURE):/.test(call.failureKey)||call.name==='submit_quality_findings'))continue
       const key=call.name+':'+call.failureKey,count=(failures.get(key)??0)+1;failures.set(key,count)
       if(failures.size>32)failures.delete(failures.keys().next().value!)
       if(count>=3)return{key,count}

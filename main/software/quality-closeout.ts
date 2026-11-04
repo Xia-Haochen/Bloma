@@ -30,6 +30,7 @@ export function qualityCloseout(ledger: Ledger, current: Identity, gate: string 
   const pending = ledger.reviews.filter(r => sameIdentity(r.identity, current) && ['pending', 'submitted'].includes(r.status))
   const priority = investigate.find(importantFinding)
   const next = pending.length ? 'wait_for_delegations' : mustFix.length || priority ? 'check_quality_finding'
+    : gate?.startsWith('TEST_CORRECTION_APPLY_REQUIRED') ? 'apply_test_correction'
     : gate?.startsWith('QUALITY_REVIEW_REQUIRED') ? 'start_quality_review'
     : gate?.startsWith('QUALITY_VISUAL_REVIEW_REQUIRED') ? 'start_visual_review'
     : gate ? 'inspect_app' : 'verify_app'

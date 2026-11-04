@@ -278,6 +278,12 @@ export function frozenNativeEntryPreview(projectId: string, native: NativeGuiTes
     const text = readFileSync(join(base(projectId, native.digest), native.entry), 'utf8');
     return { entry: native.entry, text: text.slice(0, 4000), truncated: text.length > 4000 };
 }
+/** Retention is conservative: a failed real interaction or an explicit failed
+ * assertion has executed, even when no assertion completed successfully. */
+export function nativeCheckExecuted(result:any):boolean{
+  return (result?.native_evidence?.assertions??0)>0||Boolean(result?.case_results?.some((r:any)=>r.status==='failed'&&r.interactions>0))
+    ||Boolean(result?.steps?.some((s:any)=>s.actual?.assertion&&(s.actual.assertion.expected!==undefined||s.actual.assertion.actual!==undefined)))
+}
 export function nativeGuiObservations(suite: GuiAcceptanceSuite, reports: Array<{
     code: number;
     events: string;
@@ -320,7 +326,8 @@ export function nativeGuiObservations(suite: GuiAcceptanceSuite, reports: Array<
                 const row=case_results.find(row=>row.name===event.name)!
                 const counts=trace.cases.find((c:{name:string})=>c.name===event.name)
                 if(counts){row.assertions+=Number.isSafeInteger(counts.assertions)&&counts.assertions>=0?counts.assertions:0;row.interactions+=Number.isSafeInteger(counts.interactions)&&counts.interactions>=0?counts.interactions:0}
-                const status=event.skip||event.todo?'not_run':passed?'passed':event.type==='test:fail'&&!String(event.error).includes('GUI_NATIVE_ASSERTION_REQUIRED')?'failed':'unverified'
+                const cancelled=/cancelled|canceled|did not finish before its parent/i.test(String(event.error))
+                const status=event.skip||event.todo?'not_run':cancelled?'unverified':passed?'passed':event.type==='test:fail'&&!String(event.error).includes('GUI_NATIVE_ASSERTION_REQUIRED')?'failed':'unverified'
                 // A later success must never erase an earlier failure of this case.
                 if(row.status!=='failed')row.status=status==='failed'?'failed':row.status==='unverified'||status==='unverified'?'unverified':status
                 if(event.error)row.error=String(event.error).slice(0,4000)
@@ -333,13 +340,15 @@ export function nativeGuiObservations(suite: GuiAcceptanceSuite, reports: Array<
         }
     }
     const missing = suite.covers.filter(id => !covered.has(id));
+    const assertionFailed=steps.some(s=>{const a=(s.actual as {assertion?:{expected?:unknown;actual?:unknown}})?.assertion;return!s.passed&&a&&(a.expected!==undefined||a.actual!==undefined)})
     const finish=<T extends {status:string;error?:string}>(value:T)=>({...value,case_results,native_evidence:{interactions,assertions},
-      ...(value.status==='passed'?{}:{failure_kind:(bootstrapErrors.length&&!steps.length?'bootstrap':value.status==='failed'?'assertion':'incomplete') as GuiAcceptanceResult['failure_kind']})})
+      ...(value.status==='passed'?{}:{failure_kind:(bootstrapErrors.length&&!steps.length?'bootstrap':value.status==='failed'?assertionFailed?'assertion':'unresolved':'incomplete') as GuiAcceptanceResult['failure_kind']})})
     if (!steps.length && !assertions && failed && bootstrapErrors.length) return finish({ status: 'unverified' as const, steps,
         error: `GUI_NATIVE_BOOTSTRAP_FAILED: ${bootstrapErrors[0].slice(0, 4000)}` });
     if(!assertions&&steps.length&&steps.every(step=>!step.passed&&String((step.actual as {error?:string}).error).includes('GUI_NATIVE_ASSERTION_REQUIRED')))return finish({status:'unverified' as const,steps,error:'GUI_NATIVE_ASSERTIONS_MISSING: 没有实际业务断言，需修正测试计划，不能据此交付'})
+    if(failed&&!case_results.some(row=>row.status==='failed'))return finish({status:'unverified' as const,steps,error:'GUI_NATIVE_EXECUTION_INCOMPLETE: 测试取消、被跳过或未完成；没有据此确认业务断言失败'})
     if (failed && steps.some(step => !step.passed))
-        return finish({ status: 'failed' as const, steps, error: '原生应用测试的真实断言失败，见测试结果' });
+        return finish({ status: 'failed' as const, steps, error: '原生测试执行失败；须核对实际断言或运行错误，不能仅凭退出状态确定产品根因' });
     if (suite.native_tests!.cases.some(c => !executed.has(c.name)))
         return finish({ status: 'unverified' as const, steps, error: 'GUI_NATIVE_CASE_NOT_RUN: 仍有声明的业务测试未执行或被跳过' });
     if (!steps.length || !interactions || !assertions || missing.length)

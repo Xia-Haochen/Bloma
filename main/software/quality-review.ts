@@ -1,4 +1,6 @@
 import { withAbort } from '../agent/loop/agent-loop'
+import {pendingTestCorrection,testCorrectionGate} from './test-corrections'
+import {ModelRequestRefusal} from '../platform/llm/model-request-refusal'
 import { defaultQuickSecurityGate } from '../desktop/production-contracts'
 import { runtimeInventory } from './release-store'
 import { compactReviewManifest, reviewChangeContext, repeatedReviewFailure } from './quality-review-context'
@@ -211,6 +213,7 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       return { output: JSON.stringify({ finding, status: result.status, summary: result.summary }), isError: finding.disposition !== 'closed' && finding.disposition !== 'not_reproduced' }
     }) }
   const gate = async (signal?: AbortSignal): Promise<string | undefined> => {
+    const correction=testCorrectionGate(projectId);if(correction)return correction+': 先处理read_test_contract返回的裁定或已批准修改，再重新验证；批准不等于通过。'
     const design=readIndependentPolicy(projectId)?.enabled?readIndependentDesign(projectId):undefined
     if(design?.contract){const semantics=currentIndependentSemantics(projectId,design.contract);if(!semantics.ready)return `QUALITY_INDEPENDENT_SEMANTICS_UNRESOLVED: B预期或覆盖争议尚待澄清，不能改目标或断言过关：${JSON.stringify(semantics)}`}
     const current = await identity(projectId, signal), ledger = readQualityLedger(projectId)
@@ -253,6 +256,7 @@ export function createQualityReview(projectId: string, parent: string, policy: R
     activeRoute = route
     let ledger = readQualityLedger(projectId)
     if (options.sessionId === parent) {
+      if(pendingTestCorrection(projectId))throw new ModelRequestRefusal('TEST_CORRECTION_REVIEW_REQUIRED: 已保存提案，独立裁定前停止模型调用；制作方不能自行批准。')
       const active = ledger.reviews.filter(r => r.child && children.has(r.child) && r.delegation).map(r => findDelegation(parent, r.delegation!)).filter(r => r?.status === 'running' && !r.pendingQuestion)
       if (active.length) { await withAbort(Promise.all(active.map(r => r!.completion)), options.signal); ledger = readQualityLedger(projectId) }
     }

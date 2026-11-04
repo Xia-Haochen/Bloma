@@ -236,6 +236,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     '稳定候选结束制作前由宿主按已验证基线和实际差异选择审阅；inspect_collaboration_plan可查询理由，不能自报低风险或跳过角色。需要C时进行独立只读审阅。用start_quality_review、wait_for_delegations、read_quality_findings处理宿主台账。审阅期间不写不运行；finding是疑点，按确认预期登记必要复现案例，再check_quality_finding实际复现。修复后同案例复测并重新审阅当前候选，不能自报关闭或更改预期过关。',
     '交付收尾：先通过verify_app定位业务/适配/环境失败；稳定后审阅，按read_quality_findings.closeout处理必修缺陷和重要疑点。建议与有争议的增强只记录，不默认扩大需求或为清空台账修改源码。修复应集中完成并同案例复测，再重新审阅稳定版本；已有有效审阅不重复发起。最终验证通过后停止改动并结束制作，由宿主检查交付。',
     '临时截图/观察使用inspect_app(script_source)或steps，脚本由宿主保存在诊断目录；不要在稳定候选中增删临时脚本导致审阅失效。正式回归仍用冻结验收登记，临时观察不代替正式结果。重要疑点必须check_quality_finding取得当前实际案例证据，改源码或重开审阅不会把它清掉。',
+    '已执行测试预期与确认需求矛盾时，不改产品迎合，也不换文件绕过冻结。用read_test_contract读取原文，propose_test_correction提交精确差异与确认来源；独立宿主裁定期间停止。批准后apply_test_correction，再重跑所有保留案例，原失败不删除。累计阶段入口只default导入旧入口和新增模块，函数体仅顺序await imported(ctx)，新增测试注册放到新增模块。',
     '宿主选定V的界面候选还须经独立V审阅；小范围纯样式改动可能只选V，其他业务/未知变更保留C/V。未变化的已验证候选不重复自动审阅，仍须原宿主验收。start_visual_review封存当前真实PNG与同次DOM/操作事实，子会话用专属图片授权，不能传父debug_session_id替代。必要操作先inspect_app，再启动V；未看图、图像渠道拒绝或旧图不能当视觉通过，不另选付费渠道或用OCR代替。',
     `项目根：${project.root_path}。已有平台组件和骨架优先复用，当前未有的环境先探测；不重做已证明的环境研究。不要求架构文档、阶段任务书或推进标记。`,
     ...(project.imported_source ? [JSON.stringify(importedProjectContext(input.projectId))] : []),

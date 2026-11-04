@@ -29,6 +29,12 @@ it('does not turn a generic failure or static rule hit into a confirmed business
   expect(verificationFailure(security)).toMatchObject({category:'security_policy',diagnosis:{basis:'static_policy',root_cause_confirmed:false}})
   expect(toolRecovery(verificationToolFeedback(security))).toBe('inspect')
 })
+it('uses stable host failure identities across transient report paths, while keeping different assertions distinct',()=>{
+  const incomplete=(path:string)=>result({status:'unverified',summary:'GUI_NATIVE_EXECUTION_INCOMPLETE',core:{host_gui:{failure_kind:'incomplete',steps:[{id:'native-1',passed:false,actual:{test:'F-001',error:path}}]}}})
+  expect(verificationToolFeedback(incomplete('temporary-A/trace')).fingerprint).toBe(verificationToolFeedback(incomplete('temporary-B/trace')).fingerprint)
+  const assertion=(actual:number)=>result({status:'failed',summary:'failed',core:{host_gui:{failure_kind:'assertion',steps:[{id:'native-1',passed:false,actual:{assertion:{expected:4,actual}}}]}}})
+  expect(verificationToolFeedback(assertion(2)).fingerprint).not.toBe(verificationToolFeedback(assertion(3)).fingerprint)
+})
 it('preserves assertion facts but asks to inspect expectations; disputed expectations do not authorize product repair',()=>{
   const assertion=result({status:'failed',summary:'failed',core:{host_cli:{cases:[{name:'rounding',passed:false,exit_code:0,expected:{stdout:'4',exit_code:0},actual:'5'}]}}})
   expect(verificationFailure(assertion)).toMatchObject({category:'product_assertion',observation:{expected:{stdout:'4',exit_code:0},actual:{stdout:'5'}},diagnosis:{certainty:'supported',root_cause_confirmed:false}})

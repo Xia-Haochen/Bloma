@@ -198,7 +198,7 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
       if (status !== 'completed') return true
       const calls = toolCalls.filter(call => call.turn === turns)
       const protocolFailure = protocolGuard(calls)
-      if(protocolFailure){status='budget_exhausted';termination={reason:'no_progress',limit:3,observed:protocolFailure.count};input.publish('message_delta',{text:'工具协议重复失败，停止当前执行并保留记录：'+protocolFailure.key});return true}
+      if(protocolFailure){status='budget_exhausted';termination={reason:'no_progress',limit:3,observed:protocolFailure.count};input.publish('message_delta',{text:'相同工具拒因或验收失败证据已重复三次，停止当前执行并保留记录；先诊断，不继续原样重试：'+protocolFailure.key});return true}
       if (toolResults.length && input.afterTools && !pendingSteerCount(input.sessionId)) {
         const handoff = await input.afterTools(ctx, calls)
         if (handoff?.complete && !pendingSteerCount(input.sessionId)) return true

@@ -8,6 +8,7 @@ import { leanBudget, withLeanRuntime } from '../../../main/desktop/lean-budget'
 import { createProject } from '../../../main/project/project-service'
 import { configureSoftwareExecutionLimits } from '../../../main/software/execution-limits'
 import { MonetaryBudgetError } from '../../../main/platform/llm/monetary-budget'
+import {ModelRequestRefusal} from '../../../main/platform/llm/model-request-refusal'
 
 beforeEach(() => vi.stubEnv('PROMA_HOME', mkdtempSync(join(tmpdir(), 'bloma-production-budget-'))))
 afterEach(() => vi.unstubAllEnvs())
@@ -20,6 +21,13 @@ const ok: SDKQuery = async function* (_prompt, opts) {
 const limits = { requests: 3, phaseRequests: 3, output: 8192, perResponse: 2048 }
 
 describe('production admission is shared and durable', () => {
+  it('releases only a typed unsent host pause, preserving attempts and any started transport reserve',async()=>{
+    const budget=createProductionBudget('p','host-pause','desktop-implement',limits)
+    await expect(drain(budget.wrap(async function*(){throw new ModelRequestRefusal('SUPERVISOR_PAUSED')}))).rejects.toThrow('SUPERVISOR_PAUSED')
+    expect(budget.snapshot()).toMatchObject({requests:1,output:0})
+    await expect(drain(budget.wrap(async function*(_p,o){o.onTransportAttempt?.('started');throw new ModelRequestRefusal('SUPERVISOR_PAUSED')}))).rejects.toThrow('SUPERVISOR_PAUSED')
+    expect(budget.snapshot()).toMatchObject({requests:2,output:2048})
+  })
   it('does not consume output on a known monetary refusal before transport, but retains an uncertain physical attempt',async()=>{
     const budget=createProductionBudget('p','unsent','desktop-implement',limits)
     const blocked:SDKQuery=async function*(){throw new MonetaryBudgetError('MONETARY_BUDGET_EXHAUSTED')}

@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs'
+import {filterApprovedTestChanges} from './test-corrections'
 import { join } from 'node:path'
 import { getPromaHome } from '../../storage/config-paths'
 import { writeTextFileAtomic } from '../../storage/json-store'
@@ -32,7 +33,7 @@ export function assertRetainedSoftwareBehavior(projectId: string, kind: 'gui' | 
     const before = baseline.gui, after = suite as GuiAcceptanceSuite
     if(before.native_tests){
       const old=before.native_tests,next=after.native_tests
-      if(!next||nativeTestContractChanges(old,next,retained).length)throw Error('GUI_RETAINED_NATIVE_TESTS_CHANGED: 保留原生测试的既有输入、断言和公共逻辑；可修定位并追加新功能测试')
+      if(!next||filterApprovedTestChanges(projectId,old,next,nativeTestContractChanges(old,next,retained)).length)throw Error('GUI_RETAINED_NATIVE_TESTS_CHANGED: 保留原生测试的既有输入、断言和公共逻辑；可修定位并追加新功能测试')
     }
     // CSS identities can change with a legitimate redesign; the old observed
     // outputs and their retained feature references cannot silently disappear.

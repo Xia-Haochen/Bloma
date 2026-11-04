@@ -15,7 +15,13 @@ export function verificationToolFeedback(result:SoftwareVerification):ToolFeedba
     verification:result.status==='passed'?'passed':result.status==='failed'?'failed':'unverified',
     category:category==='unknown'?'unknown':['test_adapter','harness','security_policy'].includes(category??'')?'verification_harness':category==='environment'?'environment':category==='product_assertion'?'product_assertion':undefined,
     assessment:failure&&{certainty:failure.diagnosis?.certainty??'unknown',root_cause_confirmed:false},
-    reason:failure?.code,recovery:result.status==='passed'?'none':category==='environment'?'prepare_environment':'inspect'})!
+    reason:failure?.code,fingerprint:failure?digest([category,failure.code,failure.step,...(category==='product_assertion'?[failure.expected,failure.actual]:[])]):undefined,recovery:result.status==='passed'?'none':category==='environment'?'prepare_environment':'inspect'})!
+}
+export function verificationRefusalFeedback(error:unknown):ToolFeedback{
+  const code=String(error).match(/\b(?:PROJECT_STAGE|GUI_NATIVE|GUI_EXISTING|TEST_CORRECTION)_[A-Z_]+/)?.[0]
+  const contract=String(error).match(/"contract_digest":"([a-f0-9]{64})"/)?.[1]
+  return{schema_version:1,source:'host',execution:'not_run',verification:'unverified',scope:'verification_admission',
+    category:code?'invalid_input':'unknown',reason:code??'VERIFICATION_ADMISSION_UNRESOLVED',fingerprint:code?digest([code,contract]):undefined,recovery:code?'correct_input':'inspect'}
 }
 function preview(value:unknown,reportHash:string,persisted=true){
   if(value===undefined)return undefined

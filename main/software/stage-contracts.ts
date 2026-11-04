@@ -3,6 +3,7 @@ import { posix } from 'node:path'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { frozenNativeGuiRoot, frozenNativeEntryPreview, nativeTestContractChanges, type NativeGuiTests } from './native-gui-tests'
+import {filterApprovedTestChanges} from './test-corrections'
 
 const entryPath = (n: NativeGuiTests) => n.layout === 'project' ? n.entry : `${n.directory}/${n.entry}`
 
@@ -40,7 +41,7 @@ export function composesPriorEntry(source: string, entry: string, priorEntry: st
 }
 
 export function stageContractChanges(projectId: string, root: string, before: NativeGuiTests, after: NativeGuiTests): string[] {
-  const changes = nativeTestContractChanges(before, after)
+  const changes = filterApprovedTestChanges(projectId,before,after,nativeTestContractChanges(before, after))
   if (!changes.includes('entry')) return changes
   // All old files, test bodies, inputs and restart requirements remain checked by
   // the original comparator. Only this narrowly verified entry indirection differs.
@@ -50,5 +51,5 @@ export function stageContractChanges(projectId: string, root: string, before: Na
 }
 
 export function stageContractError(projectId: string, before: NativeGuiTests, changes: string[]) {
-  return Error(`PROJECT_STAGE_RETAINED_BEHAVIOR_CHANGED: ${JSON.stringify({ changes, original_entry: frozenNativeEntryPreview(projectId, before) })}；保留原入口原文、旧用例、共享逻辑和重开要求。新入口可用纯组合：import prior from './旧入口'; export default async(ctx)=>{await prior(ctx);await newCases(ctx);}，不能改写旧入口来容纳新阶段。`)
+  return Error(`PROJECT_STAGE_RETAINED_BEHAVIOR_CHANGED: ${JSON.stringify({ changes, contract_digest:before.digest,original_entry: frozenNativeEntryPreview(projectId, before),read_original:{tool:'read_test_contract',arguments:{contract_digest:before.digest,file:entryPath(before)}},expected_entry_shape:'仅default导入，函数体仅顺序await importedFunction(ctx)，不得有const、ctx.test、分支或参数改写。新增测试注册放在单独default导出模块。',dispute_route:'预期错误先propose_test_correction，独立裁定前不改冻结内容。' })}；保留原入口原文、旧用例、共享逻辑和重开要求。新入口可用纯组合：import prior from './旧入口'; import newCases from './新增'; export default async(ctx)=>{await prior(ctx);await newCases(ctx);}。`)
 }

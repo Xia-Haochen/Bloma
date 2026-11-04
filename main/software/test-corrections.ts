@@ -1,0 +1,122 @@
+import {createHash,randomUUID} from 'node:crypto'
+import {existsSync,readFileSync,writeFileSync,mkdirSync,openSync,closeSync,unlinkSync,realpathSync,lstatSync} from 'node:fs'
+import {join,dirname,resolve,relative,isAbsolute} from 'node:path'
+import {getPromaHome} from '../../storage/config-paths'
+import {writeTextFileAtomic} from '../../storage/json-store'
+import {findProject} from '../project/project-service'
+import {readPrdBackplane} from '../project/prd-store'
+import {prdScopeFingerprint,trustedAcceptance} from '../project/requirement-contract'
+import {guiSuitePath,parseGuiSuite} from '../desktop/gui-acceptance'
+import {readProjectStages} from './project-stages'
+import {freezeNativeGuiTests,frozenNativeGuiVersion,nativeCheckExecuted,type NativeGuiTests} from './native-gui-tests'
+
+const hash=(v:string|Buffer)=>createHash('sha256').update(v).digest('hex')
+const pathOf=(n:NativeGuiTests,p:string)=>n.layout==='project'?p:n.directory+'/'+p
+interface Proposal {id:string;scope:string;before:NativeGuiTests;after:NativeGuiTests;file:string;old_hash:string;new_hash:string;replacement:string;reason:string;
+  expected_sources:Record<string,string>;status:'pending'|'approved'|'rejected';at:string;applied_at?:string;
+  decision?:{reviewer:'independent_operator';reason:string;at:string;evidence:Array<{path:string;sha256:string}>}}
+interface State{version:1;proposals:Proposal[]}
+function base(id:string){if(!/^[A-Za-z0-9_-]+$/.test(id))throw Error('TEST_CORRECTION_PROJECT_INVALID');return join(getPromaHome(),'software-test-corrections',id)}
+function scope(id:string){const b=readPrdBackplane(id);if(!b.user_confirmed_at)throw Error('TEST_CORRECTION_SCOPE_UNCONFIRMED');return prdScopeFingerprint(b)}
+function read(id:string):State{
+  const file=join(base(id),'state.json');if(!existsSync(file))return{version:1,proposals:[]}
+  const {checksum,...state}=JSON.parse(readFileSync(file,'utf8'))
+  if(state.version!==1||!Array.isArray(state.proposals)||hash(JSON.stringify(state))!==checksum)throw Error('TEST_CORRECTION_STATE_INVALID')
+  return state
+}
+function mutate<T>(id:string,fn:(state:State)=>T):T{
+  mkdirSync(base(id),{recursive:true});const lock=join(base(id),'state.lock'),fd=openSync(lock,'wx')
+  try{const state=read(id),result=fn(state);writeTextFileAtomic(join(base(id),'state.json'),JSON.stringify({...state,checksum:hash(JSON.stringify(state))}));return result}
+  finally{closeSync(fd);unlinkSync(lock)}
+}
+function contract(id:string,digest:string){
+  const current=scope(id),found=readProjectStages(id).attempts.find(a=>a.scope===current&&a.executed!==false&&a.native.digest===digest)?.native
+  if(found)return found
+  if(existsSync(guiSuitePath(id))){
+    const bytes=readFileSync(guiSuitePath(id)),s=parseGuiSuite(JSON.parse(bytes.toString('utf8'))),receipt=join(getPromaHome(),'software-verification',id+'.json')
+    if(s.scope_hash===current&&s.native_tests?.digest===digest&&existsSync(receipt)){
+      const r=JSON.parse(readFileSync(receipt,'utf8'))
+      if(r.state==='complete'&&r.result_hash===hash(JSON.stringify(r.result))&&r.result?.native_plan?.suite_hash===hash(bytes)&&r.result.native_plan.execution==='attempted'&&nativeCheckExecuted(r.result.core?.host_gui))return s.native_tests
+    }
+  }
+  throw Error('TEST_CORRECTION_EXECUTED_CONTRACT_REQUIRED')
+}
+export function readTestContractFile(id:string,digest:string,path:string){
+  const n=contract(id,digest),file=n.files.find(f=>pathOf(n,f.path)===path);if(!file)throw Error('TEST_CORRECTION_FILE_NOT_IN_CONTRACT')
+  frozenNativeGuiVersion(id,n)
+  return{contract_digest:digest,file:path,sha256:file.sha256,text:readFileSync(join(getPromaHome(),'gui-native-tests',id,n.digest,file.path),'utf8'),source:'host_frozen_test',verification:'not_issued'}
+}
+/** Maker may propose an exact edit. It cannot approve it, alter the frozen
+ * archive or waive a failure. The proposed contract is parsed but never run. */
+export function proposeTestCorrection(id:string,input:{contract_digest:string;file:string;old_text:string;new_text:string;feature_ids:string[];reason:string}){
+  const before=contract(id,input.contract_digest),original=readTestContractFile(id,before.digest,input.file),brief=readPrdBackplane(id)
+  if(typeof input.old_text!=='string'||typeof input.new_text!=='string'||!input.old_text||!input.new_text||input.old_text===input.new_text||input.old_text.length>16000||input.new_text.length>16000||typeof input.reason!=='string'||!input.reason.trim()||input.reason.length>3000
+    ||!Array.isArray(input.feature_ids)||!input.feature_ids.length||input.feature_ids.some(f=>!before.cases.some(c=>c.feature===f)||!brief.requirements.some(r=>r.id===f)))throw Error('TEST_CORRECTION_PROPOSAL_INVALID')
+  if(original.text.split(input.old_text).length!==2)throw Error('TEST_CORRECTION_EXACT_MATCH_REQUIRED')
+  const replacement=original.text.replace(input.old_text,input.new_text),newHash=hash(replacement),current=scope(id)
+  const duplicate=read(id).proposals.find(p=>p.scope===current&&p.before.digest===before.digest&&p.file===input.file&&p.new_hash===newHash)
+  if(duplicate)return{id:duplicate.id,status:duplicate.status,verification:'not_issued'}
+  const pid=randomUUID(),root=join(base(id),pid,'proposal');mkdirSync(root,{recursive:true})
+  for(const f of before.files){const dest=join(root,pathOf(before,f.path));mkdirSync(dirname(dest),{recursive:true});writeFileSync(dest,readFileSync(join(getPromaHome(),'gui-native-tests',id,before.digest,f.path)))}
+  writeFileSync(join(root,input.file),replacement)
+  const after=freezeNativeGuiTests(id,root,pathOf(before,before.entry),[...new Set(before.cases.map(c=>c.feature))],before.restart)
+  if(JSON.stringify(before.cases.map(c=>[c.name,c.feature]).sort())!==JSON.stringify(after.cases.map(c=>[c.name,c.feature]).sort()))throw Error('TEST_CORRECTION_CASE_SET_CHANGED')
+  const changed=before.cases.filter(c=>after.cases.find(a=>a.name===c.name)?.signature!==c.signature)
+  if(changed.some(c=>!input.feature_ids.includes(c.feature)))throw Error('TEST_CORRECTION_UNDECLARED_CASE_CHANGED')
+  if(after.files.length!==before.files.length||before.files.some(f=>!after.files.some(a=>pathOf(after,a.path)===pathOf(before,f.path))))throw Error('TEST_CORRECTION_INPUT_SET_CHANGED')
+  const proposal:Proposal={id:pid,scope:current,before,after,file:input.file,old_hash:original.sha256,new_hash:newHash,replacement,reason:input.reason,status:'pending',at:new Date().toISOString(),
+    expected_sources:Object.fromEntries(input.feature_ids.map(f=>{const expected=trustedAcceptance(brief,brief.requirements.find(r=>r.id===f)!);if(!expected?.trim())throw Error('TEST_CORRECTION_EXPECTED_SOURCE_REQUIRED');return[f,expected]}))}
+  mutate(id,state=>{state.proposals.push(proposal)})
+  return{id:pid,status:'pending',old_hash:proposal.old_hash,new_hash:newHash,expected_sources:proposal.expected_sources,verification:'not_issued',next:'独立宿主裁定前不写回测试、不继续付费重试；原失败记录保留。'}
+}
+export function testCorrectionView(id:string){const current=scope(id);return{proposals:read(id).proposals.filter(p=>p.scope===current).map(({replacement,before,after,...p})=>({...p,contract_digest:before.digest,replacement_digest:after.digest})),verification:'not_issued'}}
+export function pendingTestCorrection(id:string){return read(id).proposals.some(p=>p.scope===scope(id)&&p.status==='pending')}
+export function testCorrectionGate(id:string){
+  if(pendingTestCorrection(id))return 'TEST_CORRECTION_REVIEW_REQUIRED'
+  if(approved(id).some(p=>!p.applied_at))return 'TEST_CORRECTION_APPLY_REQUIRED'
+}
+export function testCorrectionVersion(id:string){
+  const rows=read(id).proposals;if(!rows.length)return 'none'
+  approved(id) // Evidence changes must invalidate receipt reuse, not just new registration.
+  return hash(JSON.stringify(rows.filter(p=>p.scope===scope(id)).map(p=>[p.id,p.status,p.new_hash,Boolean(p.applied_at),p.decision])))
+}
+/** Host-only independent decision. Not exposed in model tools. Evidence is
+ * immutable by hash; approval permits exact test bytes, never product PASS. */
+export function decideTestCorrection(id:string,proposalId:string,input:{verdict:'approve'|'reject';reviewer:'independent_operator';reason:string;expected_sources:Record<string,string>;evidence:Array<{path:string;sha256:string}>}){
+  return mutate(id,state=>{
+    const p=state.proposals.find(p=>p.id===proposalId)
+    if(!p||p.status!=='pending'||p.scope!==scope(id))throw Error('TEST_CORRECTION_DECISION_STALE')
+    if(input.reviewer!=='independent_operator'||!input.reason?.trim()||!['approve','reject'].includes(input.verdict)||!Array.isArray(input.evidence)||!input.evidence.length
+      ||!input.expected_sources||Object.keys(input.expected_sources).length!==Object.keys(p.expected_sources).length||Object.entries(p.expected_sources).some(([k,v])=>input.expected_sources[k]!==v))throw Error('TEST_CORRECTION_INDEPENDENT_EVIDENCE_REQUIRED')
+    for(const e of input.evidence)if(!isAbsolute(e.path)||hash(readFileSync(e.path))!==e.sha256)throw Error('TEST_CORRECTION_EVIDENCE_CHANGED')
+    if(input.verdict==='approve'&&state.proposals.some(q=>q.id!==p.id&&q.scope===p.scope&&q.status==='approved'&&q.file===p.file&&q.old_hash===p.old_hash))throw Error('TEST_CORRECTION_CONFLICT')
+    p.status=input.verdict==='approve'?'approved':'rejected';p.decision={reviewer:input.reviewer,reason:input.reason,at:new Date().toISOString(),evidence:input.evidence};return{id:p.id,status:p.status,verification:'not_issued'}
+  })
+}
+function approved(id:string){return read(id).proposals.filter(p=>p.scope===scope(id)&&p.status==='approved').map(p=>{
+  if(!p.decision||p.decision.reviewer!=='independent_operator'||hash(p.replacement)!==p.new_hash)throw Error('TEST_CORRECTION_APPROVAL_INVALID')
+  for(const e of p.decision.evidence)if(hash(readFileSync(e.path))!==e.sha256)throw Error('TEST_CORRECTION_EVIDENCE_CHANGED')
+  frozenNativeGuiVersion(id,p.before);frozenNativeGuiVersion(id,p.after);return p
+})}
+export function applyTestCorrection(id:string,proposalId:string){
+  const p=approved(id).find(p=>p.id===proposalId);if(!p)throw Error('TEST_CORRECTION_NOT_APPROVED')
+  const root=realpathSync(findProject(id).root_path),file=resolve(root,p.file),rel=relative(root,file),parent=relative(root,realpathSync(dirname(file)))
+  if(!rel||rel.startsWith('..')||isAbsolute(rel)||parent.startsWith('..')||isAbsolute(parent)||lstatSync(file).isSymbolicLink())throw Error('TEST_CORRECTION_PATH_INVALID')
+  const live=hash(readFileSync(file));if(live!==p.old_hash&&live!==p.new_hash)throw Error('TEST_CORRECTION_WORKING_BYTES_CHANGED')
+  if(live!==p.new_hash)writeTextFileAtomic(file,p.replacement)
+  mutate(id,state=>{state.proposals.find(q=>q.id===p.id)!.applied_at=new Date().toISOString()})
+  return{applied:true,file:p.file,new_hash:p.new_hash,verification:'not_issued',next:'重新执行全部保留案例；批准修订不等于关闭旧失败或通过交付。'}
+}
+/** Exact independently approved revisions only. Other assertions, dependencies,
+ * case names, entry composition and restart requirements remain protected. */
+export function filterApprovedTestChanges(id:string,before:NativeGuiTests,after:NativeGuiTests,changes:string[]){
+  const decisions=approved(id).filter(p=>{
+    const old=before.files.find(f=>pathOf(before,f.path)===p.file),next=after.files.find(f=>pathOf(after,f.path)===p.file)
+    return old?.sha256===p.old_hash&&next?.sha256===p.new_hash
+  })
+  return changes.filter(change=>!decisions.some(p=>{
+    if(change===p.file)return true
+    const old=p.before.cases.find(c=>change===`case:${c.feature}:${c.name}`),next=old&&p.after.cases.find(c=>c.name===old.name)
+    return old&&next&&before.cases.some(c=>c.name===old.name&&c.signature===old.signature)&&after.cases.some(c=>c.name===next.name&&c.signature===next.signature)
+  }))
+}

@@ -1,4 +1,5 @@
 import { verifyComponentUsage } from './component-usage'
+import {testCorrectionVersion} from './test-corrections'
 import { verifyRequiredDesignAssets } from './design-asset-delivery'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
@@ -71,7 +72,7 @@ async function inputs(projectId: string, requestId: string, signal?: AbortSignal
   const source=(await runtimeInventory(project.root_path,signal)).digest
   const input_identity={source,scope:prdScopeFingerprint(brief),rules:digest([ruleVersion,fixtureVersion]),
     environment:digest([runtime,resolved.command,resolved.env,runtimeBindingVersion(projectId),capabilityBindingVersion(projectId),implementation,process.platform,process.arch,process.versions.node]),request_id:requestId,operation_id:project.lean_operation_id}
-  return { input_identity, key: digest({ protocol: 1, hostId, source, requestId, operation: project.lean_operation_id,
+  return { input_identity, key: digest({ protocol: 1, hostId, source, requestId, operation: project.lean_operation_id,test_corrections:testCorrectionVersion(projectId),
     scope: prdScopeFingerprint(brief), confirmed: brief.user_confirmed_at, ux: project.ux_confirmation, rules: ruleVersion, fixtures: fixtureVersion,
     runtime, command: resolved.command, environment: resolved.env, managed: runtimeBindingVersion(projectId),capabilities:capabilityBindingVersion(projectId), independent:independentDesignVersion(projectId),independent_challenges:independentChallengeVersion(projectId),adapter:independentAdapterVersion(project.root_path),implementation, platform: process.platform, arch: process.arch, node: process.versions.node }), reusable }
 }

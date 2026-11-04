@@ -1,4 +1,5 @@
 import { assertStageContractsRetained } from './project-stages';
+import {filterApprovedTestChanges} from './test-corrections';
 import { existsSync, readFileSync } from 'node:fs';
 import { freezeNativeGuiTests, nativeTestContractChanges, NativeTestContractError } from './native-gui-tests';
 import { findProject, updateProject } from '../project/project-service';
@@ -20,7 +21,7 @@ export function registerNativeGuiTests(projectId: string, script: string, restar
     if (existsSync(guiSuitePath(projectId))) {
         const bytes=readFileSync(guiSuitePath(projectId)),previous = parseGuiSuite(JSON.parse(bytes.toString('utf8')));
         const repairable=Boolean(previous.native_tests)&&canRepairUnexecutedNativePlan(projectId,createHash('sha256').update(bytes).digest('hex'))
-        const changes = previous.native_tests ? nativeTestContractChanges(previous.native_tests, native_tests) : ['existing-action-suite'];
+        const changes = previous.native_tests ? filterApprovedTestChanges(projectId,previous.native_tests,native_tests,nativeTestContractChanges(previous.native_tests, native_tests)) : ['existing-action-suite'];
         if (previous.scope_hash === scope && changes.length && !repairable) throw new NativeTestContractError(changes);
     }
     assertStageContractsRetained(projectId, native_tests);

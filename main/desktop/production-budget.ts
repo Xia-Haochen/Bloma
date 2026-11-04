@@ -4,6 +4,7 @@ import { getPromaHome } from '../../storage/config-paths'
 import { readJsonFile, writeJsonFile } from '../../storage/json-store'
 import type { SDKQuery, SDKQueryOptions } from '../orchestration/stages/orchestration-contracts'
 import { MonetaryBudgetError } from '../platform/llm/monetary-budget'
+import {ModelRequestRefusal} from '../platform/llm/model-request-refusal'
 
 interface BudgetState {
   version: 1
@@ -132,8 +133,8 @@ export function createProductionBudget(projectId: string, scope: string, phase: 
       // do not turn a known unsent request into permanently consumed output.
       // Network errors, cancelled/unknown calls and earlier physical retries
       // retain their reservations exactly as before.
-      if (!settled && !transportStarted && !usage && error instanceof MonetaryBudgetError
-        && ['MONETARY_BUDGET_EXHAUSTED','MONETARY_OPERATION_EXHAUSTED','MONETARY_RESERVATION_WAIT_TIMEOUT','REQUEST_BUDGET_EXHAUSTED'].includes(error.message)) {
+      if (!settled && !transportStarted && !usage && (error instanceof ModelRequestRefusal || error instanceof MonetaryBudgetError
+        && ['MONETARY_BUDGET_EXHAUSTED','MONETARY_OPERATION_EXHAUSTED','MONETARY_RESERVATION_WAIT_TIMEOUT','REQUEST_BUDGET_EXHAUSTED'].includes(error.message))) {
         const state = load(); state.output -= reservation; persist(state); settled = true; notifyOutput(key)
       }
       throw error

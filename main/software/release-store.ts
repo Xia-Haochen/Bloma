@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import {testCorrectionGate} from './test-corrections'
 import * as nodeFs from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -168,6 +169,7 @@ export async function verifyReleaseSource(release: SoftwareRelease, signal?: Abo
 }
 /** Only the host after actual candidate checks may call this, never model tools. */
 export async function sealSoftwareRelease(release: SoftwareRelease, evidence: NonNullable<SoftwareRelease['verified']>, signal?: AbortSignal, stillCurrent?: () => boolean) {
+  const correction=testCorrectionGate(release.projectId);if(correction)throw Error(correction)
   await verifyReleaseSource(release, signal)
   signal?.throwIfAborted()
   if (stillCurrent && !stillCurrent()) throw Error('RELEASE_VERIFICATION_SCOPE_CHANGED')

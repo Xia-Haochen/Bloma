@@ -44,6 +44,12 @@ function tool(name: string, execute: AgentLoopTool['execute']): AgentLoopTool {
 function nativeFile() { return piSessionPath('test-project', 'test-session', 'desktop-implement:', process.cwd()) }
 
 describe('real upstream Pi AgentSession integration', () => {
+  it.each(['verify_project_stage','future_verification_entry'])('stops repeated typed host refusals from %s despite changed filenames and intervening successful writes',async name=>{
+    let calls=0
+    const query:SDKQuery=async function*(){calls++;yield{type:'assistant',message:{role:'assistant',content:[{type:'tool_use',id:'edit-'+calls,name:'write_file',input:{}},{type:'tool_use',id:'check-'+calls,name,input:{file:'renamed-'+calls}}]}};yield done}
+    const result=await runAgentLoop(input(query,{maxTurns:20,tools:[tool('write_file',async()=>({output:'written'})),tool(name,async()=>({output:'host refuses this contract',isError:true,feedback:{schema_version:1,execution:'not_run',verification:'unverified',source:'host',category:'invalid_input',reason:'CONTRACT_REFUSED',fingerprint:'same-contract'}}))]}))
+    expect(calls).toBe(3);expect(result.termination_detail).toMatchObject({reason:'no_progress',observed:3})
+  })
   it.each(['unknown','environment','assertion'] as const)('delivers %s feedback before the next controlled decision without routing ambiguity to blind product edits',async scenario=>{
     const r=(scenario==='environment'?{status:'environment_blocked',summary:'runtime unavailable'}:scenario==='assertion'?{status:'failed',summary:'expectation must be checked',core:{host_cli:{cases:[{name:'rounding',passed:false,exit_code:0,expected:{stdout:'4',exit_code:0},actual:'5'}]}}}:{status:'failed',summary:'failure without cause'}) as never
     const actions:string[]=[];let requests=0

@@ -32,7 +32,7 @@ export interface GuiAcceptanceSuite { version: 1; scope_hash: string; covers: st
 }
 export interface GuiAcceptanceResult {
   case_results?: Array<{name:string;feature:string;status:'passed'|'failed'|'unverified'|'not_run';assertions:number;interactions:number;error?:string}>
-  failure_kind?: 'assertion'|'runtime'|'bootstrap'|'incomplete'
+  failure_kind?: 'assertion'|'runtime'|'bootstrap'|'incomplete'|'unresolved'
   version: 1; scope: 'host_native_gui_business'; status: 'passed' | 'failed' | 'unverified'
   method?: 'action_steps' | 'node:test'
   native_evidence?: {interactions:number;assertions:number}

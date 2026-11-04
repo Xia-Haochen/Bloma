@@ -2,6 +2,12 @@ import { it, expect } from 'vitest'
 import { nativeGuiObservations } from '../../../main/software/native-gui-tests'
 import { guiFeatureResults } from '../../../main/desktop/gui-feature-results'
 import { verificationFailure } from '../../../main/software/verification-diagnostics'
+it('classifies parent-cancelled child tests with zero assertions as unverified execution, not business assertion failure',()=>{
+  const result=nativeGuiObservations(suite,[{code:1,events:JSON.stringify({type:'test:fail',name:'F-001 save',error:'test did not finish before its parent and was cancelled'}),trace:'{"interactions":0,"assertions":0,"cases":[{"name":"F-001 save","assertions":0,"interactions":0}]}'}])
+  expect(result.status).toBe('unverified');expect(result.failure_kind).toBe('incomplete')
+  expect(result.case_results[0].status).toBe('unverified');expect(result.error).toContain('EXECUTION_INCOMPLETE')
+  expect(verificationFailure({status:result.status,summary:result.error!,core:{host_gui:result}} as never)?.category).not.toBe('product_assertion')
+})
 const suite={covers:['F-001','F-002','F-003'],native_tests:{cases:[{name:'F-001 save',feature:'F-001'},{name:'F-002 reject',feature:'F-002'},{name:'F-003 reopen',feature:'F-003'}]}} as never
 function observed(){return nativeGuiObservations(suite,[{code:1,events:[{type:'test:pass',name:'F-001 save'},{type:'test:fail',name:'F-002 reject',error:'expected actual',assertion:{expected:'required',actual:'accepted'}}].map(row=>JSON.stringify(row)).join('\n'),
   trace:JSON.stringify({interactions:2,assertions:1,cases:[{name:'F-001 save',interactions:1,assertions:1},{name:'F-002 reject',interactions:1,assertions:0}]})}])}
