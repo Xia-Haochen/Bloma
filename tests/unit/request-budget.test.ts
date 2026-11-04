@@ -115,4 +115,14 @@ describe('operation request budget', () => {
     await expect(drain(budget.wrap(query))).rejects.toThrow('shared policy rejected')
     expect(budget.snapshot()).toMatchObject({ admitted_requests: 1, physical_requests: 0, unreported_requests: 1 })
   })
+  it('releases a typed shared admission refusal before transport without resetting attempt counts',async()=>{
+    const budget=createRequestBudget({}, {requests:3,outputTokens:100,rmb:5})
+    const denied:SDKQuery=async function*(_prompt,opt){opt.requestGuard!(request);throw new MonetaryBudgetError('MONETARY_BUDGET_EXHAUSTED')}
+    await expect(drain(budget.wrap(denied))).rejects.toThrow('MONETARY_BUDGET_EXHAUSTED')
+    expect(budget.snapshot()).toMatchObject({logical_queries:1,prepared_requests:1,admitted_requests:0,physical_requests:0,unsent_requests:1,unreported_requests:0,upper_rmb:0})
+    const sent:SDKQuery=async function*(_prompt,opt){opt.requestGuard!(request);opt.onTransportAttempt?.('started');throw new MonetaryBudgetError('MONETARY_BUDGET_EXHAUSTED')}
+    await expect(drain(budget.wrap(sent))).rejects.toThrow('MONETARY_BUDGET_EXHAUSTED')
+    expect(budget.snapshot()).toMatchObject({logical_queries:2,prepared_requests:2,admitted_requests:1,physical_requests:1,unsent_requests:1,unreported_requests:1})
+    expect(budget.snapshot().upper_rmb).toBeGreaterThan(0)
+  })
 })
