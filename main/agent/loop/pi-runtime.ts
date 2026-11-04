@@ -62,7 +62,7 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
   let filter = createDsmlDisplayFilter()
   const recoveryContext = () => {
     if (!input.recoveryContext) return ''
-    try { return input.recoveryContext().slice(0, 8000) }
+    try { const value=input.recoveryContext();return value.length<=8000?value:'【宿主工作状态摘要】摘要超过完整性约定，未按字符截断。先读取working-state现场索引；当前摘要缺失，不推断成功、不重放写入。' }
     catch { return '【宿主工作状态摘要】当前索引不可读；先读公开working-state/resume上下文，不能据历史记录推断当前成功或重放副作用。' }
   }
   const validation = () => ({ gwt_runs: ctx.state.gwt_runs ?? 0, api_contract_runs: ctx.state.api_contract_runs ?? 0,

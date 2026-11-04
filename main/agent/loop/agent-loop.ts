@@ -463,7 +463,7 @@ export async function executeToolCall(
     const used = budgetUsed[use.name] ?? 0
     if (used >= budget) {
       return { output: `「${use.name}」的本轮调用预算已用尽（上限 ${budget} 次）。本轮不要再调用，保存未完成项。`, budgetExhausted: true,
-        feedback: { schema_version: 1, execution: 'not_run', verification: 'unverified', source: 'host', category: 'budget', recovery: 'resume',
+        feedback: { schema_version: 1, execution: 'not_run', verification: 'unverified', source: 'host', category: 'budget', budget_admission:'limit_reached', recovery: 'resume',
           budget: { resource: 'tool_calls', scope: 'invocation', used, limit: budget, remaining: 0, resets_on: 'new_invocation' } } }
     }
     budgetUsed[use.name] = used + 1

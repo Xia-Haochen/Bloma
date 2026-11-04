@@ -22,6 +22,7 @@ import type { SDKQuery } from '../../../main/orchestration/stages/orchestration-
 import { frozenGuiFixtureVersion, sealGuiFixtures } from '../../../main/desktop/gui-fixtures'
 import { installGuiAcceptanceSuite } from '../../../main/desktop/gui-acceptance'
 import { prdScopeFingerprint } from '../../../main/project/requirement-contract'
+import {readVerificationReport} from '../../../main/software/verification-report'
 
 let home: string, old: string | undefined, project: ReturnType<typeof createProject>
 beforeEach(() => { old = process.env.PROMA_HOME; home = mkdtempSync(join(tmpdir(), 'bloma-verify-action-')); process.env.PROMA_HOME = home;
@@ -59,8 +60,13 @@ async function setup() {
 it('runs real checks from a parent action and reuses them at final delivery only for unchanged inputs in the same request', async () => {
   await setup(); const tool = buildSoftwareVerifyTool(project.project_id, createSoftwareCollaborationPolicy(project.project_id, project.root_path, 's'))
   const first = await tool.execute({}, ctx()); expect(first.isError, first.output).not.toBe(true)
+  expect(JSON.parse(first.output).evidence).toMatchObject({freshness:'current_observation',input_identity:{source:expect.stringMatching(/^[a-f0-9]{64}$/),scope:expect.stringMatching(/^[a-f0-9]{64}$/),rules:expect.stringMatching(/^[a-f0-9]{64}$/),environment:expect.stringMatching(/^[a-f0-9]{64}$/),request_id:'r'}})
   const count = () => readFileSync(join(home, 'executions.txt'), 'utf8').split('run\n').length - 1
-  expect(count()).toBe(2); expect(JSON.parse((await tool.execute({}, ctx())).output).reused).toBe(true); expect(count()).toBe(2)
+  expect(count()).toBe(2)
+  const reused=JSON.parse((await tool.execute({},ctx())).output)
+  expect(reused.reused).toBe(true);expect(count()).toBe(2)
+  expect(reused.evidence.report_hash).toBe(JSON.parse(first.output).evidence.report_hash)
+  expect(()=>readVerificationReport(project.project_id,{report_hash:reused.evidence.report_hash})).not.toThrow()
   expect(await recentSoftwareVerification(project.project_id, 'another-request')).toBeUndefined()
   const cached = await recentSoftwareVerification(project.project_id, 'r'); expect(cached?.core?.reused).toBe(true)
   const query: SDKQuery = async function* () { yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '当前版本已验证，请交付。' }] } }; yield { type: 'result', subtype: 'success', usage: { input_tokens: 10, output_tokens: 10 } } }

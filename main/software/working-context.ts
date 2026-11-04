@@ -10,6 +10,7 @@ import { softwareStatusView } from './state-view'
 import { activeSoftwareCommands, redactSoftwareOutput } from './process-manager'
 import { toolFailureKey } from '../agent/loop/work-progress'
 import { leanBudget } from '../desktop/lean-budget'
+import {readVerificationReport} from './verification-report'
 
 function recentTools(sessionId?: string) {
   if (!sessionId || !/^[A-Za-z0-9_-]+$/.test(sessionId)) return { available: false, tools: [] }
@@ -44,25 +45,53 @@ export function softwareWorkingContext(projectId: string, busy = true) {
   let budget: { requests?: number; output?: number; accounting_available: boolean; error?: string }
   try { const live = leanBudget(projectId, 'desktop-implement').snapshot(); budget = { requests: live.requests, output: live.output, accounting_available: true } }
   catch { budget = { accounting_available: false, error: '当前计量记录不可读；以请求/金额准入保护为准，不从旧索引推断剩余额度。' } }
+  let verification:Record<string,unknown>={available:false,missing_evidence:['usable_verification_receipt']}
+  try{
+    const record=readVerificationReport(projectId)
+    if('cases'in record){
+      const first=record.cases.find(row=>row.status!=='passed')
+      const brief=(value:unknown)=>{const text=JSON.stringify(value);return text&&text.length>400?{preview:text.slice(0,400),truncated:true}:value}
+      verification={available:true,recorded_status:record.recorded_status,freshness:record.freshness,usable_for_delivery:false,report_hash:record.report_hash,input_identity:record.input_identity,identity_protocol:record.identity_protocol,
+        missing_evidence:record.missing_evidence,counts:record.counts,
+        first_blocker:first&&Object.fromEntries(['kind','name','status','expected','actual','error'].map(key=>[key,brief(first[key])])),
+        more_blockers:record.counts.failed+record.counts.unverified-(first?1:0),read_more:record.details}
+    }
+  }catch(error){verification.reason=String(error).match(/VERIFICATION_REPORT_[A-Z_]+/)?.[0]??'VERIFICATION_REPORT_READ_ERROR'}
   return { project_id: projectId, operation_id: project.lean_operation_id, session_id: current?.sessionId ?? project.last_session_id,
     project_state_topic: 'project-state', goal_excerpt: brief.positioning.slice(0, 600), confirmed: Boolean(brief.user_confirmed_at), scope_hash: prdScopeFingerprint(brief), feature_ids: brief.requirements.slice(0, 128).map(r => r.id), feature_count: brief.requirements.length,
-    intent: brief.requirements_model && { experience: brief.requirements_model.experience, rules: brief.requirements_model.rules }, status: softwareStatusView(projectId, busy), current_source: source, checkpoint_source: current?.source,
+    intent: brief.requirements_model && { experience: brief.requirements_model.experience, rules: brief.requirements_model.rules }, status: softwareStatusView(projectId, busy), current_source: source, current_source_protocol:'desktop_verification_fingerprint',checkpoint_source: current?.source,
     source_changed_since_checkpoint: source && current?.source ? source !== current.source : undefined,
     pending_commands: activeSoftwareCommands(projectId, current?.sessionId ?? project.last_session_id ?? ''),
-    current_error: current?.error?.slice(0, 800), historical_failure: current?.last_failure && { ...current.last_failure, error: current.last_failure.error.slice(0, 800) },
-    budget,
+    current_error: current?.error, historical_failure: current?.last_failure,
+    budget,verification,
     recent: recentTools(current?.sessionId ?? project.last_session_id),
     instruction: '这是宿主现场索引，不是新需求或通过凭据。最近检查与失败均有对应版本；先核对当前版本和已有工具回执，未决命令用read_process接续，不重复安装、写入或其它副作用。完整目标用features/overview读取；继续不清零账本。' }
 }
-export function renderSoftwareWorkingContext(projectId: string) {
-  const facts = softwareWorkingContext(projectId)
-  // Shrink optional history, never slice a JSON record in half after compaction.
-  while (JSON.stringify(facts).length > 7400 && facts.recent.tools.length) facts.recent.tools.shift()
-  const encoded = JSON.stringify(facts)
-  return '【宿主工作状态摘要】\n' + (encoded.length <= 7400 ? encoded : JSON.stringify({
-    project_id: facts.project_id, operation_id: facts.operation_id, scope_hash: facts.scope_hash, current_source: facts.current_source,
-    execution_status: facts.status.execution.status, verification_status: facts.status.verification.status, goal_status: facts.status.goal.status,
-    budget: facts.budget, pending_commands: facts.pending_commands, context_truncated: true, intent: facts.intent,
-    instruction: '完整现场按需读取working-state；当前摘要不代表通过，不重放安装或其它副作用。',
-  }))
+export function renderWorkingFacts(facts:ReturnType<typeof softwareWorkingContext>){
+  const omitted:Array<{field:string;reason:string;read_more:{tool:string;arguments:{topic:string}}}>=[]
+  const omit=(field:string,topic='working-state')=>omitted.push({field,reason:'摘要容量限制，内容未丢弃；改变相关行为前读取完整依据',read_more:{tool:'read_production_context',arguments:{topic}}})
+  const short=(value:string|undefined,limit:number,field:string)=>{
+    if(value===undefined||value.length<=limit)return value
+    omit(field);return value.slice(0,Math.floor(limit/2))+'【中段省略】'+value.slice(-Math.floor(limit/2))
+  }
+  // Mandatory identifiers, blockers, unfinished processes and budget survive
+  // oversized intent/history. Optional sections are omitted as whole values.
+  const view:Record<string,unknown>={project_id:facts.project_id,operation_id:facts.operation_id,session_id:facts.session_id,scope_hash:facts.scope_hash,
+    current_source:facts.current_source,current_source_protocol:facts.current_source_protocol,checkpoint_source:facts.checkpoint_source,source_changed_since_checkpoint:facts.source_changed_since_checkpoint,
+    status:{execution:{status:facts.status.execution.status,label:facts.status.execution.label},verification:{...facts.status.verification,scope_note:short(facts.status.verification.scope_note,300,'verification.scope_note')},goal:facts.status.goal},
+    current_error:short(facts.current_error??facts.status.execution.reason,800,'current_error'),
+    historical_failure:facts.historical_failure&&{...facts.historical_failure,error:short(facts.historical_failure.error,300,'historical_failure')},
+    pending_commands:facts.pending_commands.slice(0,8).map(row=>({process_id:row.process_id,state:row.state})),pending_command_count:facts.pending_commands.length,
+    budget:facts.budget,verification:facts.verification,confirmed:facts.confirmed,omitted_sections:omitted,
+    verification_details:{tool:'read_production_context',arguments:{topic:'verification-report'}},
+    instruction:'状态是宿主导航，不是当前通过凭据。先处理current_error和未完成进程；历史通过需重新核对。omitted_sections所列依据尚未包含，必要时读取，不猜测、不重放副作用。'}
+  if(facts.pending_commands.length>8)omit('pending_commands')
+  for(const [field,value,topic]of [['goal_excerpt',facts.goal_excerpt,'overview'],['feature_ids',facts.feature_ids,'features'],['intent',facts.intent,'features'],['recent',facts.recent,'working-state']] as const){
+    if(JSON.stringify({...view,[field]:value}).length<6200)view[field]=value
+    else omit(field,topic)
+  }
+  const encoded=JSON.stringify(view)
+  if(encoded.length>7400)throw Error('WORKING_CONTEXT_MINIMUM_OVERFLOW: 关键字段超出摘要契约，不能静默截断')
+  return '【宿主工作状态摘要】\n'+encoded
 }
+export function renderSoftwareWorkingContext(projectId: string) {return renderWorkingFacts(softwareWorkingContext(projectId))}

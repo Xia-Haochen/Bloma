@@ -6,12 +6,41 @@ import { afterEach, beforeEach, expect, it } from 'vitest'
 import { createProject, updateProject } from '../../../main/project/project-service'
 import { saveSoftwareRunState, readSoftwareRunState } from '../../../main/software/run-state'
 import { softwareStatusView } from '../../../main/software/state-view'
-import { softwareWorkingContext, renderSoftwareWorkingContext } from '../../../main/software/working-context'
+import { softwareWorkingContext, renderSoftwareWorkingContext,renderWorkingFacts } from '../../../main/software/working-context'
 import { buildProductionContextTool } from '../../../main/desktop/production-context'
 import { createToolState } from '../../../main/agent/loop/agent-loop'
 import { leanBudget } from '../../../main/desktop/lean-budget'
 
 let home: string, previous: string | undefined, project: ReturnType<typeof createProject>
+it('keeps blockers and unfinished processes when intent and tool history overflow the recovery budget',()=>{
+  const facts=softwareWorkingContext(project.project_id)
+  facts.current_error='CURRENT_BLOCKER '+('long diagnostic '.repeat(1000))+' LAST_CAUSE'
+  facts.intent={experience:{summary:'x'.repeat(100000)},rules:[]} as never
+  facts.pending_commands=[{process_id:'still-running',state:'running'}] as never
+  facts.recent.tools=Array.from({length:100},()=>({tool:'read_file',status:'returned',path:'x'.repeat(1000)}))
+  const rendered=renderWorkingFacts(facts),body=JSON.parse(rendered.split('\n').slice(1).join('\n'))
+  expect(rendered.length).toBeLessThan(8000)
+  expect(body.current_error).toContain('CURRENT_BLOCKER');expect(body.current_error).toContain('LAST_CAUSE')
+  expect(body.pending_commands).toEqual([{process_id:'still-running',state:'running'}])
+  expect(body.budget.accounting_available).toBe(true)
+  expect(body.omitted_sections.map((r:{field:string})=>r.field)).toEqual(expect.arrayContaining(['intent','current_error','recent']))
+  expect(body.omitted_sections.find((r:{field:string})=>r.field==='intent').read_more.arguments.topic).toBe('features')
+})
+it('retains the source error beyond the old 2400-character cutoff and provides a bounded head/tail projection',()=>{
+  const error='ROOT_CAUSE '+('diagnostic '.repeat(1500))+' FINAL_CAUSE'
+  saveSoftwareRunState({projectId:project.project_id,sessionId:'s',runId:'r',status:'blocked',error})
+  expect(readSoftwareRunState(project.project_id)?.error).toBe(error)
+  const snapshot=JSON.parse(renderSoftwareWorkingContext(project.project_id).split('\n').slice(1).join('\n'))
+  expect(snapshot.current_error).toContain('ROOT_CAUSE');expect(snapshot.current_error).toContain('FINAL_CAUSE')
+  expect(softwareWorkingContext(project.project_id).current_error).toBe(error)
+})
+it('includes the late failed case and its expected/actual values in recovery, marking it historical',()=>{
+  const result={status:'failed',summary:'failed',core:{host_cli:{cases:Array.from({length:30},(_,i)=>({name:'case-'+i,covers:['F-001'],passed:i!==29,exit_code:0,expected:{stdout:'wanted',exit_code:0},actual:i===29?'observed':'wanted'}))}}}
+  const dir=join(home,'software-verification');mkdirSync(dir)
+  writeFileSync(join(dir,project.project_id+'.json'),JSON.stringify({version:1,state:'complete',result,result_hash:createHash('sha256').update(JSON.stringify(result)).digest('hex')}))
+  const snapshot=JSON.parse(renderSoftwareWorkingContext(project.project_id).split('\n').slice(1).join('\n'))
+  expect(snapshot.verification).toMatchObject({freshness:'historical_not_revalidated',usable_for_delivery:false,first_blocker:{name:'case-29',expected:{stdout:'wanted',exit_code:0},actual:'observed'}})
+})
 beforeEach(() => { previous = process.env.PROMA_HOME; home = mkdtempSync(join(tmpdir(), 'bloma-working-state-')); process.env.PROMA_HOME = home; project = createProject({ request_id: 'c', mode: 'quick' }, { workflowVersion: 'software-v1' }) })
 afterEach(() => { if (previous === undefined) delete process.env.PROMA_HOME; else process.env.PROMA_HOME = previous; rmSync(home, { recursive: true, force: true }) })
 it('clears stale errors on a new run but retains redacted history and never calls an ended turn delivered', () => {

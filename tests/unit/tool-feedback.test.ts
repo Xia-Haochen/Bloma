@@ -27,7 +27,7 @@ describe('tool feedback contract', () => {
   it('budget is not executed, not a product failure', () => {
     const feedback = feedbackForTool('run_project_script', { output: 'budget', isError: true, budgetExhausted: true })!
     expect(feedback).toMatchObject({ execution: 'not_run', category: 'budget' })
-    expect(toolFeedbackLabel(feedback)).toBe('额度已用尽')
+    expect(toolFeedbackLabel(feedback)).toBe('额度保护未放行')
     expect(feedback.recovery).toBe('inspect') // Legacy budget without a reset scope cannot authorize resume.
   })
   it('normalizes persistent and invocation budget recovery consistently across history and UI', () => {

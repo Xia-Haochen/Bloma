@@ -10,6 +10,8 @@ import { emptyAssistant } from '../../main/agent/loop/pi-messages'
 import { createProductionBudget } from '../../main/desktop/production-budget'
 import { enqueueSteer } from '../../main/agent/loop/steer-queue'
 import { AssistantTurnCollector } from '../support/assistant-turn-collector'
+import {verificationToolFeedback,verificationReportView} from '../../main/software/verification-report'
+import {readToolFeedback} from '../../shared/tool-feedback'
 
 let home: string, oldHome: string | undefined
 beforeEach(() => { oldHome = process.env.PROMA_HOME; home = mkdtempSync(join(tmpdir(), 'bloma-pi-')); process.env.PROMA_HOME = home })
@@ -42,6 +44,26 @@ function tool(name: string, execute: AgentLoopTool['execute']): AgentLoopTool {
 function nativeFile() { return piSessionPath('test-project', 'test-session', 'desktop-implement:', process.cwd()) }
 
 describe('real upstream Pi AgentSession integration', () => {
+  it.each(['unknown','environment','assertion'] as const)('delivers %s feedback before the next controlled decision without routing ambiguity to blind product edits',async scenario=>{
+    const r=(scenario==='environment'?{status:'environment_blocked',summary:'runtime unavailable'}:scenario==='assertion'?{status:'failed',summary:'expectation must be checked',core:{host_cli:{cases:[{name:'rounding',passed:false,exit_code:0,expected:{stdout:'4',exit_code:0},actual:'5'}]}}}:{status:'failed',summary:'failure without cause'}) as never
+    const actions:string[]=[];let requests=0
+    const query:SDKQuery=async function*(_p,options){
+      if(requests++===0)yield call('verify','verify_app')
+      else if(requests===2){
+        const result=options.messages?.flatMap(m=>Array.isArray(m.content)?m.content:[]).find(b=>b.type==='tool_result'&&b.tool_use_id==='verify')
+        const feedback=readToolFeedback(result?.content??'')!
+        expect(feedback.assessment?.root_cause_confirmed).toBe(false)
+        expect(feedback.recovery).toBe(scenario==='environment'?'prepare_environment':'inspect')
+        const packet=JSON.parse((result?.content??'').replace(/^<tool-feedback>[^\n]*<\/tool-feedback>\n/,''))
+        yield call('diagnose',packet.next_action.tool,packet.next_action.arguments)
+      }else yield text('observed next step; no unsupported repair')
+      yield done
+    }
+    await runAgentLoop(input(query,{tools:[tool('verify_app',async()=>({output:JSON.stringify(verificationReportView(r)),feedback:verificationToolFeedback(r),isError:true})),
+      ...['inspect_software_environment','read_production_context','write_file'].map(name=>tool(name,async args=>{actions.push(name+(args.topic?':'+args.topic:''));return{output:'observed'}}))]}))
+    expect(actions).toEqual([scenario==='environment'?'inspect_software_environment':'read_production_context:'+(scenario==='assertion'?'features':'diagnostics')])
+    expect(requests).toBe(3)
+  })
   it('stops an unchanged review submission protocol failure in read-only mode before the turn ceiling',async()=>{
     const q=scripted([[call('submit','submit_quality_findings')]])
     const result=await runAgentLoop(input(q.query,{maxTurns:48,tools:[tool('submit_quality_findings',async()=>({output:'INTENT_CONCERN_FINDING_REQUIRED',isError:true}))]}))

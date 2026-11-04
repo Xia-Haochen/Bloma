@@ -14,7 +14,7 @@ import { assertRetainedSoftwareBehavior } from '../software/regression-baseline'
 
 interface CliCase { name: string; covers: string[]; args: string[]; stdout: string; exit_code: number }
 interface CliSuite { version: 1; scope_hash: string; cases: CliCase[]; expectations: Record<string, string> }
-export interface LeanCliResult { status: 'passed' | 'failed' | 'unverified'; error?: string; cases: Array<{ name: string; covers: string[]; passed: boolean; actual: string; stderr?: string; exit_code: number | null }> }
+export interface LeanCliResult { status: 'passed' | 'failed' | 'unverified'; error?: string; cases: Array<{ name: string; covers: string[]; passed: boolean; actual: string; stderr?: string; exit_code: number | null; expected?: {stdout:string;exit_code:number} }> }
 export const cliSuitePath = (id: string) => {
   if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error('CLI_PROJECT_INVALID')
   return join(getPromaHome(), 'cli-acceptance', `${id}.json`)
@@ -78,7 +78,7 @@ export async function runLeanCliCheck(projectId: string, root: string, signal?: 
         : await execFileDriverSpawn({ command: resolveDriverVenvCommand([...command, ...test.args], root), cwd: root, timeoutMs: 15000,
         signal: runSignal, env: { ...buildDriverEnv({ env_whitelist: [] } as never, process.env), APP_DATA_DIR: join(temporary, 'data'), PYTHONDONTWRITEBYTECODE: '1' } })
       const passed = outcome.code === test.exit_code && outcome.stdout.trim() === test.stdout.trim()
-      result.cases.push({ name: test.name, covers: test.covers, passed, actual: outcome.stdout.slice(0, 8192), ...(outcome.stderr.trim() ? { stderr: outcome.stderr.slice(-4000) } : {}), exit_code: outcome.code })
+      result.cases.push({ name: test.name, covers: test.covers, passed, expected:{stdout:test.stdout,exit_code:test.exit_code}, actual: outcome.stdout, ...(outcome.stderr.trim() ? { stderr: outcome.stderr } : {}), exit_code: outcome.code })
     }
     checkScope(suite, projectId)
     if (!readFileSync(cliSuitePath(projectId)).equals(bytes)) throw new Error('CLI_INPUT_CHANGED')

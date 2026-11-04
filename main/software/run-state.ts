@@ -31,7 +31,9 @@ export function saveSoftwareRunState(input: { projectId: string; sessionId: stri
   try { const state = leanBudget(input.projectId, 'desktop-implement').snapshot(); budget = { file: state.file, request_ledger: projectUsageLedgerPath(input.projectId), requests: state.requests, output: state.output } }
   catch (error) { budget = { error: redactSoftwareOutput(String(error)).slice(0, 500) } }
   const sameOperation = before?.operationId === project.lean_operation_id
-  const now = new Date().toISOString(), error = input.error ? redactSoftwareOutput(input.error).slice(0, 2400) : undefined
+  // Retain the redacted source record. Readers bound their projection and expose
+  // omissions; truncating here would make the promised detail irretrievable.
+  const now = new Date().toISOString(), error = input.error ? redactSoftwareOutput(input.error) : undefined
   const state: SoftwareRunState = { version: 1, projectId: input.projectId, sessionId: input.sessionId, runId: input.runId, status: input.status,
     source: input.source ?? (sameOperation ? before?.source : undefined), check: input.check ?? (sameOperation ? before?.check : undefined), operationId: project.lean_operation_id, at: now, budget,
     candidateId: input.candidateId ?? (sameOperation ? before?.candidateId : undefined), failure: sameOperation ? before?.failure : undefined,

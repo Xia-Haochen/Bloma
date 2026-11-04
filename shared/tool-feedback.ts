@@ -18,6 +18,8 @@ export interface ToolFeedback {
   reason?: string
   recovery?: 'correct_input' | 'prepare_environment' | 'repair_product' | 'repair_verifier' | 'wait_permission' | 'resume' | 'inspect' | 'none' | 'stop' | 'answer_question'
   budget?: ToolBudgetFact
+  budget_admission?: 'limit_reached'|'reservation_insufficient'|'waiting_reservation'|'unknown'
+  assessment?: { certainty:'supported'|'suspected'|'unknown'; root_cause_confirmed:boolean }
   exit_code?: number
   reports?: string[]
   fingerprint?: string
@@ -50,6 +52,9 @@ export function safeToolFeedback(raw: unknown): ToolFeedback | undefined {
   for (const key of ['scope', 'reason', 'fingerprint'] as const) if (typeof r[key] === 'string') result[key] = r[key].slice(0, key === 'reason' ? 240 : 96)
   if (CATEGORY.includes(String(r.category))) result.category = r.category as ToolFeedback['category']
   if (RECOVERY.includes(String(r.recovery))) result.recovery = r.recovery as ToolFeedback['recovery']
+  if(['limit_reached','reservation_insufficient','waiting_reservation','unknown'].includes(String(r.budget_admission)))result.budget_admission=r.budget_admission as ToolFeedback['budget_admission']
+  const assessment=r.assessment as ToolFeedback['assessment']
+  if(assessment&&['supported','suspected','unknown'].includes(assessment.certainty)&&typeof assessment.root_cause_confirmed==='boolean')result.assessment={certainty:assessment.certainty,root_cause_confirmed:assessment.root_cause_confirmed}
   const b = r.budget as ToolBudgetFact | undefined
   if (b && typeof b === 'object' && ['tool_calls', 'script_runs', 'install_calls', 'model_requests', 'money'].includes(b.resource)
     && ['invocation', 'session', 'project', 'experiment', 'model_account'].includes(b.scope)
@@ -58,6 +63,7 @@ export function safeToolFeedback(raw: unknown): ToolFeedback | undefined {
     && b.remaining === Math.max(0, b.limit - b.used)) {
     result.budget = { resource: b.resource, scope: b.scope, used: b.used, limit: b.limit, remaining: b.remaining, resets_on: b.resets_on }
   }
+  if(result.budget_admission==='limit_reached'&&result.budget&&result.budget.remaining>0)result.budget_admission='unknown'
   if (['host', 'fixed_input', 'physical_device', 'unknown'].includes(String(r.source))) result.source = r.source as ToolFeedback['source']
   if (typeof r.exit_code === 'number' && Number.isSafeInteger(r.exit_code)) result.exit_code = r.exit_code
   if (['unverified', 'incomplete'].includes(String(r.task_completion))) result.task_completion = r.task_completion as ToolFeedback['task_completion']
@@ -92,7 +98,7 @@ export function toolFeedbackLabel(f: ToolFeedback): string {
   if (f.evidence?.freshness === 'stale') return '验证记录已过期'
   if (f.evidence?.freshness === 'unknown') return '验证版本待核对'
   if (f.scope === 'call_declared') return '调用已登记'
-  if (f.category === 'budget') return '额度已用尽'
+  if (f.category === 'budget') return f.budget_admission==='waiting_reservation'?'等待额度预留结算':f.budget_admission==='reservation_insufficient'?'本次请求预留不足':f.budget_admission==='limit_reached'?'额度已到上限':'额度保护未放行'
   if (f.category === 'permission') return f.execution === 'not_run' ? '未执行：权限限制' : '写入范围违规'
   if (f.execution === 'not_run') return '未执行'
   if (f.execution === 'running') return '进行中'

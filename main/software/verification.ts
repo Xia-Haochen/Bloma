@@ -30,6 +30,8 @@ import { capabilityBindingVersion } from './capability-bindings'
 import { recordIndependentFindings, independentChallengeVersion } from './independent-quality'
 
 export interface SoftwareVerification { status: 'passed' | 'failed' | 'unverified' | 'environment_blocked'; summary: string; candidate?: SoftwareRelease;
+  completed_at?:number
+  input_identity?: {source:string;scope:string;rules:string;environment:string;request_id:string;operation_id?:string}
   native_plan?: { suite_hash: string; execution: 'not_started' | 'attempted' }
   independent?:Awaited<ReturnType<typeof verifyIndependentDesign>>
   core?: CoreVerificationResult; security?: SecurityScanResult; launch?: LaunchSmokeResult | null; reused?: boolean; report_path?: string; failure?: VerificationFailure }
@@ -66,7 +68,10 @@ async function inputs(projectId: string, requestId: string, signal?: AbortSignal
     implementation.push(await fileDigest(fileURLToPath(import.meta.url), signal))
     implementation.push((await runtimeInventory(join(host, 'templates/tools'), signal, {}, false)).digest)
   }
-  return { key: digest({ protocol: 1, hostId, source: (await runtimeInventory(project.root_path, signal)).digest, requestId, operation: project.lean_operation_id,
+  const source=(await runtimeInventory(project.root_path,signal)).digest
+  const input_identity={source,scope:prdScopeFingerprint(brief),rules:digest([ruleVersion,fixtureVersion]),
+    environment:digest([runtime,resolved.command,resolved.env,runtimeBindingVersion(projectId),capabilityBindingVersion(projectId),implementation,process.platform,process.arch,process.versions.node]),request_id:requestId,operation_id:project.lean_operation_id}
+  return { input_identity, key: digest({ protocol: 1, hostId, source, requestId, operation: project.lean_operation_id,
     scope: prdScopeFingerprint(brief), confirmed: brief.user_confirmed_at, ux: project.ux_confirmation, rules: ruleVersion, fixtures: fixtureVersion,
     runtime, command: resolved.command, environment: resolved.env, managed: runtimeBindingVersion(projectId),capabilities:capabilityBindingVersion(projectId), independent:independentDesignVersion(projectId),independent_challenges:independentChallengeVersion(projectId),adapter:independentAdapterVersion(project.root_path),implementation, platform: process.platform, arch: process.arch, node: process.versions.node }), reusable }
 }
@@ -114,6 +119,7 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
   try {
     writeTextFileAtomic(file, JSON.stringify({ version: 1, state: 'running', key: '', at: Date.now() } satisfies Receipt))
     version = await inputs(projectId, requestId, signal)
+    result.input_identity=version.input_identity
     if (existsSync(guiSuitePath(projectId))) {
       const bytes = readFileSync(guiSuitePath(projectId));
       if (parseGuiSuite(JSON.parse(bytes.toString('utf8'))).native_tests) result.native_plan = { suite_hash: createHash('sha256').update(bytes).digest('hex'), execution: 'not_started' }
@@ -158,6 +164,7 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
     result.failure ??= verificationFailure(result)
     // Even cancellation/write failure invalidates an older PASS. No result may
     // outlive changed rule, fixture, environment, binary or source inputs.
+    result.completed_at=Date.now()
     const reusable = Boolean(version?.reusable && result.status === 'passed' && !result.security?.issues.some(issue => issue.category === 'external_resource'))
     writeTextFileAtomic(file, JSON.stringify({ version: 1, state: 'complete', key: version?.key ?? '', at: Date.now(), result, result_hash: digest(result), reusable } satisfies Receipt))
     poisoned.delete(file)

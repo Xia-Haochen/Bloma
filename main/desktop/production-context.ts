@@ -30,6 +30,7 @@ import { DOCUMENT_GUIDANCE } from '../software/document-capability'
 import { COUNTEREXAMPLE_GUIDANCE } from '../software/acceptance-counterexamples'
 import { MULTIMODAL_GUIDANCE, HTTP_GUIDANCE, VISION_GUIDANCE, AI_SERVICE_GUIDANCE, PRODUCT_COMPONENT_RECIPES } from '../software/integration-capabilities'
 import {softwareDiagnosticContext} from '../software/diagnostic-context'
+import {readVerificationReport} from '../software/verification-report'
 
 /** Read the authoritative scope on demand; never rewrite or truncate business requirements. */
 export function productionContext(backplane: PrdBackplane, topic: string, featureIds: string[] = []): unknown {
@@ -71,13 +72,15 @@ export function buildProductionContextTool(projectId: string): AgentLoopTool {
   return { name: 'read_production_context', parallelSafe: true,
     description: '只读按需上下文：components看可复用组合，ai-service看通用AI模板与Key/路由；diagnostics汇总故障现场。capabilities列目录；documents/vision/multimodal/http-integration看能力；existing-project/working-state看工程与现场，features看范围，verification-gui/llm/speech看验收协议。',
     input_schema: { type: 'object', properties: {
-      topic: { type: 'string', enum: ['capabilities','components','ai-service','diagnostics','execution','working-state','documents','multimodal','vision','http-integration','acceptance-counterexamples','existing-project','overview', 'features', 'prd', 'launch', 'verification', 'verification-llm', 'verification-speech', 'verification-gui', 'data-update', 'delivery', 'resume', 'independent-design', 'longterm', 'project-state', 'project-activity', 'project-tasks', 'project-stages'] },
+      topic: { type: 'string', enum: ['capabilities','components','ai-service','diagnostics','verification-report','execution','working-state','documents','multimodal','vision','http-integration','acceptance-counterexamples','existing-project','overview', 'features', 'prd', 'launch', 'verification', 'verification-llm', 'verification-speech', 'verification-gui', 'data-update', 'delivery', 'resume', 'independent-design', 'longterm', 'project-state', 'project-activity', 'project-tasks', 'project-stages'] },
+      report_hash:{type:'string'},section:{type:'string',enum:['cases','raw']},
       offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 50 }, history: { type: 'boolean' },
       feature_ids: { type: 'array', items: { type: 'string' }, description: 'features主题的功能编号，如F-001；未知编号拒绝，不默默过滤。' },
     }, required: ['topic'] },
     execute: async (input, ctx) => {
       try {
         if (ctx.projectId !== projectId) throw Error('PRODUCTION_CONTEXT_PROJECT_MISMATCH')
+        if(isSoftwareProject(projectId)&&input.topic==='verification-report')return{output:JSON.stringify(readVerificationReport(projectId,input))}
         if (isSoftwareProject(projectId) && input.topic === 'capabilities') return { output: JSON.stringify({ catalog: SOFTWARE_CONTEXT_CATALOG, note: '目录不代表本轮需求或环境已就绪；按topic读取需要的说明，不扩大目标。' }) }
         if(isSoftwareProject(projectId)&&input.topic==='components')return{output:JSON.stringify(PRODUCT_COMPONENT_RECIPES)}
         if(isSoftwareProject(projectId)&&input.topic==='ai-service')return{output:JSON.stringify(AI_SERVICE_GUIDANCE)}

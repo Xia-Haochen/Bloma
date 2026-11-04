@@ -31,7 +31,7 @@ it('reports bootstrap separately and never clears an earlier failure with a late
 })
 it('uses structured execution evidence and leaves a locator timeout root cause unresolved',()=>{
   const result={status:'failed' as const,summary:'actual GUI check failed',core:{host_gui:{failure_kind:'assertion',steps:[{id:'one',passed:false,actual:{error:'TimeoutError waiting for locator',assertion:{}}}]}}} as never
-  expect(verificationFailure(result)).toMatchObject({category:'unknown',classification_basis:'unresolved',next_tool:'inspect_app'})
+  expect(verificationFailure(result)).toMatchObject({category:'unknown',classification_basis:'unresolved',next_action:{tool:'read_production_context',arguments:{topic:'diagnostics'}}})
   const assertion={status:'failed',summary:'check failed',core:{host_gui:{failure_kind:'assertion',steps:[{id:'one',passed:false,actual:{assertion:{expected:1,actual:0}}}]}}} as never
   expect(verificationFailure(assertion)).toMatchObject({category:'product_assertion',classification_basis:'assertion'})
 })
