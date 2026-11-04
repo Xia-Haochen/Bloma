@@ -9,9 +9,16 @@ import { createProject } from '../../../main/project/project-service'
 import { leanBudget } from '../../../main/desktop/lean-budget'
 import { organizedPrd } from '../../support/organized-prd'
 import type { PrdBackplane } from '../../../main/model/prd-backplane'
+import { canonicalFindingReference } from '../../../main/software/quality-reference'
 
 const base='tests/fixtures/personal-wish/failures/'
 const previous: PrdBackplane={project_id:'fixture',name:'',positioning:'',requirements:[],acceptance:{},out_of_scope:[],assumptions:[]}
+it('normalizes the real redundant finding ID without dropping conflicting IDs or other fields',()=>{
+  const raw=JSON.parse(readFileSync(base+'doodle-review-reference-alias.json','utf8'))
+  for(const finding of raw.findings){const canonical=canonicalFindingReference(finding);expect(canonical.requirement).toBe(finding.requirement);expect(canonical).not.toHaveProperty('requirement_id');expect(canonical.evidence).toBe(finding.evidence)}
+  expect(canonicalFindingReference({requirement_id:'F-001'})).toEqual({requirement:'F-001'})
+  expect(()=>canonicalFindingReference({requirement:'F-001',requirement_id:'F-002'})).toThrow('CONFLICT')
+})
 it('extracts one complete real HTML artifact without trusting surrounding prose or permitting ambiguous/active content',()=>{
   const raw=readFileSync(base+'doodle-sketch-prefaced.txt','utf8')
   const parsed=parseSketchHtml(raw)

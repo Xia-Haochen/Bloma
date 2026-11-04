@@ -7,6 +7,7 @@ import type { SDKQuery, SDKQueryOptions } from '../../../main/orchestration/stag
 import { leanBudget, withLeanRuntime } from '../../../main/desktop/lean-budget'
 import { createProject } from '../../../main/project/project-service'
 import { configureSoftwareExecutionLimits } from '../../../main/software/execution-limits'
+import { MonetaryBudgetError } from '../../../main/platform/llm/monetary-budget'
 
 beforeEach(() => vi.stubEnv('PROMA_HOME', mkdtempSync(join(tmpdir(), 'bloma-production-budget-'))))
 afterEach(() => vi.unstubAllEnvs())
@@ -19,6 +20,15 @@ const ok: SDKQuery = async function* (_prompt, opts) {
 const limits = { requests: 3, phaseRequests: 3, output: 8192, perResponse: 2048 }
 
 describe('production admission is shared and durable', () => {
+  it('does not consume output on a known monetary refusal before transport, but retains an uncertain physical attempt',async()=>{
+    const budget=createProductionBudget('p','unsent','desktop-implement',limits)
+    const blocked:SDKQuery=async function*(){throw new MonetaryBudgetError('MONETARY_BUDGET_EXHAUSTED')}
+    await expect(drain(budget.wrap(blocked))).rejects.toThrow('MONETARY_BUDGET_EXHAUSTED')
+    expect(budget.snapshot()).toMatchObject({requests:1,output:0})
+    const unknown:SDKQuery=async function*(_prompt,opts){opts.onTransportAttempt?.('started');throw new MonetaryBudgetError('MONETARY_BUDGET_EXHAUSTED')}
+    await expect(drain(budget.wrap(unknown))).rejects.toThrow()
+    expect(budget.snapshot()).toMatchObject({requests:2,output:2048})
+  })
   it('waits for a concurrent maximum reservation instead of repeatedly failing a new reviewer', async () => {
     const budget = createProductionBudget('p', 'shared-large', 'desktop-implement', { ...limits, perResponse: 8192 })
     let release!: () => void, childStarted = false
@@ -40,6 +50,18 @@ describe('production admission is shared and durable', () => {
     configureSoftwareExecutionLimits(p.project_id,p.lean_operation_id??'initial',{requests:512,output:1048576,reason:'User-authorized continuation after a diagnosed admission defect; money policy unchanged'})
     expect(leanBudget(p.project_id,'desktop-implement').snapshot()).toMatchObject({requests:1,output:100,limits:{requests:512,output:1048576}})
     expect(()=>configureSoftwareExecutionLimits(p.project_id,'different',{requests:512,output:1048576,reason:'wrong operation'})).toThrow('OPERATION_CHANGED')
+  })
+  it('cancels a queued child without debiting it or releasing the active parent reservation',async()=>{
+    const budget=createProductionBudget('p','cancel-wait','desktop-implement',{...limits,perResponse:8192})
+    let release!:()=>void
+    const hold=new Promise<void>(done=>{release=done})
+    const parent=drain(budget.wrap(async function*(){await hold;yield{type:'result',subtype:'success',usage:{output_tokens:100}}}),{...options(),maxTokens:8192})
+    const controller=new AbortController()
+    const child=drain(budget.wrap(ok),{...options(),signal:controller.signal})
+    const rejected=expect(child).rejects.toThrow()
+    controller.abort();await rejected
+    expect(budget.snapshot()).toMatchObject({requests:1,output:8192})
+    release();await parent;expect(budget.snapshot()).toMatchObject({requests:1,output:100})
   })
   it('counts primary, child and restart against the same requirements budget', async () => {
     const parent = createProductionBudget('p', 'prd-v1', 'desktop-implement', limits)

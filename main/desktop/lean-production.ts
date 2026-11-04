@@ -252,7 +252,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   // stop boundary; another 96-turn limit only interrupts useful work early.
   const maxTurns = Number.MAX_SAFE_INTEGER
   registerParentLoopContext(input.sessionId, { query, env: input.env, maxTokens: input.maxTokens, maxTurns,
-    delegationMaxTurns: 24, permissionMode: 'allow-all', temperature: .1, system, editFormat: 'diff', runtimeScope: 'lean-build',
+    delegationMaxTurns: 24, delegationTurnLimits: { review: 48 }, delegationTurnCaps: { review: 48 }, permissionMode: 'allow-all', temperature: .1, system, editFormat: 'diff', runtimeScope: 'lean-build',
     executionScope: budget.executionScope, materials: sessionMaterials(input.projectId, input.sessionId), publish: emit,
     childMaterialsBuilder: child => quality.isQualityChild(child) ? undefined : sessionMaterials(input.projectId, input.sessionId),
     onRuntimeObservation: observeRuntime,
@@ -300,18 +300,26 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
         beforeComplete: async ctx => {
           const waiting = await guardDispatcherCompletion(ctx)
           if (waiting) return waiting
-          const gap = await quality.gate(ctx.signal)
-          if(gap?.startsWith('QUALITY_INDEPENDENT_SEMANTICS_UNRESOLVED'))throw Error(gap)
-          if (gap?.startsWith('QUALITY_VISUAL_MODEL_UNSUPPORTED')) throw Error(gap)
-          if (gap?.startsWith('QUALITY_REVIEW_REQUIRED') || gap?.startsWith('QUALITY_VISUAL_REVIEW_REQUIRED')) {
+          // At most C and V on this stable candidate. Do not buy another parent
+          // turn merely to read nonblocking suggestions after both gates clear.
+          for (let reviewCount = 0; reviewCount < 2; reviewCount++) {
+            const action = await quality.completionAction(ctx.signal), gap = action.gate
+            if (action.next_tool === 'check_quality_finding') return 'QUALITY_FINDING_REPRODUCTION_REQUIRED: 先核对当前重要疑点或复测已确认缺陷：' + JSON.stringify(action)
+            if (gap?.startsWith('QUALITY_INDEPENDENT_SEMANTICS_UNRESOLVED') || gap?.startsWith('QUALITY_VISUAL_MODEL_UNSUPPORTED')) throw Error(gap)
+            if (!gap?.startsWith('QUALITY_REVIEW_REQUIRED') && !gap?.startsWith('QUALITY_VISUAL_REVIEW_REQUIRED')) return gap
             const visual = gap.startsWith('QUALITY_VISUAL_REVIEW_REQUIRED')
-            const review = await quality.begin(ctx, visual ? 'visual' : 'code')
+            await quality.begin(ctx, visual ? 'visual' : 'code')
             const summary = await guardDispatcherCompletion(ctx)
-            const afterReview = await quality.gate(ctx.signal)
-            if (afterReview?.startsWith('QUALITY_VISUAL_MODEL_UNSUPPORTED')) throw Error(afterReview)
-            return `宿主已为稳定候选启动独立${visual ? 'V' : 'C'}审阅：${JSON.stringify(review)}。读取finding台账。\n${summary ?? ''}`
+            const after = await quality.completionAction(ctx.signal)
+            if (after.gate?.startsWith(visual ? 'QUALITY_VISUAL_REVIEW_REQUIRED' : 'QUALITY_REVIEW_REQUIRED')) {
+              return after.gate + '\n本次审阅没有完成，先诊断实际交接，不自动重开同一审阅。\n' + (summary ?? '')
+            }
+            if (!after.gate && after.next_tool === 'verify_app') return undefined
           }
-          return gap
+          const action = await quality.completionAction(ctx.signal)
+          return action.next_tool === 'check_quality_finding'
+            ? 'QUALITY_FINDING_REPRODUCTION_REQUIRED: ' + JSON.stringify(action) : action.gate
+
         }, recoveryContext: () => renderSoftwareWorkingContext(input.projectId), publish: emit }) }
       catch (error) {
         const reason = error instanceof Error ? error.message : String(error)

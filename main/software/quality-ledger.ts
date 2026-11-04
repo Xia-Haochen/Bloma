@@ -17,6 +17,8 @@ import type { CollaborationSelection } from './collaboration-selection'
 export type Identity = { source: string; target: string; environment: string }
 export type ReviewKind = 'code' | 'visual'
 export interface Review { id: string; kind?: ReviewKind; identity: Identity; status: 'pending' | 'submitted' | 'complete' | 'interrupted'; child?: string; delegation?: string; at: string
+  run_id?: string; failure_code?: string
+  source_manifest?: import('./quality-review-context').ReviewSourceManifest
   intent_observations?: import('./intent-review').IntentObservation[]; visual?: VisualMaterial; image?: PastedImageRef; visual_delivery?: { at: string; image_hash: string; request_hash: string }; visual_observations?: unknown[]
   visual_error?: 'MODEL_IMAGE_INPUT_UNSUPPORTED'; visual_route?: string }
 export interface QualityFinding {

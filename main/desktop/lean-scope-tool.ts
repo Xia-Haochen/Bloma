@@ -1,3 +1,4 @@
+import { intentSources } from '../model/personal-intent'
 import { sessionMaterials } from '../platform/attachments/material-context'
 import type { AgentLoopTool } from '../agent/loop/agent-loop'
 import { parseLeanBrief } from '../guide/lean-brief'
@@ -10,6 +11,7 @@ import { isSoftwareProject } from './workflow-policy'
 /** The working agent proposes only a genuine scope change; host pauses before
  * any following tool, then reuses the normal scope confirmation on resume. */
 export function buildLeanScopeTool(projectId: string, source: string, emit: Parameters<typeof stageLeanScope>[5], pause: () => void): AgentLoopTool {
+  const current = readPrdBackplane(projectId), sourceList = intentSources(source, current.requirements_model?.sources ?? current.lean_brief?.intent_sources)
   return { name: 'propose_scope_change', description: '只有用户改变业务范围或业务预期时使用。提交保留旧F编号的完整短任务单和用户依据。宿主展示差异并暂停等待确认；局部外观或修复不使用。',
     input_schema: { type: 'object', required: ['goal', 'ui', 'requirements'], properties: {
       goal: { type: 'string' }, name: { type: 'string' }, ui: { type: 'string', enum: ['required', 'none'] },
@@ -18,6 +20,7 @@ export function buildLeanScopeTool(projectId: string, source: string, emit: Para
       requirements: { type: 'array', items: { type: 'object', required: ['description', 'expected'], properties: {
         id: { type: 'string' }, description: { type: 'string' }, expected: { type: 'string' } } } },
       constraints: { type: 'array', items: { type: 'string' } }, out_of_scope: { type: 'array', items: { type: 'string' } },
+      intent_assessment: { type: 'object', required: ['mode','reason','source_ids'], properties: { mode: { type:'string', enum:['direct','structured'] }, reason:{type:'string'}, source_ids:{type:'array',items:{type:'string',enum:sourceList.map(s=>s.id)}} }, description:'与初次整理一致：特殊交互、规则版本、例外等用structured，并提交完整requirements_model和experience。' },
       requirements_model: { type: 'object', description: '沿用features上下文的完整需求模型并按用户改意更新；已有模型不能省略。来源由宿主回填。' },
       design_assets: { type: 'array', items: { type: 'object' } },
       assumptions: { type: 'array', items: { type: 'string' } },
@@ -25,8 +28,9 @@ export function buildLeanScopeTool(projectId: string, source: string, emit: Para
       if (ctx.projectId !== projectId) return { output: 'SCOPE_PROJECT_MISMATCH', isError: true }
       if (listDelegations(ctx.sessionId).some(row => row.status === 'running')) return { output: '请先等待或停止正在执行的子任务，再更新范围。', isError: true }
       const previous = readPrdBackplane(projectId)
-      const parsed = parseLeanBrief(JSON.stringify({ ...input, action: 'brief' }), { projectId, sessionId: ctx.sessionId, source, previous, assets: sessionMaterials(projectId, ctx.sessionId).attachments, software: isSoftwareProject(projectId) })
-      if (!parsed || parsed.action !== 'brief') return { output: 'SCOPE_INVALID_BRIEF', isError: true }
+      let issues: string[] = []
+      const parsed = parseLeanBrief(JSON.stringify({ ...input, action: 'brief' }), { projectId, sessionId: ctx.sessionId, source, previous, assets: sessionMaterials(projectId, ctx.sessionId).attachments, software: isSoftwareProject(projectId), requireIntentAssessment: isSoftwareProject(projectId), onIssues: rows => { issues = rows } })
+      if (!parsed || parsed.action !== 'brief') return { output: JSON.stringify({ error:'SCOPE_INVALID_BRIEF', issues, sources:sourceList }), isError: true }
       if (prdScopeFingerprint(previous) === prdScopeFingerprint(parsed.brief)) return { output: '范围未变化，直接处理本次局部修改。' }
       if (authorizesSkipPreview(source)) parsed.brief.lean_brief!.preview = 'skip'
       stageLeanScope(projectId, ctx.sessionId, ctx.requestId, previous, parsed.brief, emit)

@@ -1,3 +1,6 @@
+import { trialOutputCap } from './trial-output-cap'
+import { leanBudget } from '../main/desktop/lean-budget'
+import { inspectDoodleFaults } from './personal-doodle-fault-acceptance'
 import { configureSoftwareExecutionLimits } from '../main/software/execution-limits'
 import { inspectDoodle } from './personal-doodle-acceptance'
 import { resolveGenerationMaxTokens } from '../main/platform/llm/model-resolution'
@@ -7,7 +10,7 @@ import { inspectPrimary } from './complex-primary-acceptance'
 import { fileURLToPath } from 'node:url'
 import { writeTextFileAtomic } from '../storage/json-store'
 import { app } from 'electron'
-import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import { homedir } from 'node:os'
@@ -61,7 +64,7 @@ export async function main() {
   const root = resolve(process.env.BLOMA_COMPLEX_TRIAL_ROOT), phase = process.env.BLOMA_COMPLEX_TRIAL_PHASE ?? 'preflight'
   const tasks = trialTasks(), customCases = Boolean(process.env.BLOMA_COMPLEX_TRIAL_CASES)
   const which = process.env.BLOMA_COMPLEX_TRIAL_TASK ?? Object.keys(tasks)[0]
-  if (!['preflight', 'run', 'resume', 'change', 'confirm', 'inspect', 'replan', 'approve-ux', 'retry-ux', 'extend-execution'].includes(phase) || !Object.hasOwn(tasks, which)) throw Error('TRIAL_PHASE_INVALID')
+  if (!['preflight', 'run', 'resume', 'change', 'confirm', 'inspect', 'replan', 'approve-ux', 'retry-ux', 'extend-execution', 'inspect-faults'].includes(phase) || !Object.hasOwn(tasks, which)) throw Error('TRIAL_PHASE_INVALID')
   const task = tasks[which as keyof typeof tasks], home = join(root, 'home'), profile = join(root, 'electron-profile')
   mkdirSync(home, { recursive: true }); mkdirSync(profile, { recursive: true })
   process.env.PROMA_HOME = home; process.env.BLOMA_DISPATCH_EXPERIMENT = '0'; delete process.env.BLOMA_EXPERIMENT_UNLIMITED_MONETARY
@@ -80,14 +83,18 @@ export async function main() {
     if (!response.ok) throw Error(`PREFLIGHT_HTTP_${response.status}`)
     return response.json() as Promise<any>
   }
-  const manifestPath = join(root, 'manifest.json'), policy = join(root, 'monetary-policy.json')
+  const windowId = process.env.BLOMA_COMPLEX_TRIAL_WINDOW ?? ''
+  if (windowId && !/^[a-z0-9-]{1,60}$/.test(windowId)) throw Error('TRIAL_WINDOW_INVALID')
+  const suffix = windowId ? '-' + windowId : ''
+  const manifestPath = join(root, 'manifest' + suffix + '.json'), policy = join(root, 'monetary-policy' + suffix + '.json'), startedMarker = join(root, 'generation-started' + suffix)
+  const capRmb = phase === 'preflight' ? Number(process.env.BLOMA_COMPLEX_TRIAL_AUTHORIZED_CAP) : JSON.parse(readFileSync(manifestPath, 'utf8')).authorization?.cap_rmb
+  if (typeof capRmb !== 'number' || !Number.isFinite(capRmb) || capRmb <= 0 || !Number.isSafeInteger(Math.round(capRmb * 1e6))) throw Error('EXPLICIT_RMB_AUTHORIZATION_REQUIRED')
   if (phase === 'preflight') {
     if (existsSync(manifestPath) || existsSync(policy)) throw Error('TRIAL_ALREADY_INITIALIZED')
-    if (process.env.BLOMA_COMPLEX_TRIAL_AUTHORIZED_CAP !== '10') throw Error('EXPLICIT_TEN_RMB_AUTHORIZATION_REQUIRED')
-    if (customCases && !process.env.BLOMA_COMPLEX_TRIAL_AUTHORIZATION_TEXT?.trim()) throw Error('NEW_TRIAL_AUTHORIZATION_TEXT_REQUIRED')
+    if ((customCases || windowId || capRmb !== 10) && !process.env.BLOMA_COMPLEX_TRIAL_AUTHORIZATION_TEXT?.trim()) throw Error('NEW_TRIAL_AUTHORIZATION_TEXT_REQUIRED')
     const models = await get('models'), balance = await get('user/balance')
     const cny = balance.balance_infos?.find((r: any) => r.currency === 'CNY')
-    if (!models.data?.some((r: any) => r.id === binding.modelName) || balance.is_available !== true || Number(cny?.total_balance) < 10) throw Error('MODEL_OR_BALANCE_UNAVAILABLE')
+    if (!models.data?.some((r: any) => r.id === binding.modelName) || balance.is_available !== true || Number(cny?.total_balance) < capRmb) throw Error('MODEL_OR_BALANCE_UNAVAILABLE')
     const response = await fetch('https://api-docs.deepseek.com/zh-cn/quick_start/pricing/', { signal: AbortSignal.timeout(20000) })
     if (!response.ok) throw Error('PRICING_UNAVAILABLE')
     const pricing = await response.text(), compact = pricing.replace(/<[^>]*>/g, '').replace(/\s+/g, '')
@@ -95,33 +102,38 @@ export async function main() {
     writeFileSync(join(root, 'pricing.html'), pricing)
     const oldEpoch = join(process.env.LOCALAPPDATA!, 'Bloma', 'monetary-epochs', hash('api.deepseek.com\ndeepseek-flash') + '.json')
     const oldFiles = existsSync(oldEpoch) ? [oldEpoch, JSON.parse(readFileSync(oldEpoch, 'utf8')).policy_path] : []
+    if (windowId) for (const name of readdirSync(root).filter(name => /^monetary-policy(?:-[a-z0-9-]+)?\.json$/.test(name))) { const prior = join(root, name); if (prior !== policy) oldFiles.push(prior) }
     for (const p of [...oldFiles]) if (existsSync(p + '.state.json')) oldFiles.push(p + '.state.json')
-    const rates = { host: 'api.deepseek.com', model: binding.modelName, cap_rmb: 10, context_tokens: 1048576, input_rmb_per_million: 2, output_rmb_per_million: 8, cache_rmb_per_million: .04 }
+    const rates = { host: 'api.deepseek.com', model: binding.modelName, cap_rmb: capRmb, context_tokens: 1048576, input_rmb_per_million: 2, output_rmb_per_million: 8, cache_rmb_per_million: .04 }
+    trialOutputCap(capRmb, generationMaxTokens, rates)
     writeFileSync(policy, JSON.stringify({ version: 1, models: [rates] }, null, 2))
     writeFileSync(manifestPath, JSON.stringify({ version: 1, at: new Date().toISOString(), source_head: execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),
-      authorization: { source: 'direct_user_confirmation', cap_rmb: 10, user_text: customCases ? process.env.BLOMA_COMPLEX_TRIAL_AUTHORIZATION_TEXT : '换一个大型一点的真实的任务，上限10元，你自己安排，可以多跑几种' },
+      authorization: { source: 'direct_user_confirmation', cap_rmb: capRmb, user_text: (customCases || windowId || capRmb !== 10) ? process.env.BLOMA_COMPLEX_TRIAL_AUTHORIZATION_TEXT : '换一个大型一点的真实的任务，上限10元，你自己安排，可以多跑几种' },
       selector_sha256: hash(readFileSync(source)), policy_sha256: hash(readFileSync(policy)), rates, tasks,
       balance_before: cny.total_balance, model_catalog: models.data.map((r: any) => r.id),
       old_accounting: oldFiles.map(path => ({ path, sha256: hash(readFileSync(path)) })),
-      boundaries: 'All tasks, changes, repairs and retries share one 10 RMB ledger. B disabled; existing same-model C/V remain. No product-side paid services or server-side search tools.' }, null, 2))
-    console.log(safe({ status: 'ready', balance_rmb: cny.total_balance, cap_rmb: 10, model: binding.modelName, generation_requests: 0 })); return
+      boundaries: `All tasks, changes, repairs and retries share one ${capRmb} RMB window. Previous policies and ledgers are preserved; B disabled. No product-side paid services or server-side search tools.` }, null, 2))
+    console.log(safe({ status: 'ready', balance_rmb: cny.total_balance, cap_rmb: capRmb, model: binding.modelName, generation_requests: 0 })); return
   }
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
-  if (manifest.authorization?.cap_rmb !== 10 || JSON.stringify(manifest.tasks)!==JSON.stringify(tasks) || manifest.selector_sha256 !== hash(readFileSync(source)) || manifest.policy_sha256 !== hash(readFileSync(policy))) throw Error('TRIAL_AUTHORIZATION_OR_CONFIGURATION_CHANGED')
+  if (manifest.authorization?.cap_rmb !== capRmb || JSON.stringify(manifest.tasks)!==JSON.stringify(tasks) || manifest.selector_sha256 !== hash(readFileSync(source)) || manifest.policy_sha256 !== hash(readFileSync(policy))) throw Error('TRIAL_AUTHORIZATION_OR_CONFIGURATION_CHANGED')
+  const policyRate = JSON.parse(readFileSync(policy, 'utf8')).models.find((r: any) => r.host === 'api.deepseek.com' && r.model === binding.modelName)
+  if (!policyRate || policyRate.cap_rmb !== capRmb) throw Error('TRIAL_POLICY_CAP_MISMATCH')
+  const requestMaxTokens = trialOutputCap(capRmb, generationMaxTokens, policyRate)
   for (const old of manifest.old_accounting) if (hash(readFileSync(old.path)) !== old.sha256) throw Error('OLD_ACCOUNTING_CHANGED')
-  process.env.BLOMA_MONETARY_POLICY = policy; process.env.BLOMA_MONETARY_EPOCH_DIR = join(root, 'epochs')
+  process.env.BLOMA_MONETARY_POLICY = policy; process.env.BLOMA_MONETARY_EPOCH_DIR = windowId ? join(root, 'epochs', windowId) : join(root, 'epochs')
   const existing = existsSync(policy + '.state.json') ? JSON.parse(readFileSync(policy + '.state.json', 'utf8')).entries.length : 0
   if (existing >= 512) throw Error('TRIAL_REQUEST_LIMIT')
   const money = () => {
     if (existsSync(policy + '.state.json')) return readMonetaryBudget(policy)
-    if (existsSync(join(root,'generation-started'))) throw Error('TRIAL_ACCOUNTING_MISSING')
+    if (existsSync(startedMarker)) throw Error('TRIAL_ACCOUNTING_MISSING')
     return []
   }
-  const control = createRequestBudget(binding.env, { requests: 512 - existing, outputTokens: generationMaxTokens, rmb: 10 })
+  const control = createRequestBudget(binding.env, { requests: 512 - existing, outputTokens: requestMaxTokens, rmb: capRmb })
   const paid = control.wrap(anthropicMessagesQueryViaProviders), signal = AbortSignal.timeout(45 * 60000)
   const query: SDKQuery = async function* (prompt, options) {
     if(existsSync(join(root,'pause-generation')))throw Error('TRIAL_PAUSED_BETWEEN_REQUESTS')
-    writeFileSync(join(root,'generation-started'), 'started')
+    writeFileSync(startedMarker, 'started')
     const briefText: string[] = []
     try { for await (const message of paid(prompt, { ...options, monetaryPolicyPath: policy, thinkingLevel: 'low', signal: AbortSignal.any([options.signal, signal]),
       requestGuard: request => {
@@ -145,7 +157,7 @@ export async function main() {
   const sid = `complex-${which}`, runId = randomUUID(), reportPath = join(taskDir, `${phase}-${runId}.json`)
   if (phase === 'run') writeFileSync(projectFile, JSON.stringify({ project_id: project.project_id, session_id: sid, root: project.root_path }))
   recordSessionActivity(sid, project.project_id)
-  const report: any = { version: 1, phase, task: which, project_id: project.project_id, session_id: sid, started_at: new Date().toISOString(), status: 'running', paid_cap_rmb: 10, runtime_sha256: hash(readFileSync(fileURLToPath(import.meta.url))) }
+  const report: any = { version: 1, phase, task: which, project_id: project.project_id, session_id: sid, started_at: new Date().toISOString(), status: 'running', paid_cap_rmb: capRmb, budget_window: windowId || 'initial', runtime_sha256: hash(readFileSync(fileURLToPath(import.meta.url))) }
   let lastSave=0
   const save = (force=false) => { if(!force&&Date.now()-lastSave<500)return; lastSave=Date.now();writeTextFileAtomic(reportPath, safe({ ...report, operation: control.snapshot(), money: money() })) }
   const cards: AgentEvent[] = []
@@ -154,15 +166,19 @@ export async function main() {
     appendFileSync(join(taskDir, 'events.jsonl'), safe({ at: new Date().toISOString(), phase, run_id: runId, type, payload }) + '\n')
     save()
   }
-  const model = { query, env: binding.env, signal, sessionId: sid, history: [], maxTokens: generationMaxTokens,
+  const model = { query, env: binding.env, signal, sessionId: sid, history: [], maxTokens: requestMaxTokens,
     persistAssistant: (text: string) => appendSessionMessage(sid, { role: 'assistant', origin: 'agent', content: [{ type: 'text', text }], timestamp: Date.now() }) }
   try {
     save(true)
-    if (phase === 'inspect') {
+    if (phase === 'inspect-faults') {
+      if (which !== 'interaction-doodle') throw Error('FAULT_ADAPTER_NOT_AVAILABLE')
+      report.independent = await inspectDoodleFaults(project.project_id, join(taskDir, 'independent'))
+    } else if (phase === 'inspect') {
       report.independent=customCases?which==='interaction-doodle'?await inspectDoodle(project.project_id,join(taskDir,'independent')):{status:'unverified',reason:'需按当前样本独立oracle执行实际交互；不使用旧任务的专用验收器冒充通过。'}:which==='primary'?await inspectPrimary(project.project_id,join(taskDir,'independent'),process.env.BLOMA_COMPLEX_REGRESSION==='1'):await inspectDocuments(project.project_id,join(taskDir,'independent'))
     } else if (phase === 'extend-execution') {
       if (process.env.BLOMA_COMPLEX_TRIAL_CONTINUATION_AUTH !== 'same-money-cap') throw Error('EXECUTION_CONTINUATION_AUTH_REQUIRED')
-      report.execution_limits = configureSoftwareExecutionLimits(project.project_id, project.lean_operation_id ?? 'initial', {requests:512,output:1048576,reason:'用户授权开放输出并修完完整流程；修复在途预留误判后给予原operation续跑空间，保留原请求/输出计量和10元总金额策略。'})
+      const execution = leanBudget(project.project_id, 'desktop-implement').snapshot()
+      report.execution_limits = configureSoftwareExecutionLimits(project.project_id, project.lean_operation_id ?? 'initial', {requests:Math.max(execution.limits.requests,execution.requests+256),output:Math.max(execution.limits.output,execution.output+1048576),reason:'用户授权诊断后继续完整流程；保留原operation请求/输出计量，当前已授权计费窗口上限为'+capRmb+'元，旧账本保持不变。'})
     } else if (phase === 'retry-ux') {
       await handleGuideMessage({ project_id: project.project_id, session_id: sid, request_id: runId, mode: 'longterm', current_stage: 'blocked_for_user_decision', content: '重新生成草图', metadata: { source: 'card_option', selected_option_id: 'ux_retry' } }, e => event(e.type, e.payload), model)
     } else if (phase === 'approve-ux') {
@@ -185,7 +201,7 @@ export async function main() {
         await handleGuideMessage({ ...input, request_id: randomUUID(), content: '按这份做', metadata: { source: 'card_option', selected_option_id: option.id } }, e => event(e.type, e.payload), model)
       }
     } else {
-      await enterDesktopLine({ projectId: project.project_id, sessionId: sid, requestId: runId, content: process.env.BLOMA_COMPLEX_TRIAL_FEEDBACK_FILE ? readFileSync(resolve(process.env.BLOMA_COMPLEX_TRIAL_FEEDBACK_FILE), 'utf8') : '继续完成已确认目标，沿已有现场检查和修复。', maxTokens: generationMaxTokens, signal }, query, binding.env,
+      await enterDesktopLine({ projectId: project.project_id, sessionId: sid, requestId: runId, content: process.env.BLOMA_COMPLEX_TRIAL_FEEDBACK_FILE ? readFileSync(resolve(process.env.BLOMA_COMPLEX_TRIAL_FEEDBACK_FILE), 'utf8') : '继续完成已确认目标，沿已有现场检查和修复。', maxTokens: requestMaxTokens, signal }, query, binding.env,
         { publish: (_target, type, payload) => event(type, payload), persistAssistant: (_sid, text) => model.persistAssistant(text), persistSystem: () => {}, complete: (_s, _p, result) => { report.completion = result } })
     }
     const final = findProject(project.project_id), state = readLongtermState(project.project_id)

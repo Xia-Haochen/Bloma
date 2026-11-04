@@ -81,7 +81,7 @@ it('actual Pi C submits host-bound findings; a real injected CLI defect fails, i
 }, 120000)
 it('parent cannot forge a C submission; no-source opinions remain disputed/suggestions and cannot be reproduced as defects', async () => {
   await expect(quality.childProtocol[1].execute({ findings: [] }, ctx())).rejects.toThrow('DENIED')
-  await review([{ ...finding, expected_source: '应当自动增加备份功能' }, { ...finding, requirement: 'unscoped', kind: 'suggestion' }])
+  await review([{ ...finding, requirement_id: finding.requirement, expected_source: '应当自动增加备份功能' }, { ...finding, requirement: 'unscoped', kind: 'suggestion' }])
   const ledger = readQualityLedger(project.project_id)
   expect(ledger.findings.map(f => f.disposition)).toEqual(['disputed', 'suggestion'])
   const read = quality.parentTools.find(t => t.name === 'read_quality_findings')!
@@ -135,6 +135,16 @@ it('target/design changes invalidate old C evidence; corruption is not silently 
   writeFileSync(qualityLedgerPath(project.project_id), '{broken')
   await expect(quality.gate()).rejects.toThrow()
 })
+it('stops another paid parent request after two identical review interruptions in the same run',async()=>{
+  register(async function*(){yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:'done without protocol'}]}};yield{type:'result',subtype:'success'}})
+  for(let i=0;i<2;i++){const child=await quality.begin(ctx());await findDelegation(parent,child.delegation_id)!.completion;await settleParentDelegationRuns(parent)}
+  let calls=0
+  const guarded=quality.wrapQuery(async function*(){calls++;yield{type:'result',subtype:'success'}})
+  const run=async(runId:string)=>{for await(const _ of guarded('',{env:{},signal:AbortSignal.timeout(5000),sessionId:parent,accounting:{projectId:project.project_id,runId}})){} }
+  await expect(run(ctx().requestId)).rejects.toThrow('QUALITY_REVIEW_RETRY_BLOCKED');expect(calls).toBe(0)
+  await run('explicit-new-run-after-diagnosis');expect(calls).toBe(1)
+  expect(readQualityLedger(project.project_id).reviews).toHaveLength(2)
+},30000)
 it('complete production runs C, reproduces and repairs a finding, reruns C on the new candidate and delivers through the existing verifier', async () => {
   const { enterDesktopLine } = await import('../../../main/desktop/desktop-route')
   const { findProject } = await import('../../../main/project/project-service')

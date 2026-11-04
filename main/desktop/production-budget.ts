@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { getPromaHome } from '../../storage/config-paths'
 import { readJsonFile, writeJsonFile } from '../../storage/json-store'
 import type { SDKQuery, SDKQueryOptions } from '../orchestration/stages/orchestration-contracts'
+import { MonetaryBudgetError } from '../platform/llm/monetary-budget'
 
 interface BudgetState {
   version: 1
@@ -98,7 +99,7 @@ export function createProductionBudget(projectId: string, scope: string, phase: 
     }
     let physical = 0
     let usage: { output_tokens?: number } | undefined
-    let completed = false, settled = false
+    let completed = false, settled = false, transportStarted = false
     const settle = () => {
       if (!settled && completed && !options.signal.aborted && Number.isSafeInteger(usage?.output_tokens) && usage!.output_tokens! >= 0) {
         const state = load(); state.output += usage!.output_tokens! - reservation; persist(state); settled = true; notifyOutput(key)
@@ -117,12 +118,25 @@ export function createProductionBudget(projectId: string, scope: string, phase: 
       }
     }
     try {
-      for await (const message of query(prompt, { ...options, maxTokens: reservation, requestGuard })) {
+      for await (const message of query(prompt, { ...options, maxTokens: reservation, requestGuard, onTransportAttempt: state => {
+        if (state === 'started') transportStarted = true
+        options.onTransportAttempt?.(state)
+      } })) {
         if (message.usage) usage = { ...usage, ...message.usage }
         if (message.type === 'result') completed = message.subtype === 'success'
         settle()
         yield message
       }
+    } catch (error) {
+      // These typed refusals occur before fetch. Preserve attempt counters, but
+      // do not turn a known unsent request into permanently consumed output.
+      // Network errors, cancelled/unknown calls and earlier physical retries
+      // retain their reservations exactly as before.
+      if (!settled && !transportStarted && !usage && error instanceof MonetaryBudgetError
+        && ['MONETARY_BUDGET_EXHAUSTED','MONETARY_OPERATION_EXHAUSTED','MONETARY_RESERVATION_WAIT_TIMEOUT','REQUEST_BUDGET_EXHAUSTED'].includes(error.message)) {
+        const state = load(); state.output -= reservation; persist(state); settled = true; notifyOutput(key)
+      }
+      throw error
     } finally {
       // Unknown/cancelled requests keep their full reservation. Retried failed
       // transports also retain theirs; only the final complete usage releases it.

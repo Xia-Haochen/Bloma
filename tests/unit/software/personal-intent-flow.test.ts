@@ -15,6 +15,8 @@ import { productionContext } from '../../../main/desktop/production-context'
 import { renderSoftwareWorkingContext } from '../../../main/software/working-context'
 import { generateUxSketch } from '../../../main/guide/ux-sketch'
 import { importAttachment } from '../../../main/platform/attachments/composer-store'
+import { buildLeanScopeTool } from '../../../main/desktop/lean-scope-tool'
+import { createToolState } from '../../../main/agent/loop/agent-loop'
 
 let home: string, old: string | undefined, project: ReturnType<typeof createProject>
 const source = '让我的收藏开辩论会，但纪念品不能被建议丢弃；改名后也要保留这个例外。'
@@ -32,6 +34,17 @@ function fixture() {
 function parse(data = fixture(), previous = readPrdBackplane(project.project_id), assets?: Parameters<typeof parseLeanBrief>[1]['assets']) {
   return parseLeanBrief(JSON.stringify(data), { projectId: project.project_id, sessionId: 'intent', source, previous, software: true, assets })
 }
+it('requires the same intent contract for production-side scope changes and preserves the prior scope on refusal',async()=>{
+  const before=readPrdBackplane(project.project_id);let paused=false
+  const tool=buildLeanScopeTool(project.project_id,source,()=>{},()=>{paused=true})
+  const ctx={projectId:project.project_id,sessionId:'intent',requestId:'change',signal:AbortSignal.timeout(5000),state:createToolState()}
+  const data=fixture()
+  const refused=await tool.execute(data,ctx);expect(refused.isError).toBe(true);expect(refused.output).toContain('INTENT_ASSESSMENT_REQUIRED')
+  expect(paused).toBe(false);expect(prdScopeFingerprint(readPrdBackplane(project.project_id))).toBe(prdScopeFingerprint(before))
+  const accepted=await tool.execute({...data,intent_assessment:{mode:'structured',reason:'有私人例外和特殊互动',source_ids:['S-001']}},ctx)
+  expect(accepted.isError).not.toBe(true);expect(paused).toBe(true)
+  expect(readPrdBackplane(project.project_id).requirements_model?.experience?.commitments[0].unacceptable_substitute).toBe('只列清单并加聊天框')
+})
 it('retains core experience and exceptions through persistence, confirmation, production and recovery', () => {
   const result = parse(); if (result?.action !== 'brief') throw Error('fixture')
   expect(prdStructureIssues(result.brief)).toEqual([])
