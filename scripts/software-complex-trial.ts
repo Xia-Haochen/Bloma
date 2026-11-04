@@ -1,4 +1,7 @@
 import { trialOutputCap } from './trial-output-cap'
+import {createTrialRequestRecorder} from './trial-request-recorder'
+import {softwareVerificationFingerprint} from '../main/desktop/verification-fingerprint'
+import {readQualityLedger} from '../main/software/quality-ledger'
 import { leanBudget } from '../main/desktop/lean-budget'
 import { inspectDoodleFaults } from './personal-doodle-fault-acceptance'
 import { configureSoftwareExecutionLimits } from '../main/software/execution-limits'
@@ -133,7 +136,10 @@ export async function main() {
     return []
   }
   const control = createRequestBudget(binding.env, { requests: requestLimit - existing, outputTokens: requestMaxTokens, rmb: capRmb })
-  const paid = control.wrap(anthropicMessagesQueryViaProviders), signal = AbortSignal.timeout(45 * 60000)
+  const trace=createTrialRequestRecorder(join(root,'trace'),safe,session=>{
+    try{const p=findProject(project.project_id);return{project_id:p.project_id,status:p.status,current_stage:p.current_stage,desktop_phase:p.desktop_phase,source:softwareVerificationFingerprint(p.root_path),review_kind:readQualityLedger(p.project_id).reviews.find(r=>r.child===session)?.kind}}catch{return{phase}}
+  },policyRate)
+  const paid = trace.wrap(control.wrap(anthropicMessagesQueryViaProviders),phase), signal = AbortSignal.timeout(45 * 60000)
   const query: SDKQuery = async function* (prompt, options) {
     if(existsSync(join(root,'pause-generation')))throw Error('TRIAL_PAUSED_BETWEEN_REQUESTS')
     writeFileSync(startedMarker, 'started')
@@ -165,6 +171,7 @@ export async function main() {
   const save = (force=false) => { if(!force&&Date.now()-lastSave<500)return; lastSave=Date.now();writeTextFileAtomic(reportPath, safe({ ...report, operation: control.snapshot(), money: money() })) }
   const cards: AgentEvent[] = []
   const event = (type: AgentEvent['type'], payload: Record<string, unknown>) => {
+    trace.event(type,{...payload,phase,run_id:runId})
     if (type === 'user_decision_required') cards.push({ type, payload } as AgentEvent)
     appendFileSync(join(taskDir, 'events.jsonl'), safe({ at: new Date().toISOString(), phase, run_id: runId, type, payload }) + '\n')
     save()
@@ -213,6 +220,7 @@ export async function main() {
     report.status = report.release ? 'released_pending_independent_acceptance' : state?.milestones.find(m => m.id === state.current_id)?.status === 'awaiting_confirmation' ? 'host_checked_pending_independent_acceptance' : 'incomplete'
   } catch (error) { report.status = 'failed'; report.error = String(error) }
   finally {
+    trace.finish()
     report.finished_at = new Date().toISOString()
     report.balance_after = (await get('user/balance').catch(() => undefined))?.balance_infos?.find((r: any) => r.currency === 'CNY')?.total_balance
     report.old_accounting_unchanged = manifest.old_accounting.every((r: any) => hash(readFileSync(r.path)) === r.sha256)
