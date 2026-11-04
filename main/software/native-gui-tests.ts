@@ -29,8 +29,10 @@ export function sameNativeTestBytes(a: NativeGuiTests, b: NativeGuiTests) {
         && a.files.length === b.files.length && a.files.every((f, i) => f.path === b.files[i].path && f.sha256 === b.files[i].sha256 && f.size === b.files[i].size);
 }
 export class NativeTestContractError extends Error {
-    constructor(public readonly paths: string[]) {
-        super(`GUI_EXISTING_EXPECTATIONS_CHANGED: ${JSON.stringify({ paths: paths.slice(0, 24), omitted: Math.max(0, paths.length - 24), next: '开发探针可自由修改；正式案例保留已执行的业务输入、断言和共享业务逻辑。未执行的引导计划可依据宿主失败凭据修复。' })}`);
+    constructor(public readonly paths: string[], before?:NativeGuiTests) {
+        super(`GUI_EXISTING_EXPECTATIONS_CHANGED: ${JSON.stringify({ paths: paths.slice(0, 24), omitted: Math.max(0, paths.length - 24),contract_digest:before?.digest,
+          read_original:before?{tool:'read_test_contract',arguments:{contract_digest:before.digest,file:before.layout==='project'?before.entry:before.directory+'/'+before.entry}}:undefined,
+          next: '正式案例保留已执行输入、断言与共享逻辑。若预期或前置输入错误，read_test_contract查询冻结原文后propose_test_correction；独立裁定前不能改写或用新入口替换旧案例。未执行的引导计划可依据宿主凭据修复。' })}`);
     }
 }
 /** Compare business contracts, allowing extra checks and layout-only migration.

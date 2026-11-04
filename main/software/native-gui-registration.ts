@@ -22,7 +22,7 @@ export function registerNativeGuiTests(projectId: string, script: string, restar
         const bytes=readFileSync(guiSuitePath(projectId)),previous = parseGuiSuite(JSON.parse(bytes.toString('utf8')));
         const repairable=Boolean(previous.native_tests)&&canRepairUnexecutedNativePlan(projectId,createHash('sha256').update(bytes).digest('hex'))
         const changes = previous.native_tests ? stageContractChanges(projectId,project.root_path,previous.native_tests,native_tests) : ['existing-action-suite'];
-        if (previous.scope_hash === scope && changes.length && !repairable) throw new NativeTestContractError(changes);
+        if (previous.scope_hash === scope && changes.length && !repairable) throw new NativeTestContractError(changes,previous.native_tests);
     }
     assertStageContractsRetained(projectId, native_tests);
     assertRetainedSoftwareBehavior(projectId, 'gui', suite);

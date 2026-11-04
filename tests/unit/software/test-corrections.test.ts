@@ -15,7 +15,7 @@ import {readProjectStages,verifyProjectStage} from '../../../main/software/proje
 import {registerNativeGuiTests} from '../../../main/software/native-gui-registration'
 import {createQualityReview} from '../../../main/software/quality-review'
 import {sealSoftwareRelease} from '../../../main/software/release-store'
-import {proposeTestCorrection,decideTestCorrection,applyTestCorrection,filterApprovedTestChanges,pendingTestCorrection,readTestContractFile} from '../../../main/software/test-corrections'
+import {proposeTestCorrection,decideTestCorrection,applyTestCorrection,filterApprovedTestChanges,pendingTestCorrection,readTestContractFile,testCorrectionView} from '../../../main/software/test-corrections'
 import {buildTestCorrectionTools} from '../../../main/software/test-correction-tools'
 import {createSoftwareCollaborationPolicy} from '../../../main/software/collaboration-policy'
 import {createToolState} from '../../../main/agent/loop/agent-loop'
@@ -69,6 +69,13 @@ it('maker tools have no approval route and reject forged reviewer fields',async(
   expect((await tools[1].execute({reviewer:'independent_operator',verdict:'approve'},ctx)).isError).toBe(true)
   expect((await tools[0].execute({},{...ctx,projectId:'foreign'})).isError).toBe(true)
   expect(()=>proposeTestCorrection(p.project_id,{contract_digest:before.digest,file:'../outside',old_text:'x',new_text:'y',feature_ids:['F-001'],reason:'x'})).toThrow('FILE_NOT_IN_CONTRACT')
+  const view=JSON.parse((await tools[0].execute({},ctx)).output)
+  expect(view.contracts).toEqual([expect.objectContaining({origin:'executed_stage',contract_digest:before.digest,entry:'acceptance.mjs'})])
+  const item=view.contracts[0]
+  expect(JSON.parse((await tools[0].execute({contract_digest:item.contract_digest,file:item.entry},ctx)).output).text).toBe(original)
+  const state=readProjectStages(p.project_id);state.attempts[0].executed=false
+  writeFileSync(join(home,'software-stage-checks',p.project_id,'state.json'),JSON.stringify({...state,checksum:sha(JSON.stringify(state))}))
+  expect(testCorrectionView(p.project_id).contracts).toEqual([])
 })
 it('rejects case removal and undeclared features without altering the original test or creating a pending approval',()=>{
   expect(()=>proposeTestCorrection(p.project_id,{contract_digest:before.digest,file:'acceptance.mjs',old_text:original,new_text:'export default async()=>{}',feature_ids:['F-001'],reason:'remove failing test'})).toThrow()

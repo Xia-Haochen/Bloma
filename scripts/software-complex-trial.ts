@@ -5,6 +5,11 @@ import {readQualityLedger} from '../main/software/quality-ledger'
 import {ModelRequestRefusal} from '../main/platform/llm/model-request-refusal'
 import {verifyProjectStage} from '../main/software/project-stages'
 import {inspectRetestDoodle} from './personal-doodle-retest-acceptance'
+import {buildSoftwareVerifyTool} from '../main/software/verification-tool'
+import {createSoftwareCollaborationPolicy} from '../main/software/collaboration-policy'
+import {createQualityReview} from '../main/software/quality-review'
+import {createToolState} from '../main/agent/loop/agent-loop'
+import {runtimeInventory} from '../main/software/release-store'
 import { leanBudget } from '../main/desktop/lean-budget'
 import { inspectDoodleFaults } from './personal-doodle-fault-acceptance'
 import { configureSoftwareExecutionLimits } from '../main/software/execution-limits'
@@ -70,7 +75,7 @@ export async function main() {
   const root = resolve(process.env.BLOMA_COMPLEX_TRIAL_ROOT), phase = process.env.BLOMA_COMPLEX_TRIAL_PHASE ?? 'preflight'
   const tasks = trialTasks(), customCases = Boolean(process.env.BLOMA_COMPLEX_TRIAL_CASES)
   const which = process.env.BLOMA_COMPLEX_TRIAL_TASK ?? Object.keys(tasks)[0]
-  if (!['preflight', 'status', 'verify-stage', 'run', 'resume', 'change', 'confirm', 'inspect', 'replan', 'approve-ux', 'retry-ux', 'extend-execution', 'inspect-faults'].includes(phase) || !Object.hasOwn(tasks, which)) throw Error('TRIAL_PHASE_INVALID')
+  if (!['preflight', 'status', 'verify-current', 'verify-stage', 'run', 'resume', 'change', 'confirm', 'inspect', 'replan', 'approve-ux', 'retry-ux', 'extend-execution', 'inspect-faults'].includes(phase) || !Object.hasOwn(tasks, which)) throw Error('TRIAL_PHASE_INVALID')
   const task = tasks[which as keyof typeof tasks], home = join(root, 'home'), profile = join(root, 'electron-profile')
   mkdirSync(home, { recursive: true }); mkdirSync(profile, { recursive: true })
   process.env.PROMA_HOME = home; process.env.BLOMA_DISPATCH_EXPERIMENT = '0'; delete process.env.BLOMA_EXPERIMENT_UNLIMITED_MONETARY
@@ -199,6 +204,15 @@ export async function main() {
     save(true)
     if(phase==='status'){
       report.execution_budget=leanBudget(project.project_id,'desktop-implement').snapshot()
+    }else if(phase==='verify-current'){
+      const policy=createSoftwareCollaborationPolicy(project.project_id,project.root_path,sid),ctx={projectId:project.project_id,sessionId:sid,requestId:runId,signal,state:createToolState()}
+      const result=await buildSoftwareVerifyTool(project.project_id,policy).execute({script:process.env.BLOMA_TRIAL_VERIFY_SCRIPT,restart:process.env.BLOMA_TRIAL_VERIFY_RESTART==='1'},ctx)
+      report.host_verification={is_error:result.isError===true,result:JSON.parse(result.output),feedback:result.feedback};trace.event('observer_full_verification',report.host_verification)
+      if(!result.isError&&process.env.BLOMA_TRIAL_FINDINGS_FILE){
+        const cases=JSON.parse(readFileSync(process.env.BLOMA_TRIAL_FINDINGS_FILE,'utf8')),quality=createQualityReview(project.project_id,sid,policy),check=quality.parentTools.find(t=>t.name==='check_quality_finding')!
+        report.finding_checks=[]
+        for(const input of cases){const checked=await check.execute(input,ctx);report.finding_checks.push({is_error:checked.isError,result:JSON.parse(checked.output)});trace.event('observer_finding_check',report.finding_checks.at(-1))}
+      }
     }else if(phase==='verify-stage'){
       if(!process.env.BLOMA_TRIAL_STAGE||!process.env.BLOMA_TRIAL_STAGE_SCRIPT)throw Error('TRIAL_STAGE_INPUT_REQUIRED')
       report.stage_verification=await verifyProjectStage(project.project_id,process.env.BLOMA_TRIAL_STAGE,process.env.BLOMA_TRIAL_STAGE_SCRIPT,signal)
@@ -242,7 +256,9 @@ export async function main() {
     const final = findProject(project.project_id), state = readLongtermState(project.project_id)
     report.project_status = final.status; report.current_stage = final.current_stage; report.blocked = final.desktop_blocked
     report.longterm = state; report.release = (await activeSoftwareRelease(project.project_id))?.id; report.usage = readProjectUsage(project.project_id)
-    report.status = report.release ? 'released_pending_independent_acceptance' : state?.milestones.find(m => m.id === state.current_id)?.status === 'awaiting_confirmation' ? 'host_checked_pending_independent_acceptance' : 'incomplete'
+    const milestone=state?.milestones.find(m=>m.id===state.current_id),source=(await runtimeInventory(final.root_path)).digest
+    report.current_source_matches_milestone=source===milestone?.source_digest
+    report.status = report.independent?.status==='failed'?'independent_failed':report.host_verification?.is_error||report.stage_verification?.status==='failed'?'host_verification_failed':report.release&&final.status==='completed'&&final.current_stage==='completed'?'released_pending_independent_acceptance':milestone?.status==='awaiting_confirmation'&&report.current_source_matches_milestone?'host_checked_pending_independent_acceptance':'incomplete'
   } catch (error) { report.status = 'failed'; report.error = String(error) }
   finally {
     trace.finish()

@@ -69,7 +69,13 @@ export function proposeTestCorrection(id:string,input:{contract_digest:string;fi
   mutate(id,state=>{state.proposals.push(proposal)})
   return{id:pid,status:'pending',old_hash:proposal.old_hash,new_hash:newHash,expected_sources:proposal.expected_sources,verification:'not_issued',next:'独立宿主裁定前不写回测试、不继续付费重试；原失败记录保留。'}
 }
-export function testCorrectionView(id:string){const current=scope(id);return{proposals:read(id).proposals.filter(p=>p.scope===current).map(({replacement,before,after,...p})=>({...p,contract_digest:before.digest,replacement_digest:after.digest})),verification:'not_issued'}}
+export function testCorrectionView(id:string){
+  const current=scope(id),contracts=new Map<string,{native:NativeGuiTests;origin:string}>()
+  for(const a of readProjectStages(id).attempts.filter(a=>a.scope===current&&a.executed!==false))contracts.set(a.native.digest,{native:a.native,origin:'executed_stage'})
+  if(existsSync(guiSuitePath(id))){const s=parseGuiSuite(JSON.parse(readFileSync(guiSuitePath(id),'utf8')));if(s.native_tests&&s.scope_hash===current){try{contract(id,s.native_tests.digest);contracts.set(s.native_tests.digest,{native:s.native_tests,origin:'executed_formal'})}catch{/* an unexecuted formal draft is not an approved correction baseline */}}}
+  return{contracts:[...contracts.values()].map(({native:n,origin})=>({origin,contract_digest:n.digest,entry:pathOf(n,n.entry),files:n.files.map(f=>({path:pathOf(n,f.path),sha256:f.sha256})),cases:n.cases.map(c=>({name:c.name,feature:c.feature}))})),
+    proposals:read(id).proposals.filter(p=>p.scope===current).map(({replacement,before,after,...p})=>({...p,contract_digest:before.digest,replacement_digest:after.digest})),verification:'not_issued'}
+}
 export function pendingTestCorrection(id:string){return read(id).proposals.some(p=>p.scope===scope(id)&&p.status==='pending')}
 export function testCorrectionGate(id:string){
   if(pendingTestCorrection(id))return 'TEST_CORRECTION_REVIEW_REQUIRED'

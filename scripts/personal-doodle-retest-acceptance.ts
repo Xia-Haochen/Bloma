@@ -4,7 +4,7 @@ import {join} from 'node:path'
 import {randomUUID,createHash} from 'node:crypto'
 import {findProject} from '../main/project/project-service'
 import {readLongtermState} from '../main/software/longterm-state'
-import {prepareSoftwareRelease,readSoftwareCandidate,verifyReleaseSource} from '../main/software/release-store'
+import {prepareSoftwareRelease,readSoftwareCandidate,verifyReleaseSource,runtimeInventory} from '../main/software/release-store'
 import {prepareDataUpdate} from '../main/software/data-update'
 import {softwareEnvironment} from '../main/software/command-runtime'
 import {electronEntry} from '../main/software/electron-entry'
@@ -14,13 +14,14 @@ import {electronEntry} from '../main/software/electron-entry'
 export async function inspectRetestDoodle(projectId:string,folder:string,muteSelector?:string,baselineSnapshot?:string){
   mkdirSync(folder,{recursive:true});const prefix=join(folder,'actual-'+randomUUID())
   const state=readLongtermState(projectId),milestone=state?.milestones.find(m=>m.id===state.current_id)
-  const release=milestone?.status==='awaiting_confirmation'&&milestone.candidate_id?await readSoftwareCandidate(projectId,milestone.candidate_id):await prepareSoftwareRelease(projectId,findProject(projectId).root_path)
+  const currentRoot=findProject(projectId).root_path,pending=milestone?.status==='awaiting_confirmation'&&milestone.candidate_id?await readSoftwareCandidate(projectId,milestone.candidate_id):undefined
+  const release=pending&&pending.source.digest===(await runtimeInventory(currentRoot)).digest?pending:await prepareSoftwareRelease(projectId,currentRoot)
   const report:any={status:'running',candidate:release.id,source:release.source.digest,scope:'real Electron, digital Web Audio, actual persistent app data, restart; no physical-speaker claim',checks:[],page_errors:[]}
   let app:ElectronApplication|undefined,page!:Page,dataDir=''
-  const start=async()=>{
-    const transaction=await prepareDataUpdate(projectId,release.root,createHash('sha256').update(release.source.digest).digest('hex'),undefined,release.id);dataDir=transaction.dataDir
+  const start=async(override?:string)=>{
+    const transaction=override?undefined:await prepareDataUpdate(projectId,release.root,createHash('sha256').update(release.source.digest).digest('hex'),undefined,release.id);dataDir=override??transaction!.dataDir
     const entry=electronEntry(release.root,release.launch.command)
-    app=await _electron.launch({...entry,args:[...entry.args,'--mute-audio',`--user-data-dir=${join(folder,'profile')}`],cwd:release.root,env:softwareEnvironment(projectId,dataDir,release.root),timeout:30000})
+    app=await _electron.launch({...entry,args:[...entry.args,'--mute-audio',`--user-data-dir=${override?prefix+'-fault-profile':join(folder,'profile')}`],cwd:release.root,env:softwareEnvironment(projectId,dataDir,release.root),timeout:30000})
     await app.context().addInitScript(()=>{
       const audit:any={events:[],samples:0,sum:0,peak:0,contexts:[]};(window as any).__independentDoodleAudio=audit
       const taps=new WeakMap<AudioContext,ScriptProcessorNode>(),proto=AudioNode.prototype as any,connect=proto.connect,Original=window.AudioContext
@@ -34,7 +35,7 @@ export async function inspectRetestDoodle(projectId:string,folder:string,muteSel
       proto.connect=function(...args:any[]){const tap=taps.get(this.context);if(tap&&args[0]===this.context.destination)connect.call(this,tap);return connect.apply(this,args)}
       window.AudioContext=Observed
     })
-    page=await app.firstWindow();page.setDefaultTimeout(12000);page.on('pageerror',e=>report.page_errors.push(e.message));await expect(page.locator('#doodle-canvas')).toBeVisible();await page.reload({waitUntil:'domcontentloaded'});await expect(page.locator('#doodle-canvas')).toBeVisible();transaction.commit()
+    page=await app.firstWindow();page.setDefaultTimeout(12000);page.on('pageerror',e=>report.page_errors.push(e.message));await expect(page.locator('#doodle-canvas')).toBeVisible();await page.reload({waitUntil:'domcontentloaded'});await expect(page.locator('#doodle-canvas')).toBeVisible();transaction?.commit()
   }
   const data=()=>JSON.parse(readFileSync(join(dataDir,'doodle-synth.json'),'utf8'))
   const resetAudio=()=>page.evaluate(()=>{const a=(window as any).__independentDoodleAudio;a.events=[];a.samples=0;a.sum=0;a.peak=0})
@@ -95,7 +96,23 @@ export async function inspectRetestDoodle(projectId:string,folder:string,muteSel
     report.within_stroke={artwork:mixed,input_speeds:speeds,audio:sound,intervals,expected:'AC-005：同一笔的慢快段落应有可听节奏疏密变化'}
     expect(intervals.length).toBeGreaterThan(1);expect(Math.max(...intervals)/Math.min(...intervals)).toBeGreaterThan(1.5)
     report.checks.push('AC-005：同一笔慢速到快速的变化对应不同的实际音符间隔')
-    await verifyReleaseSource(release);report.status='passed';report.data_snapshot=prefix+'-data.json';writeFileSync(report.data_snapshot,JSON.stringify(data(),null,2))
+    const normal=data(),normalDir=dataDir;report.data_snapshot=prefix+'-data.json';writeFileSync(report.data_snapshot,JSON.stringify(normal,null,2))
+    await app!.close();app=undefined
+    const corrupt=structuredClone(normal),target=corrupt.artworks.find((a:any)=>a.mappingVersionId!==corrupt.currentVersionId)
+    expect(target).toBeTruthy();corrupt.mappingVersions=corrupt.mappingVersions.filter((v:any)=>v.id!==target.mappingVersionId)
+    const faultData=prefix+'-missing-rule-data';mkdirSync(faultData);writeFileSync(join(faultData,'doodle-synth.json'),JSON.stringify(corrupt,null,2))
+    await start(faultData);await resetAudio()
+    const row=page.locator(`.art-item[data-artwork-id="${target.id}"]`),own=row.locator('.ap-rule-select option[value="own"]')
+    if(!await own.isDisabled()){await row.locator('.ap-rule-select').selectOption('own');if(!await row.locator('.ap-play').isDisabled())await row.locator('.ap-play').click()}
+    await page.waitForTimeout(200)
+    const unavailable=(await row.innerText())+' '+(await page.locator('#art-play-status').innerText())
+    expect(unavailable).toMatch(/不可用|无法|缺失|不存在|不能/)
+    expect(await page.evaluate(()=>(window as any).__independentDoodleAudio.events.length)).toBe(0)
+    const alternative=await play(target.id,'current');expect(data().artworks.find((a:any)=>a.id===target.id)).toMatchObject(target)
+    expect(JSON.parse(readFileSync(join(normalDir,'doodle-synth.json'),'utf8'))).toEqual(normal)
+    report.missing_rule={requested:target.mappingVersionId,unavailable,alternative_audio:alternative,normal_data_unchanged:true}
+    report.checks.push('AC-018：缺失旧规则明确不可用且不静默发声，手动选择当前规则可播放；原画引用及正常数据保留')
+    await verifyReleaseSource(release);report.status='passed'
   }catch(error){report.status='failed';report.error=String(error);report.error_stack=error instanceof Error?error.stack:undefined;if(page)await page.screenshot({path:prefix+'-failure.png',fullPage:true}).catch(()=>{})}
   finally{await app?.close().catch(()=>{});report.finished_at=new Date().toISOString();writeFileSync(prefix+'.json',JSON.stringify(report,null,2))}
   return{status:report.status,report:prefix+'.json',error:report.error,checks:report.checks,data_snapshot:report.data_snapshot}
