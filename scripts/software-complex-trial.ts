@@ -136,8 +136,9 @@ export async function main() {
     return []
   }
   const control = createRequestBudget(binding.env, { requests: requestLimit - existing, outputTokens: requestMaxTokens, rmb: capRmb })
+  let latestStage:string|undefined
   const trace=createTrialRequestRecorder(join(root,'trace'),safe,session=>{
-    try{const p=findProject(project.project_id);return{project_id:p.project_id,status:p.status,current_stage:p.current_stage,desktop_phase:p.desktop_phase,source:softwareVerificationFingerprint(p.root_path),review_kind:readQualityLedger(p.project_id).reviews.find(r=>r.child===session)?.kind}}catch{return{phase}}
+    try{const p=findProject(project.project_id);return{project_id:p.project_id,status:p.status,current_stage:latestStage??p.current_stage,persisted_stage:p.current_stage,desktop_phase:p.desktop_phase,source:softwareVerificationFingerprint(p.root_path),review_kind:readQualityLedger(p.project_id).reviews.find(r=>r.child===session)?.kind}}catch{return{phase}}
   },policyRate)
   const paid = trace.wrap(control.wrap(anthropicMessagesQueryViaProviders),phase), signal = AbortSignal.timeout(45 * 60000)
   const query: SDKQuery = async function* (prompt, options) {
@@ -171,6 +172,7 @@ export async function main() {
   const save = (force=false) => { if(!force&&Date.now()-lastSave<500)return; lastSave=Date.now();writeTextFileAtomic(reportPath, safe({ ...report, operation: control.snapshot(), money: money() })) }
   const cards: AgentEvent[] = []
   const event = (type: AgentEvent['type'], payload: Record<string, unknown>) => {
+    if(type==='stage_changed'&&typeof payload.stage==='string')latestStage=payload.stage
     trace.event(type,{...payload,phase,run_id:runId})
     if (type === 'user_decision_required') cards.push({ type, payload } as AgentEvent)
     appendFileSync(join(taskDir, 'events.jsonl'), safe({ at: new Date().toISOString(), phase, run_id: runId, type, payload }) + '\n')

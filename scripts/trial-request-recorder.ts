@@ -39,7 +39,7 @@ export function createTrialRequestRecorder(folder:string,redact:(value:unknown)=
     const seq=++sequence,id=randomUUID(),messages=options.messages??options.history??[]
     const last=messages.filter(m=>m.role==='user').at(-1)
     const before=snapshot(options.sessionId)
-    const trigger=typeof last?.content==='string'?last.content:Array.isArray(last?.content)?last.content.map(b=>b.type==='tool_result'?`工具回执 ${b.tool_use_id}: ${b.content?.slice(0,500)}`:b.type==='text'?b.text:'图片/附件').join('\n'):prompt
+    const trigger=!options.messages?prompt:typeof last?.content==='string'?last.content:Array.isArray(last?.content)?last.content.map(b=>b.type==='tool_result'?`工具回执 ${b.tool_use_id}: ${b.content?.slice(0,500)}`:b.type==='text'?b.text:'图片/附件').join('\n'):prompt
     const row:any={sequence:seq,trace_id:id,phase,role:before?.review_kind??options.accounting?.role??'unassigned',session_id:options.sessionId,run_id:options.accounting?.runId,
       started_at:new Date().toISOString(),status:'running',trigger,
       before,requested_max_tokens:options.maxTokens,input:{prompt,messages},transports:[],prepared:[],tool_calls:[],assistant_output:[],tool_events:[]}
@@ -51,8 +51,8 @@ export function createTrialRequestRecorder(folder:string,redact:(value:unknown)=
         options.requestGuard?.(request)
         const body=JSON.parse(request.body)
         row.prepared.push({at:new Date().toISOString(),state:'prepared_not_proof_of_send',model:body.model,max_tokens:body.max_tokens,body_bytes:Buffer.byteLength(request.body),body_sha256:sha(request.body)});save(row)
-      },onTransportAttempt:state=>{options.onTransportAttempt?.(state);row.transports.push({at:new Date().toISOString(),state});save(row)},
-      onTransportResponse:receipt=>{options.onTransportResponse?.(receipt);row.transports.push({at:new Date().toISOString(),state:'response',receipt});save(row)}})){
+      },onTransportAttempt:state=>{options.onTransportAttempt?.(state);row.transports.push({at:new Date().toISOString(),state});save(row);timeline()},
+      onTransportResponse:receipt=>{options.onTransportResponse?.(receipt);row.transports.push({at:new Date().toISOString(),state:'response',receipt});save(row);timeline()}})){
         if(message.usage)row.usage={...row.usage,...message.usage}
         if(message.type==='assistant'&&message.message)for(const block of message.message.content){
           if(block.type==='text')row.assistant_output.push(block.text)
