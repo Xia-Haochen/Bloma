@@ -123,11 +123,13 @@ export async function handleLeanGuide(input: AgentSendMessageInput, publish: (ev
   const query = budget.wrap(model.query)
   const software = isSoftwareProject(input.project_id)
   emit('stage_changed', { stage: 'clarifying' })
+  let briefIssues: string[] = []
   const result = await withLeanRuntime(input.project_id, 'prepare', model.signal, signal => callLlmForJson({ systemPrompt: LEAN_BRIEF_PROMPT + (software ? '\n另填delivery=desktop/browser/command描述用户使用方式；有界面默认desktop，仅用户明确要在浏览器使用才browser；无界面command。distribution描述交付：默认local本机使用，用户明确要复制到其他电脑直接运行用portable，要安装包用installer，只移交源码用source。框架、依赖、语言由工程Agent选择，不让用户做技术问卷。' : ''),
-    prompt: JSON.stringify({ previous: brief.lean_brief ? brief : undefined, conversation: source, sources: intentSources(source, brief.requirements_model?.sources), materials, latest: input.content }),
+    prompt: JSON.stringify({ previous: brief.lean_brief ? brief : undefined, conversation: source, sources: intentSources(source, brief.requirements_model?.sources ?? brief.lean_brief?.intent_sources), materials, latest: input.content }),
     query: (text, options) => query(text, { ...options, images, accounting: { projectId: input.project_id, runId: input.request_id, role: 'brief', scope: 'prepare' } }),
-    env: model.env, signal, sessionId: input.session_id, maxTokens: Math.min(model.maxTokens, 8192), temperature: .1, attempts: 2,
-    parse: text => parseLeanBrief(text, { projectId: input.project_id, sessionId: input.session_id, source, previous: brief, software, assets: model.materials?.attachments }) }))
+    env: model.env, signal, sessionId: input.session_id, maxTokens: model.maxTokens, temperature: .1, attempts: 2,
+    retryFeedback: () => JSON.stringify({ conversation: source, sources: intentSources(source, brief.requirements_model?.sources ?? brief.lean_brief?.intent_sources), previous: brief.lean_brief ? brief : undefined, materials, latest: input.content, errors: briefIssues, instruction: '按具体错误重新给出完整JSON，不删除原始要求以规避校验。' }),
+    parse: text => parseLeanBrief(text, { projectId: input.project_id, sessionId: input.session_id, source, previous: brief, software, assets: model.materials?.attachments, requireIntentAssessment: software, onIssues: issues => { briefIssues = issues } }) }))
   model.signal.throwIfAborted()
   if (!result) { say('任务整理未完成，原始需求已保留；可重试，不会自动开工。'); emit('message_completed', { subtype: 'incomplete' }); return }
   if (result.action === 'clarify') {

@@ -1,3 +1,4 @@
+import { resolveGenerationMaxTokens } from '../main/platform/llm/model-resolution'
 import { execFileSync } from 'node:child_process'
 import { inspectDocuments } from './complex-documents-acceptance'
 import { inspectPrimary } from './complex-primary-acceptance'
@@ -58,7 +59,7 @@ export async function main() {
   const root = resolve(process.env.BLOMA_COMPLEX_TRIAL_ROOT), phase = process.env.BLOMA_COMPLEX_TRIAL_PHASE ?? 'preflight'
   const tasks = trialTasks(), customCases = Boolean(process.env.BLOMA_COMPLEX_TRIAL_CASES)
   const which = process.env.BLOMA_COMPLEX_TRIAL_TASK ?? Object.keys(tasks)[0]
-  if (!['preflight', 'run', 'resume', 'change', 'confirm', 'inspect'].includes(phase) || !Object.hasOwn(tasks, which)) throw Error('TRIAL_PHASE_INVALID')
+  if (!['preflight', 'run', 'resume', 'change', 'confirm', 'inspect', 'replan', 'approve-ux'].includes(phase) || !Object.hasOwn(tasks, which)) throw Error('TRIAL_PHASE_INVALID')
   const task = tasks[which as keyof typeof tasks], home = join(root, 'home'), profile = join(root, 'electron-profile')
   mkdirSync(home, { recursive: true }); mkdirSync(profile, { recursive: true })
   process.env.PROMA_HOME = home; process.env.BLOMA_DISPATCH_EXPERIMENT = '0'; delete process.env.BLOMA_EXPERIMENT_UNLIMITED_MONETARY
@@ -68,6 +69,7 @@ export async function main() {
   cpSync(source, copied)
   const binding = resolveDelegationChannelOverride({ channelId: 'c0711f40-a244-4df1-96bd-b06a323b829e', modelId: 'deepseek-flash' })!
   if (binding.modelName !== 'deepseek-flash' || binding.env.ANTHROPIC_BASE_URL !== 'https://api.deepseek.com/anthropic') throw Error('TRIAL_ROUTE_CHANGED')
+  const generationMaxTokens = resolveGenerationMaxTokens({ max_tokens: binding.maxTokens })
   const key = binding.env.ANTHROPIC_AUTH_TOKEN ?? binding.env.ANTHROPIC_API_KEY
   if (!key) throw Error('KEY_UNAVAILABLE')
   const safe = (v: unknown) => redactSoftwareOutput(JSON.stringify(v)).split(key).join('[REDACTED]')
@@ -113,7 +115,7 @@ export async function main() {
     if (existsSync(join(root,'generation-started'))) throw Error('TRIAL_ACCOUNTING_MISSING')
     return []
   }
-  const control = createRequestBudget(binding.env, { requests: 512 - existing, outputTokens: 16384, rmb: 10 })
+  const control = createRequestBudget(binding.env, { requests: 512 - existing, outputTokens: generationMaxTokens, rmb: 10 })
   const paid = control.wrap(anthropicMessagesQueryViaProviders), signal = AbortSignal.timeout(45 * 60000)
   const query: SDKQuery = async function* (prompt, options) {
     if(existsSync(join(root,'pause-generation')))throw Error('TRIAL_PAUSED_BETWEEN_REQUESTS')
@@ -123,6 +125,8 @@ export async function main() {
       requestGuard: request => {
         options.requestGuard?.(request)
         const body = JSON.parse(request.body)
+        const wireSystems = body.system ?? (body.messages ?? []).filter((m: any) => m.role === 'system').map((m: any) => m.content)
+        appendFileSync(join(root, 'request-shapes.jsonl'), JSON.stringify({ at: new Date().toISOString(), task: which, phase, state: 'prepared_not_proof_of_send', requested_max_tokens: options.maxTokens, wire_max_tokens: body.max_tokens, system_sha256: hash(JSON.stringify(wireSystems)), system_bytes: Buffer.byteLength(JSON.stringify(wireSystems)), body_bytes: Buffer.byteLength(request.body), thinking: body.thinking?.type }) + '\n')
         if ((body.tools ?? []).some((t: any) => t.type && !['custom','function'].includes(t.type))) throw Error('SERVER_SIDE_PAID_TOOLS_NOT_AUTHORIZED')
       } })) {
       if (options.accounting?.role === 'brief' && message.type === 'assistant' && message.message) {
@@ -148,17 +152,20 @@ export async function main() {
     appendFileSync(join(taskDir, 'events.jsonl'), safe({ at: new Date().toISOString(), phase, run_id: runId, type, payload }) + '\n')
     save()
   }
-  const model = { query, env: binding.env, signal, sessionId: sid, history: [], maxTokens: 16384,
+  const model = { query, env: binding.env, signal, sessionId: sid, history: [], maxTokens: generationMaxTokens,
     persistAssistant: (text: string) => appendSessionMessage(sid, { role: 'assistant', origin: 'agent', content: [{ type: 'text', text }], timestamp: Date.now() }) }
   try {
     save(true)
     if (phase === 'inspect') {
       report.independent=customCases?{status:'unverified',reason:'需按当前样本独立oracle执行实际交互；不使用旧任务的专用验收器冒充通过。'}:which==='primary'?await inspectPrimary(project.project_id,join(taskDir,'independent'),process.env.BLOMA_COMPLEX_REGRESSION==='1'):await inspectDocuments(project.project_id,join(taskDir,'independent'))
+    } else if (phase === 'approve-ux') {
+      report.ux_confirmation = 'actual persisted UX card; trial operator reviewed preview before confirmation'
+      await handleGuideMessage({ project_id: project.project_id, session_id: sid, request_id: runId, mode: 'longterm', current_stage: 'blocked_for_user_decision', content: '按草图开工', metadata: { source: 'card_option', selected_option_id: 'ux_confirm_go' } }, e => event(e.type, e.payload), model)
     } else if (phase === 'confirm') {
       const state = readLongtermState(project.project_id)
       if (!state) throw Error('MILESTONE_MISSING')
       report.confirmation = await performLongtermAction({ request_id: runId, project_id: project.project_id, session_id: sid, revision: state.revision, action: 'confirm' }, signal, { busy: false, emit: event })
-    } else if (phase === 'run' || phase === 'change' || !readPrdBackplane(project.project_id).user_confirmed_at) {
+    } else if (phase === 'run' || phase === 'change' || phase === 'replan' || !readPrdBackplane(project.project_id).user_confirmed_at) {
       const content = phase === 'change' ? task.change : task.goal
       const input = { project_id: project.project_id, session_id: sid, request_id: runId, mode: 'longterm' as const, current_stage: 'clarifying' as const, content }
       appendSessionMessage(sid, { role: 'user', origin: 'user', content: [{ type: 'text', text: content }], timestamp: Date.now() })
@@ -171,7 +178,7 @@ export async function main() {
         await handleGuideMessage({ ...input, request_id: randomUUID(), content: '按这份做', metadata: { source: 'card_option', selected_option_id: option.id } }, e => event(e.type, e.payload), model)
       }
     } else {
-      await enterDesktopLine({ projectId: project.project_id, sessionId: sid, requestId: runId, content: '继续完成已确认目标，沿已有现场检查和修复。', maxTokens: 16384, signal }, query, binding.env,
+      await enterDesktopLine({ projectId: project.project_id, sessionId: sid, requestId: runId, content: '继续完成已确认目标，沿已有现场检查和修复。', maxTokens: generationMaxTokens, signal }, query, binding.env,
         { publish: (_target, type, payload) => event(type, payload), persistAssistant: (_sid, text) => model.persistAssistant(text), persistSystem: () => {}, complete: (_s, _p, result) => { report.completion = result } })
     }
     const final = findProject(project.project_id), state = readLongtermState(project.project_id)

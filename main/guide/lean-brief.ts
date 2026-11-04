@@ -1,6 +1,6 @@
 import { bindDesignAssets } from '../model/design-assets'
 import type { AttachmentInfo } from '../../shared/attachment-types'
-import { intentSources, PERSONAL_INTENT_PROMPT } from '../model/personal-intent'
+import { intentSources, PERSONAL_INTENT_PROMPT, validateIntentAssessment } from '../model/personal-intent'
 import { validateRequirementsModel, projectRequirementsModel, type RequirementsModel } from '../model/requirements-model'
 import { snapshotProductTheme } from '../../shared/product-design-theme'
 import { validateProjectPlan } from '../software/project-plan'
@@ -21,7 +21,7 @@ export const LEAN_BRIEF_PROMPT = `把用户目标整理为可执行的短任务�
 requirements可用内部capabilities标记验收能力，仅接受llm/speech/microphone/prefix_rename/rename_undo；文件音频转写标speech，真实录音/麦克风输入才加microphone。不是用户技术选型，不增加功能；空标记不能取消明确文字承诺。
 可以在suggestions单列0~3条值得考虑的可选灵感，每条为{"title":"简短建议","description":"采纳后增加的具体能力","benefit":"对用户有什么帮助","expected":"采纳后可观察的结果"}。基于需求给出具体、不重复的建议，不凑数，不搜索或冒充市场调研；不得违背用户约束或范围外事项。用户明确要求的功能仍放requirements，不能降级成建议。未采纳建议不得混入goal、requirements、constraints、assumptions或必需验收；用户说直接做也不等于同意建议。不另写PRD正文、审计报告或实现代码。复杂多阶段任务可附project_plan:{version:1,stages:[{id:"stage-1",title:"阶段标题",feature_ids:["F-001"]}],current:"stage-1"}；使用已有或本轮按顺序分配的F编号，每个必需功能恰好属于一个阶段。计划只是阅读视图，不删除后续功能，不授权阶段提前交付。可附design_assets:[{attachment_id,role:required_asset|style_reference|content,usage,transformations}]声明素材用途；只引用宿主提供的附件，不编造hash；transformations明确可否裁剪/改色，不明确时保留原样。只输出JSON。` + '\n' + PERSONAL_INTENT_PROMPT
 
-export function parseLeanBrief(raw: string, context: { projectId: string; sessionId: string; source: string; previous: PrdBackplane; software?: boolean; assets?: AttachmentInfo[] }):
+export function parseLeanBrief(raw: string, context: { projectId: string; sessionId: string; source: string; previous: PrdBackplane; software?: boolean; assets?: AttachmentInfo[]; requireIntentAssessment?: boolean; onIssues?: (issues: string[]) => void }):
   { action: 'clarify'; question: string; options: string[] } | { action: 'brief'; brief: PrdBackplane; suggestions: LeanScopeSuggestion[] } | undefined {
   let value: unknown
   try { value = JSON.parse(raw.trim().replace(/^```(?:json)?\s*|\s*```$/g, '')) } catch { return }
@@ -52,11 +52,21 @@ export function parseLeanBrief(raw: string, context: { projectId: string; sessio
   }
   let plan
   try { plan = validateProjectPlan(value.project_plan === undefined ? context.previous.project_plan : value.project_plan, requirements.map(r => r.id)) } catch { return }
+  const sources = intentSources(context.source, context.previous.requirements_model?.sources ?? context.previous.lean_brief?.intent_sources)
+  const assessment = value.intent_assessment
+  if ((context.requireIntentAssessment || assessment !== undefined) && !validateIntentAssessment(assessment, sources)) {
+    context.onIssues?.(['INTENT_ASSESSMENT_REQUIRED: 必须声明direct/structured及原因和真实S来源；不能静默省略结构判断']); return
+  }
+  if (validateIntentAssessment(assessment, sources) && assessment.mode === 'structured'
+    && (!object(value.requirements_model) || !object(value.requirements_model.experience))) {
+    context.onIssues?.(['INTENT_STRUCTURE_REQUIRED: structured需要完整requirements_model和experience；constraints不能替代规则与核心体验模型']); return
+  }
   let model: RequirementsModel | undefined
   if (value.requirements_model !== undefined) {
     if (!object(value.requirements_model)) return
-    model = { ...structuredClone(value.requirements_model), sources: intentSources(context.source, context.previous.requirements_model?.sources) } as unknown as RequirementsModel
-    if (validateRequirementsModel(model, requirements).length || model.open_questions.length) return
+    model = { ...structuredClone(value.requirements_model), sources } as unknown as RequirementsModel
+    const issues = validateRequirementsModel(model, requirements)
+    if (issues.length || model.open_questions.length) { context.onIssues?.([...issues, ...model.open_questions]); return }
   } else if (context.previous.requirements_model) return // Never silently discard existing rules/experience during a revision.
   let assets
   try { assets = bindDesignAssets(value.design_assets, context.assets ?? [], context.previous.lean_brief?.design_assets) } catch { return }
@@ -67,7 +77,7 @@ export function parseLeanBrief(raw: string, context: { projectId: string; sessio
   return { action: 'brief', suggestions: parseLeanSuggestions(value.suggestions, requirements.map(row => row.description)), brief: projectRequirementsModel(bindAcceptance({ project_id: context.projectId,
     name: typeof value.name === 'string' && value.name.trim() ? value.name : context.previous.name,
     positioning: value.goal, requirements, acceptance, ...(model ? { requirements_model: model } : {}), ...(plan ? { project_plan: plan } : {}), constraints: texts(value.constraints), out_of_scope: texts(value.out_of_scope), assumptions: texts(value.assumptions),
-    lean_brief: { ...(assets ? { design_assets: assets } : {}), ...(designTheme ? { design_theme: designTheme } : {}), version: 1, ui: value.ui as 'required' | 'none', source_session_id: context.sessionId,
+    lean_brief: { ...(validateIntentAssessment(assessment, sources) ? { intent_assessment: assessment, intent_sources: sources } : {}), ...(assets ? { design_assets: assets } : {}), ...(designTheme ? { design_theme: designTheme } : {}), version: 1, ui: value.ui as 'required' | 'none', source_session_id: context.sessionId,
       ...(context.software ? { delivery: delivery as 'desktop' | 'browser' | 'command' } : {}),
       ...(context.software && distribution !== undefined ? { distribution: distribution as 'local' | 'portable' | 'installer' | 'source' } : {}),
       source_sha256: createHash('sha256').update(context.source).digest('hex') } })) }

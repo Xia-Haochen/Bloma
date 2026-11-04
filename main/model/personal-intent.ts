@@ -14,6 +14,14 @@ export function intentSources(source: string, previous: RequirementSource[] = []
   return rows
 }
 
+export interface IntentAssessment { mode: 'direct' | 'structured'; reason: string; source_ids: string[] }
+export function validateIntentAssessment(value: unknown, sources: RequirementSource[]): value is IntentAssessment {
+  const row = value as IntentAssessment
+  return Boolean(row && ['direct','structured'].includes(row.mode) && typeof row.reason === 'string' && row.reason.trim() && row.reason.length <= 2000
+    && Array.isArray(row.source_ids) && row.source_ids.length && new Set(row.source_ids).size === row.source_ids.length
+    && row.source_ids.every(id => sources.some(s => s.id === id)))
+}
+
 export function experienceIssues(value: unknown, features: Set<string>, sources: Set<string>, scenarios: Set<string>): string[] {
   if (value === undefined) return []
   const v = value as PersonalExperience
@@ -33,6 +41,7 @@ export function experienceIssues(value: unknown, features: Set<string>, sources:
   return issues
 }
 
-export const PERSONAL_INTENT_PROMPT = `个性化玩法、私人例外、持续规则或复杂关系不能压成通用功能列表。需要时输出requirements_model（旧任务已有则必须更新保留），复用版本1结构：
+export const PERSONAL_INTENT_PROMPT = `brief必须附intent_assessment:{mode:direct|structured,reason:判断依据,source_ids:[宿主S编号]}。这是内部结构选择，不额外询问用户技术细节。仅无跨对象/跨时间规则的直接操作可用direct；自定义映射、规则版本、例外、历史状态或特殊互动旅程使用structured，并必须输出requirements_model及experience。不能用增加constraints代替结构模型。判断依据要解释任务结构，不按题材名分类。
+个性化玩法、私人例外、持续规则或复杂关系不能压成通用功能列表。structured或旧任务已有时输出requirements_model，复用版本1结构：
 {version:1,goal,target_users:[文本],entities:[{id:O-001,name,description,attributes:[]}],relations:[{from,to,description}],workflows:[{id:W-001,name,steps:[文本],feature_ids:[F编号]}],rules:[{id:BR-001,statement,feature_ids,source_ids,origin:user|assumption}],scenarios:[{id:AC-001,feature_id,kind:normal|boundary|exception,given,when,then,rule_ids:[]}],coverage:[{source_id,feature_ids:[],rule_ids:[],disposition:included|context|out_of_scope|superseded,reason}],open_questions:[],experience:{summary,commitments:[{id:EXP-001,statement,source_ids,feature_ids,scenario_ids,unacceptable_substitute}]}}。
 sources由宿主提供且回填，不生成用户原话。每项功能有流程及normal/boundary/exception场景；非正常场景确实不适用可用not_applicable具体说明（至少20字），不凑假案例。每条规则在相应场景覆盖；仅用户明确需要合计/数量/去重排序时规则可附verification:{operation:sum_decimal|count_inputs|sorted_unique}，只是确定性验收运算，不得替开放内容编造固定答案；每份来源有coverage。例外的对象、期限、冲突优先级写清规则。experience只在存在特殊体验时使用，反例说明哪种看似实现却违背原愿望。体验场景必须是对应功能实际适用的场景。简单任务省略模型，不增加问卷。未明的关键问题使用clarify，不编造。原话覆盖只证明关联，不代表语义正确；返回前从原话独立核对遗漏/弱化的承诺。`

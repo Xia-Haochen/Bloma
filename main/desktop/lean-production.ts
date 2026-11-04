@@ -251,7 +251,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   // Shared physical-request, output, monetary and active-time budgets own the
   // stop boundary; another 96-turn limit only interrupts useful work early.
   const maxTurns = Number.MAX_SAFE_INTEGER
-  registerParentLoopContext(input.sessionId, { query, env: input.env, maxTokens: Math.min(input.maxTokens, 16384), maxTurns,
+  registerParentLoopContext(input.sessionId, { query, env: input.env, maxTokens: input.maxTokens, maxTurns,
     delegationMaxTurns: 24, permissionMode: 'allow-all', temperature: .1, system, editFormat: 'diff', runtimeScope: 'lean-build',
     executionScope: budget.executionScope, materials: sessionMaterials(input.projectId, input.sessionId), publish: emit,
     childMaterialsBuilder: child => quality.isQualityChild(child) ? undefined : sessionMaterials(input.projectId, input.sessionId),
@@ -293,7 +293,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
       else try { result = await runAgentLoop({ runtimeScope: 'lean-build', system, task, query, env: input.env, tools,
         onRuntimeObservation: observeRuntime,
         projectId: input.projectId, sessionId: input.sessionId, requestId: input.requestId, signal: runSignal,
-        maxTokens: Math.min(input.maxTokens, 16384), maxTurns, permissionMode: 'allow-all', workMode: 'implementation', executionScope: budget.executionScope,
+        maxTokens: input.maxTokens, maxTurns, permissionMode: 'allow-all', workMode: 'implementation', executionScope: budget.executionScope,
         materials: sessionMaterials(input.projectId, input.sessionId), images: initial ? input.images : undefined,
         initialMessagePersisted: initial ? input.initialMessagePersisted : false,
         shouldPause: () => scopePending,

@@ -26,7 +26,7 @@ export interface LlmAttemptFailure {
   /** error=query 抛错（带原始 message）；empty=模型零输出；unparseable=有输出但解析失败。 */
   kind: 'error' | 'empty' | 'unparseable'
   /** Distinguish caller cancellation and the call deadline without parsing provider error text. */
-  termination?: 'timeout' | 'aborted'
+  termination?: 'timeout' | 'aborted' | 'output_limit'
   detail: string
 }
 
@@ -88,9 +88,10 @@ export async function callLlmForJson<T>(options: LlmJsonCallOptions<T>): Promise
               { role: 'assistant', content: accumulated },
             ]
       const prompt = attempt === 0 || truncated ? options.prompt : (typeof options.retryFeedback === 'function' ? options.retryFeedback() : options.retryFeedback ?? options.prompt)
-      let round: string
+      let round: string, stopReason: string | undefined
       try {
-        round = await runSingleTurn(options, maxTokens, history, prompt, signal)
+        const response = await runSingleTurn(options, maxTokens, history, prompt, signal)
+        round = response.text; stopReason = response.stopReason
       } catch (error) {
         // 流抛错（网络/HTTP/abort）——这是唯一能看到服务端拒绝原因的地方，必须转交观测
         options.onAttemptFailure?.({
@@ -116,6 +117,7 @@ export async function callLlmForJson<T>(options: LlmJsonCallOptions<T>): Promise
         options.onAttemptFailure?.({
           attempt,
           kind: 'unparseable',
+          ...(stopReason === 'max_tokens' || stopReason === 'length' ? { termination: 'output_limit' as const } : {}),
           detail: `输出无法解析（${round.length} 字符）：${round.slice(0, 80)}`,
         })
       }
@@ -151,7 +153,7 @@ async function runSingleTurn<T>(
   history: ConversationTurn[],
   prompt: string,
   signal: AbortSignal,
-): Promise<string> {
+): Promise<{ text: string; stopReason?: string }> {
   const queryOptions: SDKQueryOptions = {
     env: options.env,
     signal,
@@ -163,13 +165,14 @@ async function runSingleTurn<T>(
     thinkingLevel: options.thinkingLevel,
     providerType: options.providerType,
   }
-  let round = ''
+  let round = '', stopReason: string | undefined
   for await (const sdkMessage of options.query(prompt, queryOptions)) {
+    if (sdkMessage.type === 'result') stopReason = sdkMessage.stop_reason
     if (sdkMessage.type !== 'assistant' || !sdkMessage.message) continue
     const text = extractText(sdkMessage.message.content)
     if (text) round += text
   }
-  return round
+  return { text: round, stopReason }
 }
 
 /** parse 抛错归一为本轮失败（不中断重试链）。 */

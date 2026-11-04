@@ -42,6 +42,13 @@ const UX_SKETCH_FILENAME = 'ux-sketch.html'
 const UX_SKETCH_TIMEOUT_MS = 240_000
 const UX_SKETCH_ATTEMPTS = 2
 
+export function sketchFormatIssues(raw: string): string[] {
+  const issues: string[] = []
+  if (!/^(?:<!doctype html>|<html[\s>])/i.test(raw.trim())) issues.push('OUTPUT_FORMAT_PREFIX: 必须直接以<!DOCTYPE html>开始，不输出解释或代码围栏')
+  if (/<(?:!doctype html|html[\s>])/i.test(raw) && !/<\/html\s*>/i.test(raw)) issues.push('HTML_INCOMPLETE: HTML在文档闭合前结束，不补写猜测内容；重新生成精简完整文档')
+  return issues
+}
+
 const UX_SKETCH_RETRY_FEEDBACK = '上一次输出不是可用的 HTML 文档（可能带了解释文字或代码围栏）。请只输出完整 HTML 文档本身：<!DOCTYPE html> 开头，单文件内联样式，无脚本，无解释，无代码围栏。'
 
 const DESIGN_OUTPUT_PROTOCOL = `【宿主输出协议，优先于自定义提示词中的格式要求】只输出JSON：
@@ -222,7 +229,7 @@ export async function generateUxSketch(options: UxSketchOptions): Promise<UxSket
   if (materials && materials.attachments.filter(m => m.kind !== 'text').length > ATTACHMENT_LIMITS.images) throw Error('UX_REFERENCE_IMAGE_CAPACITY: 参考图超过单次容量，需分批设计，不得静默忽略')
   const referenceImages = materials ? materialImageRefs(materials) : []
   const referenceText = materials ? renderMaterialContext(materials, options.session_id, true) : ''
-  const prompt = buildSketchPrompt(options) + (referenceText ? '\n用户设计材料（用途以确认策略为准）：' + referenceText : '') + (options.backplane?.lean_brief ? '\n项目视觉策略：' + JSON.stringify(productDesignPolicy(options.backplane)) : '')
+  const prompt = buildSketchPrompt(options) + (options.backplane?.lean_brief ? '\n输出约束：直接输出完整静态HTML，不加解释或代码围栏；只精绘主工作区，不重复展开全部表单和历史。' : '') + (referenceText ? '\n用户设计材料（用途以确认策略为准）：' + referenceText : '') + (options.backplane?.lean_brief ? '\n项目视觉策略：' + JSON.stringify(productDesignPolicy(options.backplane)) : '')
   const lean = Boolean(options.backplane?.lean_brief)
   const structured = Boolean(options.backplane && !lean)
   const resolvedPrompt = loadPromptWithSource('sketch-system', lean ? LEAN_SKETCH_PROMPT : UX_SKETCH_SYSTEM_PROMPT)
@@ -276,6 +283,7 @@ export async function generateUxSketch(options: UxSketchOptions): Promise<UxSket
     timeoutMs: UX_SKETCH_TIMEOUT_MS,
     onAttemptFailure: failure => {
       const kind = failure.termination ?? failure.kind
+      if (failure.termination === 'output_limit') lastIssues = ['OUTPUT_LIMIT: 服务端报告本轮输出耗尽；保持输出额度，减少重复样例、装饰路径和非当前表单，重新生成完整主工作区', ...lastIssues]
       generation.failures.push({ attempt: failure.attempt, kind })
       diagnostic({ event: 'attempt_failed', attempt: failure.attempt, failure_kind: kind })
     },
@@ -285,9 +293,7 @@ export async function generateUxSketch(options: UxSketchOptions): Promise<UxSket
       let freshCandidate: string | undefined
       const parsed = parseUxOutput(raw, options.backplane, issues => { lastIssues = issues }, candidateHtml,
         html => { candidateHtml = html; freshCandidate = html })
-      if (lean && !parsed && /^(?:```html\s*)?(?:<!doctype html>|<html[\s>])/i.test(raw.trim()) && !/<\/html\s*>/i.test(raw)) {
-        lastIssues = ['HTML在文档闭合前结束，可能达到输出上限；需缩减界面体量后重新生成']
-      }
+      if (lean && !parsed) lastIssues = [...lastIssues, ...sketchFormatIssues(raw)]
       diagnostic({ event: 'output_checked', attempt: parseAttempt - 1, raw_output: raw.slice(0, 65536),
         raw_output_truncated: raw.length > 65536, output_sha256: hash(raw), validation_issues: lastIssues,
         accepted_for_preview: Boolean(parsed && !parsed.requires_prd_revision), requested_prd_revision: Boolean(parsed?.requires_prd_revision),

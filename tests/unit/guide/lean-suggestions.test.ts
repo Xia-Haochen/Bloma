@@ -23,7 +23,7 @@ async function setup(content = '做个本地保存记录的命令工具，先确
   const project = createProject({ request_id: 'create', mode: 'quick' }, { workflowVersion: 'software-v1' })
   const query = vi.fn<SDKQuery>(async function* () {
     yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: JSON.stringify({
-      action: 'brief', goal: '保存并查看本地记录', ui: 'none', delivery: 'command',
+      intent_assessment: {mode:'direct',reason:'基础记录操作，无领域版本规则',source_ids:['S-001']}, action: 'brief', goal: '保存并查看本地记录', ui: 'none', delivery: 'command',
       requirements: [{ description: '保存记录', expected: '重开后记录仍在' }], constraints: ['无需联网'], out_of_scope: ['账号'], suggestions: [idea, other],
     }) }] } }; yield { type: 'result', subtype: 'success' }
   })

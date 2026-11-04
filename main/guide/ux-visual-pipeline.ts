@@ -38,7 +38,7 @@ export async function generateUxVisualDesign(options: UxSketchOptions & { progre
   if (options.backplane?.lean_brief) {
     const budget = leanBudget(options.project_id, 'prepare')
     return withLeanRuntime(options.project_id, 'prepare', options.signal, signal => deps.generate({ ...options, signal,
-      query: budget.wrap(options.query), maxTokens: Math.min(options.maxTokens, 16384), attempts: 2 }))
+      query: budget.wrap(options.query), maxTokens: options.maxTokens, attempts: 2 }))
   }
   if (!options.backplane || !deps.available() || process.env.BLOMA_UX_VISUAL === '0') return deps.generate(options)
   const experimentPreparation = process.env.BLOMA_DISPATCH_EXPERIMENT === '1'
