@@ -6,6 +6,7 @@ import { createProductionBudget } from '../../../main/desktop/production-budget'
 import type { SDKQuery, SDKQueryOptions } from '../../../main/orchestration/stages/orchestration-contracts'
 import { leanBudget, withLeanRuntime } from '../../../main/desktop/lean-budget'
 import { createProject } from '../../../main/project/project-service'
+import { configureSoftwareExecutionLimits } from '../../../main/software/execution-limits'
 
 beforeEach(() => vi.stubEnv('PROMA_HOME', mkdtempSync(join(tmpdir(), 'bloma-production-budget-'))))
 afterEach(() => vi.unstubAllEnvs())
@@ -18,6 +19,28 @@ const ok: SDKQuery = async function* (_prompt, opts) {
 const limits = { requests: 3, phaseRequests: 3, output: 8192, perResponse: 2048 }
 
 describe('production admission is shared and durable', () => {
+  it('waits for a concurrent maximum reservation instead of repeatedly failing a new reviewer', async () => {
+    const budget = createProductionBudget('p', 'shared-large', 'desktop-implement', { ...limits, perResponse: 8192 })
+    let release!: () => void, childStarted = false
+    const hold = new Promise<void>(done => { release = done })
+    const parent = drain(budget.wrap(async function* () {
+      yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'working' }] } }
+      await hold; yield { type: 'result', subtype: 'success', usage: { output_tokens: 100 } }
+    }), { ...options(), maxTokens: 8192 })
+    await new Promise(done => setTimeout(done, 10))
+    const child = drain(budget.wrap(async function* () { childStarted = true; yield { type:'result', subtype:'success', usage:{output_tokens:200} } }), { ...options(), maxTokens:8192, sessionId:'child' })
+    await new Promise(done => setTimeout(done, 10)); expect(childStarted).toBe(false)
+    expect(budget.snapshot().requests).toBe(1)
+    release(); await Promise.all([parent,child])
+    expect(childStarted).toBe(true); expect(budget.snapshot()).toMatchObject({ requests:2, output:300 })
+  })
+  it('keeps counters when an operator grants additional execution space within the same operation', async () => {
+    const p=createProject({request_id:'r',mode:'quick'},{workflowVersion:'software-v1'})
+    await drain(leanBudget(p.project_id,'prepare').wrap(ok))
+    configureSoftwareExecutionLimits(p.project_id,p.lean_operation_id??'initial',{requests:512,output:1048576,reason:'User-authorized continuation after a diagnosed admission defect; money policy unchanged'})
+    expect(leanBudget(p.project_id,'desktop-implement').snapshot()).toMatchObject({requests:1,output:100,limits:{requests:512,output:1048576}})
+    expect(()=>configureSoftwareExecutionLimits(p.project_id,'different',{requests:512,output:1048576,reason:'wrong operation'})).toThrow('OPERATION_CHANGED')
+  })
   it('counts primary, child and restart against the same requirements budget', async () => {
     const parent = createProductionBudget('p', 'prd-v1', 'desktop-implement', limits)
     await drain(parent.wrap(ok)); await drain(parent.wrap(ok), { ...options(), sessionId: 'child' })

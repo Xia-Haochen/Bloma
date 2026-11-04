@@ -1,3 +1,5 @@
+import { configureSoftwareExecutionLimits } from '../main/software/execution-limits'
+import { inspectDoodle } from './personal-doodle-acceptance'
 import { resolveGenerationMaxTokens } from '../main/platform/llm/model-resolution'
 import { execFileSync } from 'node:child_process'
 import { inspectDocuments } from './complex-documents-acceptance'
@@ -59,7 +61,7 @@ export async function main() {
   const root = resolve(process.env.BLOMA_COMPLEX_TRIAL_ROOT), phase = process.env.BLOMA_COMPLEX_TRIAL_PHASE ?? 'preflight'
   const tasks = trialTasks(), customCases = Boolean(process.env.BLOMA_COMPLEX_TRIAL_CASES)
   const which = process.env.BLOMA_COMPLEX_TRIAL_TASK ?? Object.keys(tasks)[0]
-  if (!['preflight', 'run', 'resume', 'change', 'confirm', 'inspect', 'replan', 'approve-ux', 'retry-ux'].includes(phase) || !Object.hasOwn(tasks, which)) throw Error('TRIAL_PHASE_INVALID')
+  if (!['preflight', 'run', 'resume', 'change', 'confirm', 'inspect', 'replan', 'approve-ux', 'retry-ux', 'extend-execution'].includes(phase) || !Object.hasOwn(tasks, which)) throw Error('TRIAL_PHASE_INVALID')
   const task = tasks[which as keyof typeof tasks], home = join(root, 'home'), profile = join(root, 'electron-profile')
   mkdirSync(home, { recursive: true }); mkdirSync(profile, { recursive: true })
   process.env.PROMA_HOME = home; process.env.BLOMA_DISPATCH_EXPERIMENT = '0'; delete process.env.BLOMA_EXPERIMENT_UNLIMITED_MONETARY
@@ -157,7 +159,10 @@ export async function main() {
   try {
     save(true)
     if (phase === 'inspect') {
-      report.independent=customCases?{status:'unverified',reason:'需按当前样本独立oracle执行实际交互；不使用旧任务的专用验收器冒充通过。'}:which==='primary'?await inspectPrimary(project.project_id,join(taskDir,'independent'),process.env.BLOMA_COMPLEX_REGRESSION==='1'):await inspectDocuments(project.project_id,join(taskDir,'independent'))
+      report.independent=customCases?which==='interaction-doodle'?await inspectDoodle(project.project_id,join(taskDir,'independent')):{status:'unverified',reason:'需按当前样本独立oracle执行实际交互；不使用旧任务的专用验收器冒充通过。'}:which==='primary'?await inspectPrimary(project.project_id,join(taskDir,'independent'),process.env.BLOMA_COMPLEX_REGRESSION==='1'):await inspectDocuments(project.project_id,join(taskDir,'independent'))
+    } else if (phase === 'extend-execution') {
+      if (process.env.BLOMA_COMPLEX_TRIAL_CONTINUATION_AUTH !== 'same-money-cap') throw Error('EXECUTION_CONTINUATION_AUTH_REQUIRED')
+      report.execution_limits = configureSoftwareExecutionLimits(project.project_id, project.lean_operation_id ?? 'initial', {requests:512,output:1048576,reason:'用户授权开放输出并修完完整流程；修复在途预留误判后给予原operation续跑空间，保留原请求/输出计量和10元总金额策略。'})
     } else if (phase === 'retry-ux') {
       await handleGuideMessage({ project_id: project.project_id, session_id: sid, request_id: runId, mode: 'longterm', current_stage: 'blocked_for_user_decision', content: '重新生成草图', metadata: { source: 'card_option', selected_option_id: 'ux_retry' } }, e => event(e.type, e.payload), model)
     } else if (phase === 'approve-ux') {
@@ -180,7 +185,7 @@ export async function main() {
         await handleGuideMessage({ ...input, request_id: randomUUID(), content: '按这份做', metadata: { source: 'card_option', selected_option_id: option.id } }, e => event(e.type, e.payload), model)
       }
     } else {
-      await enterDesktopLine({ projectId: project.project_id, sessionId: sid, requestId: runId, content: '继续完成已确认目标，沿已有现场检查和修复。', maxTokens: generationMaxTokens, signal }, query, binding.env,
+      await enterDesktopLine({ projectId: project.project_id, sessionId: sid, requestId: runId, content: process.env.BLOMA_COMPLEX_TRIAL_FEEDBACK_FILE ? readFileSync(resolve(process.env.BLOMA_COMPLEX_TRIAL_FEEDBACK_FILE), 'utf8') : '继续完成已确认目标，沿已有现场检查和修复。', maxTokens: generationMaxTokens, signal }, query, binding.env,
         { publish: (_target, type, payload) => event(type, payload), persistAssistant: (_sid, text) => model.persistAssistant(text), persistSystem: () => {}, complete: (_s, _p, result) => { report.completion = result } })
     }
     const final = findProject(project.project_id), state = readLongtermState(project.project_id)

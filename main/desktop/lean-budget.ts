@@ -1,3 +1,4 @@
+import { softwareExecutionLimits } from '../software/execution-limits'
 import { GENERATION_MAX_TOKENS } from '../platform/llm/model-resolution'
 import { findProject } from '../project/project-service'
 import { createProductionBudget, productionDeadlineMs, PRODUCTION_LIMITS, RUNTIME_HEARTBEAT_MS } from './production-budget'
@@ -5,10 +6,11 @@ import { createProductionBudget, productionDeadlineMs, PRODUCTION_LIMITS, RUNTIM
 export function leanBudget(projectId: string, phase: string) {
   const project = findProject(projectId)
   const software = project.workflow_version === 'software-v1'
+  const configured = software ? softwareExecutionLimits(projectId, project.lean_operation_id ?? 'initial') : undefined
   // Software has one shared allowance. A second, smaller implementation-phase
   // limit must not strand an otherwise admitted continuous task.
   return createProductionBudget(projectId, `lean-v1/${project.lean_operation_id ?? 'initial'}`, phase,
-    software ? { ...PRODUCTION_LIMITS, perResponse: GENERATION_MAX_TOKENS, phaseRequests: PRODUCTION_LIMITS.requests } : undefined, software ? 'lease' : 'legacy')
+    software ? { ...PRODUCTION_LIMITS, ...configured, perResponse: GENERATION_MAX_TOKENS, phaseRequests: configured?.requests ?? PRODUCTION_LIMITS.requests } : undefined, software ? 'lease' : 'legacy')
 }
 
 export function leanBudgetStopMessage(projectId: string, phase: string, reason: string): string {

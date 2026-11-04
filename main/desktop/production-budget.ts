@@ -18,6 +18,18 @@ interface BudgetState {
   runtimeUncertainMs?: number
 }
 const liveRuntimeLeases = new Map<string, string>()
+const liveOutputReservations = new Map<string, Set<string>>()
+const outputWaiters = new Map<string, Set<() => void>>()
+function notifyOutput(key: string) { for (const wake of [...(outputWaiters.get(key) ?? [])]) wake() }
+function waitForOutput(key: string, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const waits = outputWaiters.get(key) ?? new Set<() => void>(); outputWaiters.set(key, waits)
+    const cleanup = () => { waits.delete(wake); if (!waits.size) outputWaiters.delete(key); signal.removeEventListener('abort', abort) }
+    const wake = () => { cleanup(); resolve() }
+    const abort = () => { cleanup(); reject(signal.reason ?? new Error('AGENT_CANCELLED')) }
+    waits.add(wake); signal.addEventListener('abort', abort, { once: true }); if (signal.aborted) abort()
+  })
+}
 export const RUNTIME_HEARTBEAT_MS = 5000
 const RUNTIME_LEASE_MS = 15000
 export interface ProductionLimits { requests: number; output: number; perResponse: number; phaseRequests: number }
@@ -69,10 +81,29 @@ export function createProductionBudget(projectId: string, scope: string, phase: 
   }
   const wrap = (query: SDKQuery): SDKQuery => async function* (prompt, options) {
     options.signal.throwIfAborted()
-    let reservation = reserve(Math.max(512, options.maxTokens ?? limits.perResponse))
+    const reservationId = randomUUID()
+    let reservation: number
+    for (;;) {
+      options.signal.throwIfAborted()
+      try {
+        reservation = reserve(Math.max(512, options.maxTokens ?? limits.perResponse))
+        const live = liveOutputReservations.get(key) ?? new Set<string>(); live.add(reservationId); liveOutputReservations.set(key, live)
+        break
+      } catch (error) {
+        // A concurrent parent's maximum reservation is not spent output. Wait
+        // for its actual receipt instead of failing and re-creating a reviewer.
+        if (!(error instanceof Error) || error.message !== 'HARNESS_OUTPUT_BUDGET_EXHAUSTED' || !liveOutputReservations.get(key)?.size) throw error
+        await waitForOutput(key, options.signal)
+      }
+    }
     let physical = 0
     let usage: { output_tokens?: number } | undefined
-    let completed = false
+    let completed = false, settled = false
+    const settle = () => {
+      if (!settled && completed && !options.signal.aborted && Number.isSafeInteger(usage?.output_tokens) && usage!.output_tokens! >= 0) {
+        const state = load(); state.output += usage!.output_tokens! - reservation; persist(state); settled = true; notifyOutput(key)
+      }
+    }
     const requestGuard: SDKQueryOptions['requestGuard'] = request => {
       options.signal.throwIfAborted()
       options.requestGuard?.(request)
@@ -89,15 +120,16 @@ export function createProductionBudget(projectId: string, scope: string, phase: 
       for await (const message of query(prompt, { ...options, maxTokens: reservation, requestGuard })) {
         if (message.usage) usage = { ...usage, ...message.usage }
         if (message.type === 'result') completed = message.subtype === 'success'
+        settle()
         yield message
       }
     } finally {
       // Unknown/cancelled requests keep their full reservation. Retried failed
       // transports also retain theirs; only the final complete usage releases it.
-      if (completed && !options.signal.aborted && Number.isSafeInteger(usage?.output_tokens) && usage!.output_tokens! >= 0) {
-        const state = load()
-        state.output += usage!.output_tokens! - reservation
-        persist(state)
+      try { settle() } finally {
+        const live = liveOutputReservations.get(key); live?.delete(reservationId)
+        if (!live?.size) liveOutputReservations.delete(key)
+        notifyOutput(key)
       }
     }
   }

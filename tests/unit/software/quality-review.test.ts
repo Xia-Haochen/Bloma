@@ -81,7 +81,7 @@ it('actual Pi C submits host-bound findings; a real injected CLI defect fails, i
 }, 120000)
 it('parent cannot forge a C submission; no-source opinions remain disputed/suggestions and cannot be reproduced as defects', async () => {
   await expect(quality.childProtocol[1].execute({ findings: [] }, ctx())).rejects.toThrow('DENIED')
-  await review([{ ...finding, expected_source: '应当自动增加备份功能' }, { ...finding, requirement: 'unknown' }])
+  await review([{ ...finding, expected_source: '应当自动增加备份功能' }, { ...finding, requirement: 'unscoped', kind: 'suggestion' }])
   const ledger = readQualityLedger(project.project_id)
   expect(ledger.findings.map(f => f.disposition)).toEqual(['disputed', 'suggestion'])
   const read = quality.parentTools.find(t => t.name === 'read_quality_findings')!
