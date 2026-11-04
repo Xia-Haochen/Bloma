@@ -27,7 +27,7 @@ import type { AgentEvent } from '../shared/types'
 import type { SDKQuery } from '../main/orchestration/stages/orchestration-contracts'
 
 const hash = (s: string | Buffer) => createHash('sha256').update(s).digest('hex')
-const tasks = {
+const defaultTasks = {
   primary: {
     name: '社团活动与物资筹备台',
     goal: '做一个我能在本机浏览器里使用的社团活动筹备工具。我负责活动和公共物资，需要登记活动日期、地点、负责人和筹备状态；物资档案要有名称、总数量、借出数量和维修数量。可以为某场活动借出和分批归还物资，不能超出可用数量，维修中的数量不能借出，修改一个物品不能影响另一个。登记采购和实际开销并关联活动，按活动和月份汇总支出。物资清单可以从CSV导入，先预览并说明错误行，有错误时不提交半份数据；借还台账可以导出CSV。需要搜索和筛选，关闭软件再打开，所有记录和关联都保留。单人本机使用，不需要登录、联网服务或消息通知。先打通物资登记和借还，再补活动、采购和报表，但最终需要完整功能。界面简洁、信息清楚，你自行安排，不用草图。',
@@ -40,11 +40,24 @@ const tasks = {
   },
 }
 
+function trialTasks(): Record<string, { name: string; goal: string; change: string }> {
+  const path = process.env.BLOMA_COMPLEX_TRIAL_CASES
+  if (!path) return defaultTasks
+  const bytes = readFileSync(resolve(path)); if (bytes.length > 128 * 1024) throw Error('TRIAL_CASES_TOO_LARGE')
+  const value = JSON.parse(bytes.toString('utf8'))
+  if (!value || Array.isArray(value) || Object.keys(value).length < 1 || Object.keys(value).length > 4
+    || Object.entries(value).some(([id, row]) => !/^[a-z0-9_-]{1,64}$/.test(id) || !row || typeof row !== 'object'
+      || Object.keys(row).some(k => !['name','goal','change'].includes(k))
+      || ['name','goal','change'].some(k => typeof (row as Record<string, unknown>)[k] !== 'string' || !String((row as Record<string, unknown>)[k]).trim()))) throw Error('TRIAL_CASES_INVALID')
+  return value
+}
+
 /** Explicitly funded fresh run; preflight never calls a generation endpoint. */
 export async function main() {
   if (!process.env.BLOMA_COMPLEX_TRIAL_ROOT) throw Error('TRIAL_ROOT_REQUIRED')
   const root = resolve(process.env.BLOMA_COMPLEX_TRIAL_ROOT), phase = process.env.BLOMA_COMPLEX_TRIAL_PHASE ?? 'preflight'
-  const which = process.env.BLOMA_COMPLEX_TRIAL_TASK ?? 'primary'
+  const tasks = trialTasks(), customCases = Boolean(process.env.BLOMA_COMPLEX_TRIAL_CASES)
+  const which = process.env.BLOMA_COMPLEX_TRIAL_TASK ?? Object.keys(tasks)[0]
   if (!['preflight', 'run', 'resume', 'change', 'confirm', 'inspect'].includes(phase) || !Object.hasOwn(tasks, which)) throw Error('TRIAL_PHASE_INVALID')
   const task = tasks[which as keyof typeof tasks], home = join(root, 'home'), profile = join(root, 'electron-profile')
   mkdirSync(home, { recursive: true }); mkdirSync(profile, { recursive: true })
@@ -67,6 +80,7 @@ export async function main() {
   if (phase === 'preflight') {
     if (existsSync(manifestPath) || existsSync(policy)) throw Error('TRIAL_ALREADY_INITIALIZED')
     if (process.env.BLOMA_COMPLEX_TRIAL_AUTHORIZED_CAP !== '10') throw Error('EXPLICIT_TEN_RMB_AUTHORIZATION_REQUIRED')
+    if (customCases && !process.env.BLOMA_COMPLEX_TRIAL_AUTHORIZATION_TEXT?.trim()) throw Error('NEW_TRIAL_AUTHORIZATION_TEXT_REQUIRED')
     const models = await get('models'), balance = await get('user/balance')
     const cny = balance.balance_infos?.find((r: any) => r.currency === 'CNY')
     if (!models.data?.some((r: any) => r.id === binding.modelName) || balance.is_available !== true || Number(cny?.total_balance) < 10) throw Error('MODEL_OR_BALANCE_UNAVAILABLE')
@@ -81,7 +95,7 @@ export async function main() {
     const rates = { host: 'api.deepseek.com', model: binding.modelName, cap_rmb: 10, context_tokens: 1048576, input_rmb_per_million: 2, output_rmb_per_million: 8, cache_rmb_per_million: .04 }
     writeFileSync(policy, JSON.stringify({ version: 1, models: [rates] }, null, 2))
     writeFileSync(manifestPath, JSON.stringify({ version: 1, at: new Date().toISOString(), source_head: execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),
-      authorization: { source: 'direct_user_confirmation', cap_rmb: 10, user_text: '换一个大型一点的真实的任务，上限10元，你自己安排，可以多跑几种' },
+      authorization: { source: 'direct_user_confirmation', cap_rmb: 10, user_text: customCases ? process.env.BLOMA_COMPLEX_TRIAL_AUTHORIZATION_TEXT : '换一个大型一点的真实的任务，上限10元，你自己安排，可以多跑几种' },
       selector_sha256: hash(readFileSync(source)), policy_sha256: hash(readFileSync(policy)), rates, tasks,
       balance_before: cny.total_balance, model_catalog: models.data.map((r: any) => r.id),
       old_accounting: oldFiles.map(path => ({ path, sha256: hash(readFileSync(path)) })),
@@ -139,7 +153,7 @@ export async function main() {
   try {
     save(true)
     if (phase === 'inspect') {
-      report.independent=which==='primary'?await inspectPrimary(project.project_id,join(taskDir,'independent'),process.env.BLOMA_COMPLEX_REGRESSION==='1'):await inspectDocuments(project.project_id,join(taskDir,'independent'))
+      report.independent=customCases?{status:'unverified',reason:'需按当前样本独立oracle执行实际交互；不使用旧任务的专用验收器冒充通过。'}:which==='primary'?await inspectPrimary(project.project_id,join(taskDir,'independent'),process.env.BLOMA_COMPLEX_REGRESSION==='1'):await inspectDocuments(project.project_id,join(taskDir,'independent'))
     } else if (phase === 'confirm') {
       const state = readLongtermState(project.project_id)
       if (!state) throw Error('MILESTONE_MISSING')

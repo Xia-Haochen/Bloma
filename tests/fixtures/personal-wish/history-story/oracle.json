@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "case_id": "history-story",
+  "core_experience": "分支状态和人物知识隔离",
+  "unacceptable_substitute": "每晚重新生成一个互不相关的故事",
+  "source_quote": "帮我做家庭睡前故事的分岔书。我写几个角色和禁忌，每晚接着讲，孩子可以在节点选路。不同分支的人物不能突然知道另一条分支的事，回到旧节点时也别覆盖原来的版本。",
+  "change_quote": "改一个角色的身份只作用于新分支，原分支继续保留。",
+  "dimensions": [
+    "intent",
+    "behavior",
+    "provenance",
+    "change_recovery",
+    "ui",
+    "delivery"
+  ],
+  "required_evidence": [
+    "actual_interaction",
+    "source_and_scope_identity",
+    "restart_readback",
+    "final_project_state"
+  ],
+  "outcomes": [
+    "passed",
+    "failed",
+    "unverified",
+    "not_applicable"
+  ],
+  "status": "authored_not_executed",
+  "independent": false
+}

@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "case_id": "organization-dreams",
+  "core_experience": "自定义空间关系、身份区分、删除传播",
+  "unacceptable_substitute": "自动分类的普通列表或臆造心理结论",
+  "source_quote": "我想把梦写成一张可以游走的地图。地点之间的关系由我决定，梦里的同名人物不一定是同一个。搜索能找到原始记录，删掉一个梦以后不能继续拿它生成解释。",
+  "change_quote": "合并两个人物前让我看影响范围，合并错了能恢复原关联。",
+  "dimensions": [
+    "intent",
+    "behavior",
+    "provenance",
+    "change_recovery",
+    "ui",
+    "delivery"
+  ],
+  "required_evidence": [
+    "actual_interaction",
+    "source_and_scope_identity",
+    "restart_readback",
+    "final_project_state"
+  ],
+  "outcomes": [
+    "passed",
+    "failed",
+    "unverified",
+    "not_applicable"
+  ],
+  "status": "authored_not_executed",
+  "independent": false
+}

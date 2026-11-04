@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "case_id": "interaction-letters",
+  "core_experience": "不同时间角色的对话与普通笔记切换",
+  "unacceptable_substitute": "只有通用聊天框换个标题",
+  "source_quote": "给我做一个时间旅行写信桌。我给不同时期的自己写信，回复可以有不同口吻，但必须标明是想象的，不要假装是过去真实写过的。今天不想演戏时，能直接切回普通笔记。",
+  "change_quote": "我想把一封信设成私密，任何角色都不能拿它当回复素材。",
+  "dimensions": [
+    "intent",
+    "behavior",
+    "provenance",
+    "change_recovery",
+    "ui",
+    "delivery"
+  ],
+  "required_evidence": [
+    "actual_interaction",
+    "source_and_scope_identity",
+    "restart_readback",
+    "final_project_state"
+  ],
+  "outcomes": [
+    "passed",
+    "failed",
+    "unverified",
+    "not_applicable"
+  ],
+  "status": "authored_not_executed",
+  "independent": false
+}

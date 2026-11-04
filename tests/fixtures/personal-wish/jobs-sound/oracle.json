@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "case_id": "jobs-sound",
+  "core_experience": "持续播放、实时配方和取消行为一致",
+  "unacceptable_substitute": "用进度条假装播放或重开自行播放",
+  "source_quote": "给我做一个睡前声音调配台，把我提供的几段声音缓慢混合。我可以听着调整比例，定时结束；取消定时后不能偷偷在原来的时间停掉。重开记住配方，但别自动开始播放。",
+  "change_quote": "增加一个临时低音量模式，退出后回到原配方，不改保存的音量。",
+  "dimensions": [
+    "intent",
+    "behavior",
+    "provenance",
+    "change_recovery",
+    "ui",
+    "delivery"
+  ],
+  "required_evidence": [
+    "actual_interaction",
+    "source_and_scope_identity",
+    "restart_readback",
+    "final_project_state"
+  ],
+  "outcomes": [
+    "passed",
+    "failed",
+    "unverified",
+    "not_applicable"
+  ],
+  "status": "authored_not_executed",
+  "independent": false
+}
