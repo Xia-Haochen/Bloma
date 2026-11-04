@@ -1,3 +1,4 @@
+import { withAbort } from '../agent/loop/agent-loop'
 import { runtimeInventory } from './release-store'
 import { compactReviewManifest, reviewChangeContext, repeatedReviewFailure } from './quality-review-context'
 import { canonicalFindingReference } from './quality-reference'
@@ -114,7 +115,7 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       const visual = review.visual ? readVisualMaterial(review.visual, hash(review.identity)).manifest : undefined
       const ux = readConfirmedUxBinding(projectId, brief)
       materialsRead.add(ctx.sessionId)
-      return { output: JSON.stringify({ review, root: findProject(projectId).root_path, goal: brief.positioning, constraints: brief.constraints, confirmed_ux: ux, design_policy: productDesignPolicy(brief),
+      return { output: JSON.stringify({ review, root: findProject(projectId).root_path, goal: brief.positioning, constraints: brief.constraints, assumptions: brief.assumptions, confirmed_ux: ux, design_policy: productDesignPolicy(brief),
         confirmed_design: review.kind === 'visual' && ux?.html_path ? { html: readFileSync(join(findProject(projectId).root_path, ux.html_path), 'utf8').slice(0, 64000), bounded_characters: 64000 } : undefined,
         review_focus: review.kind === 'visual' ? undefined : reviewChangeContext(ledger, review.identity, review.source_manifest, review.id), intent: brief.requirements_model, intent_review_protocol: review.kind === 'visual' ? 'V仅按当前真实图片和同次操作事实检查布局/交互/内容/覆盖范围；不得声称核对全部长期业务。核心体验上下文用于识别偏题，具体疑点提交finding。无需提交intent_observations。' : '有experience时逐项提交intent_observations:{commitment_id,status:supported|concern|unverified,evidence,limitations}；核对禁止替代。supported只是审阅意见，不代表真实运行通过。concern需关联finding；证据不足保留unverified。', visual_facts: visual, visual_checklist: review.kind === 'visual' ? visualReviewChecklist : undefined,
         requirements: brief.requirements.map(r => ({ id: r.id, description: r.description, expected_source: trustedAcceptance(brief, r) })), out_of_scope: brief.out_of_scope }) }
@@ -234,7 +235,11 @@ export function createQualityReview(projectId: string, parent: string, policy: R
   const wrapQuery = (query: SDKQuery): SDKQuery => async function* (prompt, options) {
     const route = hash([options.env.ANTHROPIC_BASE_URL, options.env.ANTHROPIC_MODEL, options.env.ANTHROPIC_PROVIDER_TYPE, options.providerType])
     activeRoute = route
-    const ledger = readQualityLedger(projectId)
+    let ledger = readQualityLedger(projectId)
+    if (options.sessionId === parent) {
+      const active = ledger.reviews.filter(r => r.child && children.has(r.child) && r.delegation).map(r => findDelegation(parent, r.delegation!)).filter(r => r?.status === 'running' && !r.pendingQuestion)
+      if (active.length) { await withAbort(Promise.all(active.map(r => r!.completion)), options.signal); ledger = readQualityLedger(projectId) }
+    }
     if (options.sessionId === parent && ledger.reviews.filter(r => r.run_id === options.accounting?.runId && r.status === 'interrupted').length >= 2) {
       const repeated = repeatedReviewFailure(ledger, await identity(projectId, options.signal), options.accounting?.runId)
       if (repeated) throw Error('QUALITY_REVIEW_RETRY_BLOCKED: 同一候选同类审阅连续两次同因中断，停止本轮新调用并保留现场；先诊断后显式续跑，不重复开审阅。' + repeated)

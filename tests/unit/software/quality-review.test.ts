@@ -23,7 +23,7 @@ const finding = { requirement: 'F-001', expected_source: '2加3得5', category: 
 beforeEach(async () => {
   oldHome = process.env.PROMA_HOME; home = mkdtempSync(join(tmpdir(), 'bloma-quality-')); process.env.PROMA_HOME = home
   project = createProject({ request_id: 'c', mode: 'quick' }, { workflowVersion: 'software-v1' })
-  const parsed = parseLeanBrief(JSON.stringify({ action: 'brief', goal: '加法', ui: 'none', delivery: 'command', requirements: [{ description: '计算加法', expected: '2加3得5' }] }),
+  const parsed = parseLeanBrief(JSON.stringify({ assumptions: ['只检查已保存记录，不自动保存草稿'], action: 'brief', goal: '加法', ui: 'none', delivery: 'command', requirements: [{ description: '计算加法', expected: '2加3得5' }] }),
     { projectId: project.project_id, sessionId: parent, source: '加法', previous: readPrdBackplane(project.project_id), software: true })!
   if (parsed.action !== 'brief') throw Error('fixture')
   syncDocuments({ request_id: 'sync', project_id: project.project_id, session_id: parent, checkpoint: 'requirement_confirmed' }, parsed.brief); markPrdUserConfirmed(project.project_id)
@@ -47,6 +47,7 @@ function register(query: SDKQuery) {
 async function review(findings: Record<string, unknown>[] = [finding], intent?: unknown[]) {
   let calls = 0
   register(async function* (_prompt, options) {
+    if (calls > 0) expect(JSON.stringify(options.messages)).toContain('只检查已保存记录，不自动保存草稿')
     expect(JSON.stringify(options.messages?.filter(m => m.role === 'system'))).not.toContain('A_SUCCESS_STORY_MUST_NOT_LEAK')
     yield { type: 'assistant', message: { role: 'assistant', content: ++calls === 1
       ? [{ type: 'tool_use', id: 'materials', name: 'read_quality_review', input: {} }, { type: 'tool_use', id: 'source', name: 'read_file', input: { path: 'app.cjs' } }, { type: 'tool_use', id: 'submit', name: 'submit_quality_findings', input: { findings, ...(intent ? { intent_observations: intent } : {}) } }]
@@ -144,6 +145,17 @@ it('stops another paid parent request after two identical review interruptions i
   await expect(run(ctx().requestId)).rejects.toThrow('QUALITY_REVIEW_RETRY_BLOCKED');expect(calls).toBe(0)
   await run('explicit-new-run-after-diagnosis');expect(calls).toBe(1)
   expect(readQualityLedger(project.project_id).reviews).toHaveLength(2)
+},30000)
+it('waits for an active quality child before buying another parent request',async()=>{
+  let release!:()=>void
+  const ready=new Promise<void>(done=>{release=done})
+  register(async function*(){await ready;yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:'no protocol in this controlled wait test'}]}};yield{type:'result',subtype:'success'}})
+  const child=await quality.begin(ctx());let calls=0
+  const query=quality.wrapQuery(async function*(){calls++;yield{type:'result',subtype:'success'}})
+  const waiting=(async()=>{for await(const _ of query('',{env:{},signal:AbortSignal.timeout(10000),sessionId:parent,accounting:{projectId:project.project_id,runId:'r'}})){} })()
+  await new Promise(done=>setTimeout(done,20));expect(calls).toBe(0)
+  release();await findDelegation(parent,child.delegation_id)!.completion;await waiting
+  expect(calls).toBe(1)
 },30000)
 it('complete production runs C, reproduces and repairs a finding, reruns C on the new candidate and delivers through the existing verifier', async () => {
   const { enterDesktopLine } = await import('../../../main/desktop/desktop-route')
