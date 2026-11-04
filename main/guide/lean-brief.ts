@@ -1,3 +1,4 @@
+import { snapshotProductTheme } from '../../shared/product-design-theme'
 import { validateProjectPlan } from '../software/project-plan'
 import { createHash } from 'node:crypto'
 import type { PrdBackplane, SketchRequirement } from '../model/prd-backplane'
@@ -47,10 +48,14 @@ export function parseLeanBrief(raw: string, context: { projectId: string; sessio
   }
   let plan
   try { plan = validateProjectPlan(value.project_plan === undefined ? context.previous.project_plan : value.project_plan, requirements.map(r => r.id)) } catch { return }
+  const priorTheme = context.previous.lean_brief?.design_theme
+  const designTheme = context.software && value.ui === 'required'
+    ? priorTheme ? snapshotProductTheme(priorTheme) : !context.previous.lean_brief || context.previous.lean_brief.ui === 'none' ? snapshotProductTheme() : undefined
+    : undefined
   return { action: 'brief', suggestions: parseLeanSuggestions(value.suggestions, requirements.map(row => row.description)), brief: bindAcceptance({ project_id: context.projectId,
     name: typeof value.name === 'string' && value.name.trim() ? value.name : context.previous.name,
     positioning: value.goal, requirements, acceptance, ...(plan ? { project_plan: plan } : {}), constraints: texts(value.constraints), out_of_scope: texts(value.out_of_scope), assumptions: texts(value.assumptions),
-    lean_brief: { version: 1, ui: value.ui as 'required' | 'none', source_session_id: context.sessionId,
+    lean_brief: { ...(designTheme ? { design_theme: designTheme } : {}), version: 1, ui: value.ui as 'required' | 'none', source_session_id: context.sessionId,
       ...(context.software ? { delivery: delivery as 'desktop' | 'browser' | 'command' } : {}),
       ...(context.software && distribution !== undefined ? { distribution: distribution as 'local' | 'portable' | 'installer' | 'source' } : {}),
       source_sha256: createHash('sha256').update(context.source).digest('hex') } }) }
@@ -62,6 +67,7 @@ export function renderLeanBrief(brief: PrdBackplane): string {
     ...(brief.lean_brief?.distribution ? ['交付方式：' + ({ local: '在本机直接使用', portable: '可复制到其他电脑直接使用', installer: '可在其他电脑安装使用', source: '移交源码' }[brief.lean_brief.distribution])] : []),
     ...(brief.lean_brief?.preview === 'reuse' ? ['界面沿用已确认外观，在制作时按新增功能调整。'] : []),
     ...(brief.lean_brief?.preview === 'skip' ? ['按你的授权直接制作，不再生成草图。'] : []),
+    ...(brief.lean_brief?.design_theme ? ['默认外观：未指定风格时沿用平台暖白、低饱和绿基调；你的风格要求和已确认设计优先，布局按用途设计。'] : []),
     ...(brief.constraints?.length ? ['约束：' + brief.constraints.join('；')] : []),
     ...(brief.out_of_scope.length ? ['不做：' + brief.out_of_scope.join('；')] : []),
     ...(brief.assumptions.length ? ['假设：' + brief.assumptions.join('；')] : [])].join('\n\n')

@@ -1,3 +1,4 @@
+import { productDesignPolicy } from '../project/product-design-policy'
 /**
  * UX 外观草图生成（2026-10-04 确认门新规，实施稿《Bloma-确认门与呈现层-20261004》）。
  *
@@ -207,7 +208,7 @@ export interface UxSketchOptions {
 }
 export async function generateUxSketch(options: UxSketchOptions): Promise<UxSketchResult> {
   if (options.signal?.aborted) throw new Error('UX_SKETCH_ABORTED')
-  const prompt = buildSketchPrompt(options)
+  const prompt = buildSketchPrompt(options) + (options.backplane?.lean_brief ? '\n项目视觉策略：' + JSON.stringify(productDesignPolicy(options.backplane)) : '')
   const lean = Boolean(options.backplane?.lean_brief)
   const structured = Boolean(options.backplane && !lean)
   const resolvedPrompt = loadPromptWithSource('sketch-system', lean ? LEAN_SKETCH_PROMPT : UX_SKETCH_SYSTEM_PROMPT)

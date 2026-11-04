@@ -1,3 +1,4 @@
+import { productDesignPolicy } from '../project/product-design-policy'
 import { projectStageView } from '../software/project-stages'
 import { projectTaskView } from '../software/task-assignment'
 import { projectActivityView } from '../software/project-activity'
@@ -43,7 +44,7 @@ export function productionContext(backplane: PrdBackplane, topic: string, featur
   if (topic === 'verification-llm') return { protocol: MODEL_VERIFICATION_BRIEF }
   if (topic === 'verification-speech') return { protocol: SPEECH_VERIFICATION_BRIEF }
   if (topic === 'overview') return {
-    project_plan: projectPlanView(backplane),
+    project_plan: projectPlanView(backplane), design_policy: productDesignPolicy(backplane),
     positioning: backplane.positioning, features: backplane.requirements.map(({ id, description, priority }) => ({ id, description, priority })),
     ...(backplane.lean_brief ? { delivery: backplane.lean_brief.delivery, distribution: backplane.lean_brief.distribution, ui: backplane.lean_brief.ui } : {}),
     constraints: backplane.constraints, out_of_scope: backplane.out_of_scope, assumptions: backplane.assumptions,
@@ -55,7 +56,7 @@ export function productionContext(backplane: PrdBackplane, topic: string, featur
   return {
     requirements: backplane.requirements.filter(item => selected.has(item.id)).map(item => ({ ...item,
       requirement_hash: requirementEvidenceHash(backplane, item), acceptance: trustedAcceptance(backplane, item) })),
-    acceptance_integrity_issues: acceptanceAssociationIssues(backplane), constraints: backplane.constraints, out_of_scope: backplane.out_of_scope, assumptions: backplane.assumptions,
+    design_policy: productDesignPolicy(backplane), acceptance_integrity_issues: acceptanceAssociationIssues(backplane), constraints: backplane.constraints, out_of_scope: backplane.out_of_scope, assumptions: backplane.assumptions,
     // Include shared objects and provenance intact. Filter only explicitly linked feature rows.
     requirements_model: model && { ...model,
       workflows: model.workflows.filter(item => item.feature_ids.some(id => selected.has(id))),

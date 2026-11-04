@@ -1,3 +1,4 @@
+import { productDesignPolicy } from '../project/product-design-policy'
 import { findingNeedsClosure, qualityCloseout, observedQualityFinding } from './quality-closeout'
 import { visualReviewChecklist, visualCoverageComplete } from './visual-review-checklist'
 import { randomUUID } from 'node:crypto'
@@ -107,7 +108,7 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       const visual = review.visual ? readVisualMaterial(review.visual, hash(review.identity)).manifest : undefined
       const ux = readConfirmedUxBinding(projectId, brief)
       materialsRead.add(ctx.sessionId)
-      return { output: JSON.stringify({ review, root: findProject(projectId).root_path, goal: brief.positioning, constraints: brief.constraints, confirmed_ux: ux,
+      return { output: JSON.stringify({ review, root: findProject(projectId).root_path, goal: brief.positioning, constraints: brief.constraints, confirmed_ux: ux, design_policy: productDesignPolicy(brief),
         confirmed_design: review.kind === 'visual' && ux?.html_path ? { html: readFileSync(join(findProject(projectId).root_path, ux.html_path), 'utf8').slice(0, 64000), bounded_characters: 64000 } : undefined,
         visual_facts: visual, visual_checklist: review.kind === 'visual' ? visualReviewChecklist : undefined,
         requirements: brief.requirements.map(r => ({ id: r.id, description: r.description, expected_source: trustedAcceptance(brief, r) })), out_of_scope: brief.out_of_scope }) }

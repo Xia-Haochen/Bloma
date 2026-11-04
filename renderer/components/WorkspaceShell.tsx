@@ -1,3 +1,4 @@
+import { workspaceThemeVariables } from '../../shared/product-design-theme'
 /** web 线拆除刀3：点选纠错通道退役，类型本地最小化（UI 降级红点模式） */
 type DomCollectContextResult = { fallback_mode: boolean; element_selector?: string; text_content?: string; bounding_rect?: { x: number; y: number; width: number; height: number } }
 import React from 'react'
@@ -150,7 +151,7 @@ export const WorkspaceShell: React.FC<WorkspaceShellProps> = (props) => {
     return () => document.removeEventListener('keydown', escape)
   }, [panelOpen, focused, setDocuments, setCollaboration])
   return (
-    <div className="workspace-theatre" data-ai-id="workspace-theatre" data-mode={project?.mode ?? 'quick'} data-focused={focused} data-has-preview={Boolean(props.deliveryPanel || props.previewUrl || scopePending)} data-view={mobileView} data-resizing-conversation={conversation.resizing} style={{ '--studio-conversation-width': `${conversation.width}px` } as React.CSSProperties}>
+    <div className="workspace-theatre" data-ai-id="workspace-theatre" data-mode={project?.mode ?? 'quick'} data-focused={focused} data-has-preview={Boolean(props.deliveryPanel || props.previewUrl || scopePending)} data-view={mobileView} data-resizing-conversation={conversation.resizing} style={{ ...workspaceThemeVariables(), '--studio-conversation-width': `${conversation.width}px` } as React.CSSProperties}>
       <div className="workspace-topbar">
         <WorkspaceHeader compact onAllProjects={props.onAllProjects} onOpenSettings={props.onOpenSettings} onUpgrade={props.onUpgrade} onHome={props.onHome} />
         <WorkspaceProgress steps={progress} liveDetail={liveDetail} onRecords={() => openTool('records')} />

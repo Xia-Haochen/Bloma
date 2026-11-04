@@ -1,21 +1,7 @@
 /* Workspace-only palette and surfaces. Home and generated content keep their own themes. */
 .workspace-theatre {
   color-scheme: only light;
-  --color-text: #30342f;
-  --color-surface: #fffefb;
-  --color-surface-muted: #f3f3f0;
-  --color-quick: #6d8268;
-  --color-quick-soft: #e7ece3;
-  --color-longterm: #6d8268;
-  --color-longterm-soft: #e7ece3;
-  --color-primary: #6d8268;
-  --color-focus: #52694c;
-  --workspace-selected: #dfe8da;
-  --glass-bg-soft: #f3f3f0;
-  --glass-bg-strong: #fffefb;
-  --color-text-muted: #686e65;
-  --color-text-secondary: #62685f;
-  --color-border: #dfe2d9;
+  /* Shared semantic palette is supplied by WorkspaceShell from product-design-theme. */
   --studio-conversation-width: 280px;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
