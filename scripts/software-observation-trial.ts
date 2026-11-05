@@ -25,7 +25,10 @@ import { recordSessionActivity } from '../main/platform/sessions/session-service
 import { appendSessionMessage } from '../main/platform/sessions/session-tree'
 import type { AgentEvent } from '../shared/types'
 import type { SDKQuery } from '../main/orchestration/stages/orchestration-contracts'
-import {observationBalance,readObservationQuote,claimObservationRun,requireObservationPhase,assertFrozenObservation,observeOneTurn,observationOutcome} from './observation-control'
+import {simulateUserSession,decideAsUser} from './simulated-user'
+import {enterDesktopLine} from '../main/desktop/desktop-route'
+import {SimulatedUserSurface} from './simulated-user-surface'
+import {assertSimulatedContinuation,observationBalance,readObservationQuote,claimObservationRun,requireObservationPhase,assertFrozenObservation,observeOneTurn,observationOutcome} from './observation-control'
 const hash = (s: string | Buffer) => createHash('sha256').update(s).digest('hex')
 function trialTasks(): Record<string, { name: string; goal: string; change?: string }> {
   const path = process.env.BLOMA_OBSERVATION_CASES
@@ -51,8 +54,9 @@ export async function main() {
   const thinking=process.env.BLOMA_OBSERVATION_THINKING??'low'
   const runtimeTree=process.env.BLOMA_OBSERVATION_RUNTIME_DIGEST
   if(!runtimeTree)throw Error('OBSERVATION_PREPARED_RUNTIME_REQUIRED')
+  const continuation=phase==='simulate'?assertSimulatedContinuation(root,thinking,runtimeTree):undefined
   if(phase==='run')assertFrozenObservation(root,runtimeHash,thinking,runtimeTree)
-  else if(existsSync(join(root,'home'))||existsSync(join(root,'manifest.json')))throw Error('OBSERVATION_ROOT_NOT_FRESH')
+  else if(phase!=='simulate'&&(existsSync(join(root,'home'))||existsSync(join(root,'manifest.json'))))throw Error('OBSERVATION_ROOT_NOT_FRESH')
   const task = tasks[which as keyof typeof tasks], home = join(root, 'home'), profile = join(root, 'electron-profile')
   mkdirSync(home, { recursive: true }); mkdirSync(profile, { recursive: true })
   process.env.PROMA_HOME = home; process.env.BLOMA_DISPATCH_EXPERIMENT = '0'; delete process.env.BLOMA_EXPERIMENT_UNLIMITED_MONETARY
@@ -109,9 +113,12 @@ export async function main() {
   const requestMaxTokens = trialOutputCap(capRmb, generationMaxTokens, policyRate)
   for (const old of manifest.old_accounting) if (hash(readFileSync(old.path)) !== old.sha256) throw Error('OLD_ACCOUNTING_CHANGED')
   process.env.BLOMA_MONETARY_POLICY = policy; process.env.BLOMA_MONETARY_EPOCH_DIR = join(root, 'epochs')
-  if(existsSync(policy+'.state.json'))throw Error('OBSERVATION_LEDGER_NOT_FRESH')
-  claimObservationRun(root,{runtimeHash,thinking:trialThinking})
-  const requestLimit=512
+  if(!continuation&&existsSync(policy+'.state.json'))throw Error('OBSERVATION_LEDGER_NOT_FRESH')
+  const existingRequests=existsSync(policy+'.state.json')?JSON.parse(readFileSync(policy+'.state.json','utf8')).entries.length:0
+  if(existingRequests>=512)throw Error('TRIAL_REQUEST_LIMIT')
+  if(continuation)writeFileSync(join(root,'user-run-claimed.json'),JSON.stringify({at:new Date().toISOString(),runtimeHash,previous_report:continuation.session_id}),{flag:'wx'})
+  else claimObservationRun(root,{runtimeHash,thinking:trialThinking})
+  const requestLimit=512-existingRequests
   const money = () => {
     if (existsSync(policy + '.state.json')) return readMonetaryBudget(policy)
     if (existsSync(startedMarker)) throw Error('TRIAL_ACCOUNTING_MISSING')
@@ -144,27 +151,77 @@ export async function main() {
   const query:SDKQuery=trace.wrap(rawQuery,phase)
   const taskDir = join(root, which); mkdirSync(taskDir, { recursive: true })
   const projectFile=join(taskDir,'project.json')
-  const project=createProject({request_id:randomUUID(),mode:'quick',initial_message:task.name},{workflowVersion:'software-v1'})
-  const sid=`observation-${randomUUID()}`,runId=randomUUID(),reportPath=join(taskDir,`run-${runId}.json`)
-  writeFileSync(projectFile,JSON.stringify({project_id:project.project_id,session_id:sid,root:project.root_path}),{flag:'wx'})
+  const prior=continuation?JSON.parse(readFileSync(projectFile,'utf8')):undefined
+  const project=prior?findProject(prior.project_id):createProject({request_id:randomUUID(),mode:'quick',initial_message:task.name},{workflowVersion:'software-v1'})
+  if(continuation&&(project.project_id!==continuation.project_id||project.current_stage!==continuation.current_stage||project.status!==continuation.project_status))throw Error('SIMULATED_USER_PROJECT_CHANGED')
+  const sid=prior?.session_id??`observation-${randomUUID()}`,runId=randomUUID(),reportPath=join(taskDir,`${continuation?'user-run':'run'}-${runId}.json`)
+  if(!continuation)writeFileSync(projectFile,JSON.stringify({project_id:project.project_id,session_id:sid,root:project.root_path}),{flag:'wx'})
   recordSessionActivity(sid, project.project_id)
-  const report: any = { version: 1, phase, task: which, project_id: project.project_id, session_id: sid, started_at: new Date().toISOString(), status: 'running', paid_cap_rmb: capRmb, budget_window: 'observation-only', thinking_mode:trialThinking, runtime_sha256: hash(readFileSync(fileURLToPath(import.meta.url))) }
+  const report: any = { version: 1, phase, task: which, project_id: project.project_id, session_id: sid, started_at: new Date().toISOString(), status: 'running', paid_cap_rmb: capRmb, budget_window: 'shared-original-window', method:continuation?'simulated-user':'observation-only', carried_requests:existingRequests, thinking_mode:trialThinking, runtime_sha256: hash(readFileSync(fileURLToPath(import.meta.url))) }
   let lastSave=0
   const save = (force=false) => { if(!force&&Date.now()-lastSave<500)return; lastSave=Date.now();writeTextFileAtomic(reportPath, safe({ ...report, operation: control.snapshot(), money: money() })) }
+  let latestCard:AgentEvent|undefined,previewUrl:string|undefined,publicReplyText=''
   const event=(e:AgentEvent)=>{
+    if(e.type==='message_delta'&&typeof e.payload.text==='string')publicReplyText+=e.payload.text
+    if(e.type==='user_decision_required')latestCard=e
+    if(e.type==='ux_sketch_ready'&&typeof e.payload.preview_url==='string')previewUrl=e.payload.preview_url
     if(e.type==='thinking_delta')return
     if(e.type==='stage_changed'&&typeof e.payload.stage==='string')latestStage=e.payload.stage
     trace.event(e.type,{...e.payload,phase,run_id:runId})
     appendFileSync(join(taskDir,'events.jsonl'),safe({at:new Date().toISOString(),...e})+'\n');save()
   }
-  const model = { query, env: binding.env, signal, sessionId: sid, history: [], maxTokens: requestMaxTokens,
+  const model = { query, env: binding.env, signal, sessionId: sid, history: [{role:'user' as const,content:task.goal}], maxTokens: requestMaxTokens,
     persistAssistant: (text: string) => appendSessionMessage(sid, { role: 'assistant', origin: 'agent', content: [{ type: 'text', text }], timestamp: Date.now() }) }
   try {
     save(true)
-    const content=task.goal
-    const input={project_id:project.project_id,session_id:sid,request_id:runId,mode:'quick' as const,current_stage:'clarifying' as const,content}
-    appendSessionMessage(sid,{role:'user',origin:'user',content:[{type:'text',text:content}],timestamp:Date.now()})
-    report.turn=await observeOneTurn(record=>handleGuideMessage(input,record,model),event,signal)
+    if(continuation){
+      const userSid=`simulated-user-${randomUUID()}`;recordSessionActivity(userSid,project.project_id)
+      const surface=new SimulatedUserSurface(project.project_id,join(taskDir,'simulated-user'),userSid)
+      latestCard=continuation.turn?.decisions?.at(-1)
+      if(!latestCard)throw Error('SIMULATED_USER_DECISION_MISSING')
+      try{
+        report.user_trial=await simulateUserSession({goal:task.goal,signal,
+          turn:async reply=>{
+            if(reply){
+              const fromApp=!latestCard
+              if(fromApp)await surface.assertFeedbackSource()
+              await surface.close();latestCard=undefined;publicReplyText=''
+              appendSessionMessage(sid,{role:'user',origin:'user',content:[{type:'text',text:reply.text}],timestamp:Date.now()})
+              const current=findProject(project.project_id)
+              const outcome=await observeOneTurn(async record=>{
+                if(fromApp)await enterDesktopLine({projectId:project.project_id,sessionId:sid,requestId:randomUUID(),content:reply.text,initialMessagePersisted:true,maxTokens:requestMaxTokens,signal},query,binding.env,
+                  {publish:(_target,type,payload)=>record({event_id:randomUUID(),session_id:sid,project_id:project.project_id,created_at:new Date().toISOString(),type,payload}),persistAssistant:(_sid,text)=>model.persistAssistant(text),persistSystem:()=>{},complete:()=>{}})
+                else await handleGuideMessage({project_id:project.project_id,session_id:sid,request_id:randomUUID(),mode:'quick',current_stage:current.current_stage,content:reply.text,
+                  ...(reply.selected?{metadata:{source:'card_option' as const,selected_option_id:reply.selected}}:{})},record,model)
+              },event,signal)
+              model.history.push({role:'user',content:reply.text})
+              if(outcome.error||outcome.status==='stopped')return{failed:outcome.error??outcome.status}
+              if(!latestCard&&['clarifying','blocked_for_user_decision'].includes(findProject(project.project_id).current_stage)&&publicReplyText.trim()){
+                latestCard={event_id:randomUUID(),session_id:sid,project_id:project.project_id,created_at:new Date().toISOString(),type:'user_decision_required',payload:{kind:reply.selected?.startsWith('ux_')?'ux_feedback':'conversation',title:'平台回复',summary:publicReplyText,questions:[]}}
+              }
+            }
+            return{card:latestCard}
+          },
+          view:async card=>{
+            if(['ux_confirm','ux_feedback'].includes(String(card?.payload.kind))){
+              if(!previewUrl)return undefined
+              await surface.openPreview(previewUrl)
+            }else if(card)return undefined
+            else await surface.openApp()
+            return surface.snapshot()
+          },
+          decide:input=>decideAsUser(query,{env:binding.env,signal,sessionId:userSid,accounting:{projectId:project.project_id,runId,parentSessionId:sid,role:'simulated-user',scope:'user-experience'}},input),
+          act:action=>surface.act(action),
+          record:row=>{appendFileSync(join(taskDir,'simulated-user.jsonl'),safe({at:new Date().toISOString(),actor:'simulated-user',...row as object})+'\n')}
+        })
+        report.turn={status:report.user_trial.status==='user_assessed'?'returned':report.user_trial.status}
+      }finally{await surface.close()}
+    }else{
+      const content=task.goal
+      const input={project_id:project.project_id,session_id:sid,request_id:runId,mode:'quick' as const,current_stage:'clarifying' as const,content}
+      appendSessionMessage(sid,{role:'user',origin:'user',content:[{type:'text',text:content}],timestamp:Date.now()})
+      report.turn=await observeOneTurn(record=>handleGuideMessage(input,record,model),event,signal)
+    }
     const final=findProject(project.project_id)
     report.project_status=final.status;report.current_stage=final.current_stage;report.desktop_phase=final.desktop_phase;report.blocked=final.desktop_blocked
     report.release=(await activeSoftwareRelease(project.project_id))?.id;report.usage=readProjectUsage(project.project_id)

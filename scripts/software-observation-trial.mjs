@@ -16,31 +16,46 @@ export function runtimeDigest(directory){
     }
   };visit(directory);return digest.digest('hex')
 }
-export async function prepareObservation(root,compile){
-  const descriptor=join(root,'runtime.json')
-  if(existsSync(descriptor)||existsSync(join(root,'home'))||existsSync(join(root,'run-claimed.json')))throw Error('OBSERVATION_ROOT_NOT_FRESH')
+export async function prepareObservation(root,compile,userAuthorization){
+  const descriptor=join(root,userAuthorization?'user-runtime.json':'runtime.json')
+  if(existsSync(descriptor)||!userAuthorization&&(existsSync(join(root,'home'))||existsSync(join(root,'run-claimed.json'))))throw Error('OBSERVATION_ROOT_NOT_FRESH')
+  let migration
+  if(userAuthorization){
+    if(!userAuthorization.trim())throw Error('SIMULATED_USER_AUTHORIZATION_REQUIRED')
+    const manifest=JSON.parse(readFileSync(join(root,'manifest.json'),'utf8')),task=Object.keys(manifest.tasks)[0]
+    const folder=join(root,task),reports=readdirSync(folder).filter(name=>/^run-.*\.json$/.test(name))
+    if(reports.length!==1||existsSync(join(root,'user-run-claimed.json')))throw Error('SIMULATED_USER_BOUNDARY_REQUIRED')
+    const report=JSON.parse(readFileSync(join(folder,reports[0]),'utf8'))
+    if(report.status!=='awaiting_user')throw Error('SIMULATED_USER_BOUNDARY_REQUIRED')
+    const sha=file=>createHash('sha256').update(readFileSync(file)).digest('hex')
+    migration={authorization:userAuthorization,previous_runtime_digest:manifest.runtime_tree_sha256,
+      manifest_sha256:sha(join(root,'manifest.json')),policy_sha256:sha(join(root,'monetary-policy.json')),
+      report:join(task,reports[0]),report_sha256:sha(join(folder,reports[0])),project_sha256:sha(join(folder,'project.json'))}
+  }
   mkdirSync(root,{recursive:true})
   const runtime=join(repo,'run-artifacts/observation-runtime',randomUUID(),'main')
   mkdirSync(runtime,{recursive:true})
   // Compile failure leaves no runnable descriptor and never starts Electron.
   await compile({entryPoints:[join(repo,'scripts/software-observation-trial.ts')],outfile:join(runtime,'runner.mjs'),bundle:true,platform:'node',format:'esm',packages:'external'})
   cpSync(join(repo,'main/templates'),join(runtime,'templates'),{recursive:true,filter:p=>!p.includes('__pycache__')})
-  const frozen={runtime,digest:runtimeDigest(runtime)}
+  const frozen={runtime,digest:runtimeDigest(runtime),migration}
   writeFileSync(descriptor,JSON.stringify(frozen),{flag:'wx'});return frozen
 }
-export function readObservationRuntime(root){
-  const frozen=JSON.parse(readFileSync(join(root,'runtime.json'),'utf8'))
+export function readObservationRuntime(root,userMode=false){
+  const frozen=JSON.parse(readFileSync(join(root,userMode?'user-runtime.json':'runtime.json'),'utf8'))
   if(typeof frozen.runtime!=='string'||runtimeDigest(frozen.runtime)!==frozen.digest)throw Error('OBSERVATION_RUNTIME_CHANGED')
   return frozen
 }
 async function main(){
   const phase=process.argv[2],root=process.env.BLOMA_OBSERVATION_ROOT
-  if(!root||!['prepare','preflight','run'].includes(phase))throw Error('Usage: set BLOMA_OBSERVATION_ROOT; node scripts/software-observation-trial.mjs prepare|preflight|run')
-  if(phase==='prepare'){
+  if(!root||!['prepare','preflight','run','prepare-user','simulate'].includes(phase))throw Error('Usage: set BLOMA_OBSERVATION_ROOT; node scripts/software-observation-trial.mjs prepare|preflight|run|prepare-user|simulate')
+  if(phase==='prepare'||phase==='prepare-user'){
     if(process.versions.electron)throw Error('PREPARE_REQUIRES_NODE')
-    const {build}=await import('esbuild');console.log(JSON.stringify(await prepareObservation(resolve(root),build)));return
+    const authorization=phase==='prepare-user'?process.env.BLOMA_SIMULATED_USER_AUTHORIZATION_TEXT:undefined
+    if(phase==='prepare-user'&&!authorization?.trim())throw Error('SIMULATED_USER_AUTHORIZATION_REQUIRED')
+    const {build}=await import('esbuild');console.log(JSON.stringify(await prepareObservation(resolve(root),build,authorization)));return
   }
-  const frozen=readObservationRuntime(resolve(root))
+  const frozen=readObservationRuntime(resolve(root),phase==='simulate')
   process.env.BLOMA_OBSERVATION_PHASE=phase
   process.env.BLOMA_OBSERVATION_RUNTIME_DIGEST=frozen.digest
   if(!process.versions.electron){
