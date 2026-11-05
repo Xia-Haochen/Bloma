@@ -9,6 +9,20 @@ it('classifies parent-cancelled child tests with zero assertions as unverified e
   expect(verificationFailure({status:result.status,summary:result.error!,core:{host_gui:result}} as never)?.category).not.toBe('product_assertion')
 })
 const suite={covers:['F-001','F-002','F-003'],native_tests:{cases:[{name:'F-001 save',feature:'F-001'},{name:'F-002 reject',feature:'F-002'},{name:'F-003 reopen',feature:'F-003'}]}} as never
+it('requires restart phase evidence and retains passed cases across intentional phase skips',()=>{
+  const one={covers:['F-001'],native_tests:{restart:true,cases:[{name:'F-001 save',feature:'F-001'},{name:'F-001 reopen',feature:'F-001'}]}} as never
+  const report=(name:string,skip:string)=>({code:0,events:[{type:'test:pass',name},{type:'test:pass',name:skip,skip:true}].map(row=>JSON.stringify(row)).join('\n'),trace:JSON.stringify({interactions:1,assertions:1,cases:[{name,interactions:1,assertions:1}]})})
+  const first=report('F-001 save','F-001 reopen'),second=report('F-001 reopen','F-001 save')
+  const result=nativeGuiObservations(one,[first,second])
+  expect(result.status).toBe('passed');expect(result.case_results.map(row=>row.status)).toEqual(['passed','passed'])
+  const single={covers:['F-001'],native_tests:{restart:true,cases:[{name:'F-001 save',feature:'F-001'}]}} as never
+  const only={...first,events:JSON.stringify({type:'test:pass',name:'F-001 save'})}
+  expect(nativeGuiObservations(single,[only]).error).toContain('GUI_NATIVE_PHASE_INCOMPLETE')
+})
+it.each(['cancelledByParent','testTimeoutFailure'])('uses Node failure type %s even with assertion-shaped diagnostics',failure_type=>{
+  const result=nativeGuiObservations(suite,[{code:1,events:JSON.stringify({type:'test:fail',name:'F-001 save',failure_type,error:'execution ended',assertion:{}}),trace:JSON.stringify({interactions:0,assertions:0,cases:[]})}])
+  expect(result.status).toBe('unverified');expect(result.case_results[0].status).toBe('unverified')
+})
 function observed(){return nativeGuiObservations(suite,[{code:1,events:[{type:'test:pass',name:'F-001 save'},{type:'test:fail',name:'F-002 reject',error:'expected actual',assertion:{expected:'required',actual:'accepted'}}].map(row=>JSON.stringify(row)).join('\n'),
   trace:JSON.stringify({interactions:2,assertions:1,cases:[{name:'F-001 save',interactions:1,assertions:1},{name:'F-002 reject',interactions:1,assertions:0}]})}])}
 it('keeps completed, failed and unexecuted native cases distinct while the whole suite fails',()=>{

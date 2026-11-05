@@ -54,6 +54,29 @@ afterEach(async () => { vi.restoreAllMocks(); await closeAllDebugSessions(); if 
     delete process.env.PROMA_HOME;
 else
     process.env.PROMA_HOME = previous; rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }, 30000);
+it('rejects a real restart that executes no business checks instead of reusing initial-phase evidence',async()=>{
+    writeFileSync(join(project.root_path,'tests/acceptance.mjs'),`export default async({test,page,expect,phase})=>{
+      if(phase==='reopened')return;
+      await test('F-001 save',async()=>{await page.locator('#name').fill('Alice');await page.locator('#save').click();await expect(page.locator('#list')).toHaveText('Alice')});
+      await test('F-002 blank',async()=>{await page.locator('#name').fill('');await page.locator('#save').click();await expect(page.locator('#status')).toHaveText('required')});
+    }`)
+    registerNativeGuiTests(project.project_id,'tests/acceptance.mjs')
+    const result=await verifySoftwareCandidate(project.project_id,'empty-restart',AbortSignal.timeout(60000))
+    expect(result.status).toBe('unverified')
+    expect(result.core?.host_gui?.error).toContain('GUI_NATIVE_PHASE_INCOMPLETE')
+    expect(await recentSoftwareVerification(project.project_id,'empty-restart')).toBeUndefined()
+},90000)
+it('keeps a real assertion mentioning cancelled as a failed assertion',async()=>{
+    writeFileSync(join(project.root_path,'tests/acceptance.mjs'),`export default async({test,page,assert})=>{
+      await test('F-001 cancelled order',async()=>{await page.locator('#name').fill('cancelled');await page.locator('#save').click();assert.equal(await page.locator('#list').innerText(),'saved')});
+      await test('F-002 blank',async()=>{await page.locator('#name').fill('');await page.locator('#save').click();assert.equal(await page.locator('#status').innerText(),'required')});
+    }`)
+    registerNativeGuiTests(project.project_id,'tests/acceptance.mjs')
+    const result=await verifySoftwareCandidate(project.project_id,'cancelled-assertion',AbortSignal.timeout(60000))
+    expect(result.status).toBe('failed')
+    expect(result.core?.host_gui?.failure_kind).toBe('assertion')
+    expect(result.core?.host_gui?.case_results?.[0].status).toBe('failed')
+},90000)
 it('returns partial feature evidence from a real browser without passing a failed candidate',async()=>{
     writeFileSync(join(project.root_path,'tests/acceptance.mjs'),`export default async({test,page,assert})=>{
       await test('F-001 save',async()=>{await page.locator('#name').fill('Alice');await page.locator('#save').click();assert.equal(await page.locator('#list').innerText(),'Alice')});

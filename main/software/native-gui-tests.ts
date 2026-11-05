@@ -298,8 +298,10 @@ export function nativeGuiObservations(suite: GuiAcceptanceSuite, reports: Array<
     }> = [], covered = new Set<string>(), executed = new Set<string>();
     let interactions = 0, assertions = 0, failed = false;
     const bootstrapErrors: string[] = [];
+    let incompletePhase = false;
     const case_results: NonNullable<GuiAcceptanceResult['case_results']> = suite.native_tests!.cases.map(row=>({name:row.name,feature:row.feature,status:'not_run',assertions:0,interactions:0}));
     for (const report of reports) {
+        let phasePassedCases = 0;
         if (report.code !== 0)
             failed = true;
         const trace = JSON.parse(report.trace);
@@ -328,18 +330,23 @@ export function nativeGuiObservations(suite: GuiAcceptanceSuite, reports: Array<
                 const row=case_results.find(row=>row.name===event.name)!
                 const counts=trace.cases.find((c:{name:string})=>c.name===event.name)
                 if(counts){row.assertions+=Number.isSafeInteger(counts.assertions)&&counts.assertions>=0?counts.assertions:0;row.interactions+=Number.isSafeInteger(counts.interactions)&&counts.interactions>=0?counts.interactions:0}
-                const cancelled=/cancelled|canceled|did not finish before its parent/i.test(String(event.error))
+                // Node's execution classification is authoritative. Product values
+                // and assertion messages can themselves contain "cancelled".
+                const cancelled=event.failure_type==='cancelledByParent' || event.failure_type==='testTimeoutFailure'
+                    || event.failure_type===undefined && !event.assertion && /test did not finish before its parent and was cancel(?:led|ed)/i.test(String(event.error))
                 const status=event.skip||event.todo?'not_run':cancelled?'unverified':passed?'passed':event.type==='test:fail'&&!String(event.error).includes('GUI_NATIVE_ASSERTION_REQUIRED')?'failed':'unverified'
                 // A later success must never erase an earlier failure of this case.
-                if(row.status!=='failed')row.status=status==='failed'?'failed':row.status==='unverified'||status==='unverified'?'unverified':status
+                if(row.status!=='failed')row.status=status==='failed'?'failed':row.status==='unverified'||status==='unverified'?'unverified':row.status==='passed'||status==='passed'?'passed':status
                 if(event.error)row.error=String(event.error).slice(0,4000)
                 if (passed) {
+                    phasePassedCases++;
                     ids.forEach((id: string) => covered.add(id));
                     executed.add(event.name);
                 }
                 steps.push({ id: `native-${steps.length + 1}`, passed, actual: { test: event.name, error: event.error, assertion: event.assertion } });
             }
         }
+        if (!phasePassedCases) incompletePhase = true;
     }
     const missing = suite.covers.filter(id => !covered.has(id));
     const assertionFailed=steps.some(s=>{const a=(s.actual as {assertion?:{expected?:unknown;actual?:unknown}})?.assertion;return!s.passed&&a&&(a.expected!==undefined||a.actual!==undefined)})
@@ -353,6 +360,8 @@ export function nativeGuiObservations(suite: GuiAcceptanceSuite, reports: Array<
         return finish({ status: 'failed' as const, steps, error: '原生测试执行失败；须核对实际断言或运行错误，不能仅凭退出状态确定产品根因' });
     if (suite.native_tests!.cases.some(c => !executed.has(c.name)))
         return finish({ status: 'unverified' as const, steps, error: 'GUI_NATIVE_CASE_NOT_RUN: 仍有声明的业务测试未执行或被跳过' });
+    if (incompletePhase || reports.length !== (suite.native_tests!.restart ? 2 : 1) || case_results.some(row=>row.status==='unverified'))
+        return finish({ status: 'unverified' as const, steps, error: 'GUI_NATIVE_PHASE_INCOMPLETE: 每次启动都须实际执行带业务断言的案例，不能沿用另一阶段的通过证据' });
     if (!steps.length || !interactions || !assertions || missing.length)
         return finish({ status: 'unverified' as const, steps, error: `GUI_NATIVE_EVIDENCE_INCOMPLETE: 未通过覆盖${missing.join(',') || '或缺少真实交互/断言'}` });
     return finish({ status: failed ? 'failed' as const : 'passed' as const, steps, ...(failed ? { error: '原生应用测试失败，见实际断言结果' } : {}) });

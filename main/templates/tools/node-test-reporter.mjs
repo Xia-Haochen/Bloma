@@ -8,6 +8,7 @@ export default async function* report(events) {
         const error = d.details?.error?.cause ?? d.details?.error;
         const bounded = value => value === undefined ? undefined : String(typeof value === 'string' ? value : JSON.stringify(value)).slice(0, 1600);
         yield JSON.stringify({ type: event.type, name: d.name, skip: d.skip, todo: d.todo,
+            failure_type: d.details?.error?.failureType,
             assertion: error ? { expected: bounded(error.expected ?? error.matcherResult?.expected), actual: bounded(error.actual ?? error.matcherResult?.actual) } : undefined,
             error: d.details?.error ? String(error?.stack ?? error?.message ?? d.details.error.stack ?? d.details.error).slice(0, 5000) : undefined }) + '\n';
     }
