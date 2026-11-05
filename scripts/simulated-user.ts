@@ -17,9 +17,10 @@ export async function decideAsUser(query:SDKQuery,options:SDKQueryOptions,input:
   const {image,...view}=input.view??{} as UserView
   const prompt=JSON.stringify({...input,view:input.view?view:undefined})
   let text=''
-  for await(const event of query(prompt,{...options,tools:undefined,history:[{role:'system',content:system}],messages:undefined,images:image,maxTokens:4096})){
+  for await(const event of query(prompt,{...options,tools:undefined,history:[{role:'system',content:system}],messages:undefined,images:image,maxTokens:16384})){
     if(event.type==='assistant'&&event.message)for(const block of event.message.content)if(block.type==='text')text+=block.text
   }
+  if(!text.trim())throw Error('SIMULATED_USER_RESPONSE_EMPTY')
   const action=JSON.parse(text.trim())
   if(!action||!['reply','click','fill','select','upload','draw','wait','reopen','finish','stop'].includes(action.action))throw Error('SIMULATED_USER_ACTION_INVALID')
   if(action.text!==undefined&&(typeof action.text!=='string'||action.text.length>2000))throw Error('SIMULATED_USER_TEXT_INVALID')
