@@ -1,6 +1,6 @@
 # 软件专精四项能力：实施记录
 
-2026-10-24，用户授权执行四项方案。起点44175a5；原有production-workflow-v2文档两行用户改动保留，不纳入提交。不push，不重启用户实例，不调用付费模型或重跑冻结实验。方案范围与验收条件见software-specialization-four-priorities-20261024.md。
+2026-10-24，用户授权执行四项方案。起点44175a5；原有production-workflow-v2文档两行用户改动保留，不纳入提交。不push，不重启用户实例，不调用付费模型或重跑冻结实验。旧四项计划已合并；当前未完成项见[计划与实施索引](README.md)，后续进展见[专项跟进](software-specialization-followup-20261024.md)。
 
 上段“不调用付费模型”是首轮015094e之前的边界。之后用户明确新增授权3元付费测试窗口，补齐与实测结果见[后续记录](software-specialization-followup-20261024.md)。严格按原执行稿仍未全部完成；以下“已实现”不代替尚缺的完整验收。
 
