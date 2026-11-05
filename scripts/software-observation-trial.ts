@@ -218,7 +218,7 @@ export async function main() {
             else await surface.openApp()
             return surface.snapshot()
           },
-          decide:input=>decideAsUser(query,{env:binding.env,signal,sessionId:userSid,accounting:{projectId:project.project_id,runId,parentSessionId:sid,role:'simulated-user',scope:'user-experience'}},input),
+          decide:input=>decideAsUser(query,{env:binding.env,signal,maxTokens:requestMaxTokens,sessionId:userSid,accounting:{projectId:project.project_id,runId,parentSessionId:sid,role:'simulated-user',scope:'user-experience'}},input),
           act:action=>surface.act(action),
           record:row=>{appendFileSync(join(taskDir,'simulated-user.jsonl'),safe({at:new Date().toISOString(),actor:'simulated-user',...row as object})+'\n')}
         })
