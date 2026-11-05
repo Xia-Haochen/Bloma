@@ -8,7 +8,7 @@ import { readPrdBackplane, markPrdUserConfirmed } from '../../../main/project/pr
 import { syncDocuments } from '../../../main/project/document-sync'
 import { prdScopeFingerprint } from '../../../main/project/requirement-contract'
 import { buildLeanGuiTool } from '../../../main/desktop/lean-gui-tool'
-import { parseGuiSuite, guiSuitePath } from '../../../main/desktop/gui-acceptance'
+import { parseGuiSuite, guiSuitePath, installGuiAcceptanceSuite } from '../../../main/desktop/gui-acceptance'
 import { buildProductionContextTool } from '../../../main/desktop/production-context'
 import { createToolState, runAgentLoop, type ToolContext } from '../../../main/agent/loop/agent-loop'
 import type { SDKQuery, SDKQueryOptions } from '../../../main/orchestration/stages/orchestration-contracts'
@@ -81,10 +81,17 @@ it('readiness rejects stale or unreadable rules without rewriting them or assert
   expect(guiVerificationReadiness(project.project_id)).toMatchObject({ state: 'scope_unconfirmed', verification: 'not_run' })
 })
 it('on-demand guidance exposes the same schema, mapping example and actual host expectations', async () => {
-  const result = await buildProductionContextTool(project.project_id).execute({ topic: 'verification-gui' }, ctx), view = JSON.parse(result.output)
+  const tool=buildProductionContextTool(project.project_id)
+  const fresh=JSON.parse((await tool.execute({topic:'verification-gui'},ctx)).output)
+  expect(fresh.native_tests.call).toContain('verify_app');expect(fresh.gui_step_schema).toBeUndefined()
+  installGuiAcceptanceSuite(project.project_id,{version:1,scope_hash:prdScopeFingerprint(readPrdBackplane(project.project_id)),covers:['F-001'],steps:[{id:'value',kind:'expect',selector:'#value',equals:'5'}]})
+  const view=JSON.parse((await tool.execute({topic:'verification-gui'},ctx)).output)
   expect(view.gui_step_schema).toEqual((buildLeanGuiTool(project.project_id).input_schema.properties as any).steps)
   expect(view.example.steps[1]).toMatchObject({ id: 'answer', kind: 'expect', equals: '5' })
   expect(Object.keys(view.authoritative_expectations)).toEqual(['F-001', 'F-002', 'F-003'])
+  writeFileSync(guiSuitePath(project.project_id),'{broken')
+  const broken=await tool.execute({topic:'verification-gui'},ctx)
+  expect(broken.isError).not.toBe(true);expect(JSON.parse(broken.output).registration_error).toContain('无法读取')
 })
 it('parser identifies assertion field and restart-segment failures precisely', () => {
   const base = { version: 1, scope_hash: 'a'.repeat(64), covers: ['F-001'] }

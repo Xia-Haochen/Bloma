@@ -1,3 +1,4 @@
+import { independentFailureEvidence, independentCaseOutcome } from './verification-evidence'
 import { ReleaseIntegrityError } from './release-store'
 import type { SoftwareVerification } from './verification'
 import { NativeTestContractError } from './native-gui-tests'
@@ -26,7 +27,7 @@ export function verificationFailure(result: SoftwareVerification, error?: unknow
     allowed_changes:['核对确认来源与未明确规则，保留争议；不得让实现者修改冻结输入、断言或新增需求'],next_tool:'read_production_context',next_action:{tool:'read_production_context',arguments:{topic:'independent-design'}},next:'先澄清业务预期或覆盖争议，保留现有候选和案例；这不是已确认产品缺陷，不自动修产品迎合错误预期，也不自动重发B。'}
   const summary = result.summary??'', gui = result.core?.host_gui
   const failed = gui?.steps?.find(step => !step.passed)
-  const independent=result.independent&&'diagnostic'in result.independent?result.independent.diagnostic:undefined
+  const independent=independentFailureEvidence(result.independent)
   const assertion = failed?.actual && typeof failed.actual === 'object' ? (failed.actual as { assertion?: { expected?: unknown; actual?: unknown } }).assertion : undefined
   const cli = result.core?.host_cli?.cases.find(row => !row.passed)
   const security = result.security?.issues.filter(row => row.severity === 'critical' || row.severity === 'high')
@@ -36,9 +37,9 @@ export function verificationFailure(result: SoftwareVerification, error?: unknow
   // Only the contradictory hidden-selector + visible wait is decisive here.
   const contradictoryWait = /waiting for (?:locator|selector)[^\n]*\[hidden\][^\n]*to be visible/i.test(details)
   const ambiguousWait = /TimeoutError|strict mode violation|waiting for (?:locator|getBy)|intercepts pointer events/.test(details)
-  const kind = gui?.failure_kind
+  const kind = independent.row?.kind === 'product_runtime' && independentCaseOutcome(independent.row) === 'failed' ? 'runtime' : gui?.failure_kind
   const explicitAssertion = Boolean(assertion && (assertion.expected !== undefined || assertion.actual !== undefined) || cli?.expected && cli.exit_code !== null
-    || independent&&result.independent?.case_results?.some(row=>row.status==='failed'&&row.kind==='product_assertion'))
+    || independent.row?.kind==='product_assertion'&&independentCaseOutcome(independent.row)==='failed')
   const category: VerificationFailure['category'] = result.status === 'environment_blocked' ? 'environment'
     : security?.length ? 'security_policy'
     : kind === 'runtime' ? 'product_assertion'

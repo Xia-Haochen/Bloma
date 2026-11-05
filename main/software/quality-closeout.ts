@@ -1,3 +1,4 @@
+import { guiFindingOutcome, cliCaseOutcome } from './verification-evidence'
 import type { SoftwareVerification } from './verification'
 import { sameIdentity, type Identity, type Ledger, type QualityFinding } from './quality-ledger'
 
@@ -51,17 +52,8 @@ export function qualityWorkQueue(ledger: Ledger, current: Identity, gate: string
 export function observedQualityFinding(result: SoftwareVerification, finding: QualityFinding, caseName: string): 'passed' | 'failed' | 'unverified' {
   const host = result.core?.host_gui
   const gui = host?.case_results?.filter(c => c.name === caseName && c.feature === finding.requirement)
-  if (gui?.length === 1 && (gui[0].assertions > 0 || gui[0].status==='failed') && ['passed', 'failed'].includes(gui[0].status)) {
-    if (host?.failure_kind === 'runtime' || host?.source_unchanged === false) return 'unverified'
-    if (gui[0].status === 'failed' && host?.method === 'node:test') {
-      const step = host.steps.find(step => !step.passed && step.actual && typeof step.actual === 'object'
-        && (step.actual as { test?: string }).test === caseName)
-      const assertion = (step?.actual as { assertion?: { expected?: unknown; actual?: unknown } } | undefined)?.assertion
-      if (!assertion || assertion.expected === undefined && assertion.actual === undefined) return 'unverified'
-    }
-    return gui[0].status as 'passed' | 'failed'
-  }
+  if (gui?.length) return guiFindingOutcome(host!, caseName, finding.requirement)
   const cli = result.core?.host_cli?.cases.filter(c => c.name === caseName && c.covers.includes(finding.requirement))
-  if (cli?.length === 1 && cli[0].exit_code !== null) return cli[0].passed ? 'passed' : 'failed'
+  if (cli?.length === 1) return cliCaseOutcome(cli[0])
   return 'unverified'
 }

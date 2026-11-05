@@ -4,7 +4,9 @@ import {join} from 'node:path'
 import {createHash} from 'node:crypto'
 import {afterEach,beforeEach,expect,it} from 'vitest'
 import {verificationFailure} from '../../../main/software/verification-diagnostics'
-import {verificationReportView,readVerificationReport,verificationToolFeedback} from '../../../main/software/verification-report'
+import {verificationReportView,readVerificationReport,verificationToolFeedback,verificationResponse,verificationCases} from '../../../main/software/verification-report'
+import {observedQualityFinding} from '../../../main/software/quality-closeout'
+import {NativeTestContractError} from '../../../main/software/native-gui-tests'
 import type {SoftwareVerification} from '../../../main/software/verification'
 import {toolRecovery,persistentBudgetBlocked} from '../../../shared/tool-feedback-policy'
 import {safeToolFeedback,toolFeedbackLabel,type ToolFeedback} from '../../../shared/tool-feedback'
@@ -28,6 +30,32 @@ it('does not turn a generic failure or static rule hit into a confirmed business
   const security=result({status:'failed',summary:'rule hit',security:{issues:[{severity:'high',category:'unsafe_dom'}]}})
   expect(verificationFailure(security)).toMatchObject({category:'security_policy',diagnosis:{basis:'static_policy',root_cause_confirmed:false}})
   expect(toolRecovery(verificationToolFeedback(security))).toBe('inspect')
+})
+it('uses the same actual failed phase in both case reports and defect closure',()=>{
+  const r=result({status:'failed',summary:'reopen failed',core:{host_gui:{method:'node:test',case_results:[{name:'F-001 saved',feature:'F-001',status:'failed',assertions:1}],steps:[
+    {passed:true,actual:{test:'F-001 saved'}},{passed:false,actual:{test:'F-001 saved',assertion:{expected:'saved',actual:'missing'}}}]}}})
+  expect(verificationCases(r)[0]).toMatchObject({expected:'saved',actual:'missing'})
+  expect(observedQualityFinding(r,{requirement:'F-001'} as never,'F-001 saved')).toBe('failed')
+})
+it('diagnoses B runtime evidence consistently and does not borrow an earlier adapter diagnostic',()=>{
+  const r=result({status:'failed',summary:'B failed',independent:{status:'failed',diagnostic:{id:'adapter-0',expected:'old expectation',actual:'bad selector'},case_results:[
+    {id:'adapter',status:'unverified',kind:'adapter',steps:[]},
+    {id:'save',status:'failed',kind:'product_runtime',expected_source:'保存',error:'save crashed',steps:[{id:'save-1',passed:false,actual:'save crashed'}]}]}})
+  expect(verificationFailure(r)).toMatchObject({classification_basis:'host_runtime',category:'product_assertion',step:'save-1',actual:'save crashed'})
+  expect(verificationToolFeedback(r)).toMatchObject({category:'product_assertion',verification:'failed'})
+})
+it('returns one compact actionable response and leaves the full bound report readable',()=>{
+  const project=createProject({request_id:'compact',mode:'quick'},{workflowVersion:'software-v1'})
+  const r=result({status:'failed',summary:'bad output',core:{host_cli:{cases:Array.from({length:20},(_,i)=>({name:'case'+i,covers:['F-001'],passed:false,exit_code:0,actual:'999',expected:{stdout:'5',exit_code:0}}))}}})
+  receipt(project.project_id,r)
+  const response=verificationResponse(project.project_id,r)
+  expect(response.evidence.cases).toHaveLength(4);expect(response.evidence.omitted).toBe(16)
+  expect(response.failure).toMatchObject({category:'product_assertion',actual:{stdout:'999'}})
+  expect(response.evidence).not.toHaveProperty('failure');expect(response).not.toHaveProperty('failed_step')
+  expect(readVerificationReport(project.project_id,{report_hash:response.evidence.report_hash})).toHaveProperty('case_count',20)
+  expect(verificationResponse(project.project_id,{status:'passed',summary:'ok'},false).next).toContain('可以结束制作')
+  const error=new NativeTestContractError(['tests/acceptance.mjs'])
+  expect(verificationResponse(project.project_id,{status:'unverified',summary:error.message},false,error).failure?.paths).toEqual(['tests/acceptance.mjs'])
 })
 it('uses stable host failure identities across transient report paths, while keeping different assertions distinct',()=>{
   const incomplete=(path:string)=>result({status:'unverified',summary:'GUI_NATIVE_EXECUTION_INCOMPLETE',core:{host_gui:{failure_kind:'incomplete',steps:[{id:'native-1',passed:false,actual:{test:'F-001',error:path}}]}}})

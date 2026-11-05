@@ -38,7 +38,7 @@ import { closeDebugSessions, retainedDebugVersion } from '../software/debug-sess
 import { prepareSoftwareRelease, promoteSoftwareRelease, sealSoftwareRelease, verifyReleaseSource } from '../software/release-store'
 import { saveSoftwareRegressionBaseline } from '../software/regression-baseline'
 import { verifySoftwareCandidate, recentSoftwareVerification } from '../software/verification'
-import { verificationToolReport, verificationToolFeedback } from '../software/verification-report'
+import { verificationResponse, verificationToolFeedback } from '../software/verification-report'
 import { importedProjectContext } from '../software/import-project'
 import { saveSoftwareRunState, readSoftwareRunState, recordSoftwareRepair, type SoftwareRunStatus } from '../software/run-state'
 import { monetaryStopMessage, monetaryInputBlocked } from '../platform/llm/monetary-budget'
@@ -335,7 +335,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
           if (!verified) {
             if(!reviewed)return
             verified=await verifySoftwareCandidate(input.projectId,input.requestId,ctx.signal)
-            if(verified.status!=='passed')return{feedback:'QUALITY_CLOSEOUT_CHECK_REQUIRED: '+JSON.stringify(verificationToolReport(input.projectId,verified)),verification:verificationToolFeedback(verified)}
+            if(verified.status!=='passed')return{feedback:'QUALITY_CLOSEOUT_CHECK_REQUIRED: '+JSON.stringify(verificationResponse(input.projectId,verified)),verification:verificationToolFeedback(verified)}
           }
           const feedback = await advanceCloseout(ctx)
           return feedback ? { feedback,verification:verificationToolFeedback(verified) } : { complete: true,verification:verificationToolFeedback(verified) }
@@ -376,7 +376,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
         core = checked.core ?? { status: 'unverified', checked_at: new Date().toISOString(), summary: checked.summary, missing: [checked.summary], evidence: [] }
         cleanEnvironmentPending = checked.status === 'environment_blocked' && core.local_status === 'passed'
           && core.distribution?.status === 'environment_blocked' && checked.launch?.passed === true
-        if (checked.status !== 'passed' && !cleanEnvironmentPending) failure = checked.summary
+        if (checked.status !== 'passed' && !cleanEnvironmentPending) failure = JSON.stringify(verificationResponse(input.projectId,checked))
         if (checked.launch) writeTextFileAtomic(join(project.root_path, '00_VERIFY/launch-smoke.json'), JSON.stringify(checked.launch, null, 2))
         checkpoint('verifying', { source: softwareVerificationFingerprint(project.root_path), candidateId: candidate?.id })
       } else {

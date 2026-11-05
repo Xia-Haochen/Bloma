@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from 'node:fs'
+import { guiSuitePath, parseGuiSuite } from './gui-acceptance'
 import { productDesignPolicy } from '../project/product-design-policy'
 import { projectStageView,readProjectStageReport } from '../software/project-stages'
 import { projectTaskView } from '../software/task-assignment'
@@ -123,14 +125,19 @@ export function buildProductionContextTool(projectId: string): AgentLoopTool {
         if (input.topic === 'resume' && isSoftwareProject(projectId)) return { output: JSON.stringify(softwareResumeContext(projectId)) }
         if (['verification', 'verification-gui'].includes(String(input.topic)) && isSoftwareProject(projectId)) {
           const brief = readPrdBackplane(projectId)
+          const suiteFile=guiSuitePath(projectId)
+          let actions=false,registrationError:string|undefined,controlBindings:ReturnType<typeof guiControlBindings>
+          try { actions=existsSync(suiteFile)&&!parseGuiSuite(JSON.parse(readFileSync(suiteFile,'utf8'))).native_tests;controlBindings=guiControlBindings(projectId) }
+          catch { registrationError='已登记规则无法读取；保留原文件，先核对诊断。协议说明仍可读取。' }
           return { output: JSON.stringify({ launch: SOFTWARE_LAUNCH_GUIDANCE, protocol: '界面测试可直接verify_app({script:"tests/acceptance.mjs"})，不必展开动作表；使用模块参数提供的test/expect/assert。旧steps+acceptance_refs仍兼容，kind不是action，精确预期填equals。开发观察不等于验收。CLI仍用register_cli_check固定args/stdout/exit_code和任务单expectations。',
             native_tests: {call:'verify_app({script:"tests/acceptance.mjs"})',
               example:'export default async({test,page,expect,assert,dataDir,phase})=>{ await test("F-001 主路径",async()=>{await page.locator("#input").fill("已确认输入");await page.locator("#save").click();await expect(page.locator("#result")).toHaveText("已确认预期")}) }',
               rules:'使用参数中的test/expect/assert，每个业务案例名含一个F编号。开发测试与探针用inspect_app自由调试。verify_app先检查实际入口与依赖，只封存入口引用的模块/夹具，保留工程相对路径；动态资产可在脚本同目录native-inputs.json的files中列出工程相对路径，无关探针不参与封存。允许追加检查、修定位、有界等待100–30000ms和导航等待选项；未执行过的引导计划按宿主失败凭据修复并留痕，已执行的业务输入/断言及共享业务逻辑不能降低。截图报告写evidenceDir；宿主诊断截图失败单列告警，不代表视觉通过。phase===reopened触发真实重开，不从宿主源码猜协议。'},
-            gui_step_schema: guiStepsSchema(96, SOFTWARE_GUI_ACTION_KINDS), gui_fixture_schema: GUI_FIXTURE_SCHEMA, example: GUI_CHECK_EXAMPLE,
+            registration_error:registrationError,
+            ...(actions?{gui_step_schema: guiStepsSchema(96, SOFTWARE_GUI_ACTION_KINDS), gui_fixture_schema: GUI_FIXTURE_SCHEMA, example: GUI_CHECK_EXAMPLE}:{}),
             selector_guidance: '列表记录按稳定身份定位，避免nth-child随着新增/编辑后的排序改变。Electron/浏览器观察器支持Playwright可见文本选择器，如#note-list .note-item:has-text("笔记B")；Python固定观察器仍需真实CSS。修正selector可以，不能降低固定输入/预期。',
             authoritative_expectations: Object.fromEntries(brief.requirements.map(row => [row.id, trustedAcceptance(brief, row)])),
-            control_bindings: guiControlBindings(projectId), data_directory: 'APP_DATA_DIR' }) }
+            control_bindings: controlBindings, data_directory: 'APP_DATA_DIR' }) }
         }
         if (input.topic === 'verification-llm' && isSoftwareProject(projectId)) return { output: JSON.stringify({ vision:VISION_GUIDANCE.verify, protocol:
           '登记CORE_CHECK.json llm:{runtime:"node",module:"src/llm-client.cjs",factory:"Client",method:"enhance",covers:["模型功能F编号"]}。Node模块须是产品实际使用的入口，导出可无参new的类；method异步接收{prompt,config:{endpoint,model,api_key,provider,timeout}}，返回{ok,kind,text/message}，kind为success/auth_error/model_error/rate_limited/invalid_response/unconfigured。宿主调用真实客户端验证本机HTTP请求及5类异常，不请求付费端点。Python入口沿用module/factory/method协议（不填runtime）。不能登记只为探针伪造的替身；外部质量另列待实测。' }) }

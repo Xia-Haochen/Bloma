@@ -82,6 +82,22 @@ it('invalidates source changes and never revives an older PASS when a failed ver
   writeFileSync(join(project.root_path, 'app.cjs'), source)
   expect(await recentSoftwareVerification(project.project_id, 'r')).toBeUndefined()
 }, 60000)
+it('a controlled agent repairs a real CLI failure using the compact response then lets the host deliver',async()=>{
+  const source=await setup();writeFileSync(join(project.root_path,'app.cjs'),source.replace('console.log(5)','console.log(999)'))
+  let calls=0
+  const query:SDKQuery=async function* (_prompt,options){
+    const turn=++calls
+    if(turn===2){const history=JSON.stringify(options.messages);expect(history).toContain('999');expect(history).toContain('next_action');expect(history).toContain('product_assertion')}
+    if(turn>4)throw Error('unexpected additional production call')
+    yield {type:'assistant',message:{role:'assistant',content:turn===2
+      ? [{type:'tool_use',id:'source',name:'read_file',input:{path:'app.cjs'}},{type:'tool_use',id:'expected',name:'read_production_context',input:{topic:'features',feature_ids:['F-001']}}]
+      : [{type:'tool_use',id:'action-'+turn,name:turn===3?'write_file':'verify_app',input:turn===3?{path:'app.cjs',content:source}:{}}]}}
+    yield {type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
+  }
+  await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'r',content:'完成输出5并检查实际结果',maxTokens:4096,signal:AbortSignal.timeout(90000)},withEmptyQualityReview(query),{},
+    {publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
+  expect(calls).toBe(4);expect(findProject(project.project_id).status).toBe('completed')
+},120000)
 it('binds actual frozen fixture bytes and rejects tampering before a cached PASS can be consumed', async () => {
   await setup(); writeFileSync(join(project.root_path, 'input.txt'), 'owned fixture')
   const suite = sealGuiFixtures(project.project_id, project.root_path, { version: 1, scope_hash: prdScopeFingerprint(readPrdBackplane(project.project_id)), covers: ['F-001'], fixtures: [{ path: 'input/file.txt', source: 'input.txt' }], steps: [{ id: 'text', kind: 'expect', selector: 'body', nonempty: true }] })
