@@ -23,6 +23,7 @@ export async function decideAsUser(query:SDKQuery,options:SDKQueryOptions,input:
   const action=JSON.parse(text.trim())
   if(!action||!['reply','click','fill','select','upload','draw','wait','reopen','finish','stop'].includes(action.action))throw Error('SIMULATED_USER_ACTION_INVALID')
   if(action.text!==undefined&&(typeof action.text!=='string'||action.text.length>2000))throw Error('SIMULATED_USER_TEXT_INVALID')
+  if(action.observation===undefined&&input.view)action.observation=input.view.id
   return action
 }
 

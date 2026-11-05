@@ -28,7 +28,7 @@ it('uses a separate tool-free model request with only public observations',async
     yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:'{"action":"stop","text":"还没看到程序，无法评价"}'}]}}
   }
   const result=await decideAsUser(query,{env:{},sessionId:'user',signal:new AbortController().signal,accounting:{projectId:'p',role:'simulated-user'}},{goal:'保存',view:{id:'v',kind:'app',text:'公开界面',controls:[],image:[{imageId:'image',media_type:'image/png'}]},history:[]})
-  expect(result.action).toBe('stop')
+  expect(result.action).toBe('stop');expect(result.observation).toBe('v')
 })
 it('lets the user confirm, try the UI and report observed problems without exposing repair hooks',async()=>{
   let turns=0,clicks=0,decisions=0;const replies:string[]=[],rows:unknown[]=[]
