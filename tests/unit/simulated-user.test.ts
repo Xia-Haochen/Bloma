@@ -17,6 +17,7 @@ const card=(kind='lean_scope')=>({event_id:'e',session_id:'s',created_at:'now',t
 it('projects only public text and choices, binds visual feedback and refuses invented choices',()=>{
   expect(JSON.stringify(publicUserCard(card()))).not.toMatch(/secret|host-only-id/)
   expect(userReply({action:'reply',choice:0,text:'按这份做'},card(),undefined)).toEqual({text:'按这份做',selected:'host-only-id'})
+  const free=card();free.payload.questions=[];expect(userReply({action:'reply',choice:0,text:'具体意见'},free,undefined).selected).toBeUndefined()
   expect(()=>userReply({action:'reply',choice:3,text:'做'},card(),undefined)).toThrow('CHOICE_INVALID')
   expect(()=>userReply({action:'reply',choice:0,text:'样式可以'},card('ux_confirm'),undefined)).toThrow('OBSERVATION_REQUIRED')
   expect(()=>userReply({action:'reply',text:'保存没反应',observation:'old'},undefined,{id:'new',kind:'app',text:'',controls:[]})).toThrow('OBSERVATION_REQUIRED')

@@ -35,11 +35,11 @@ export async function decideAsUser(query:SDKQuery,options:SDKQueryOptions,input:
 export function userReply(action:UserAction,card:AgentEvent|undefined,view:UserView|undefined){
   if(action.action!=='reply'||!action.text?.trim())throw Error('SIMULATED_USER_REPLY_REQUIRED')
   const questions=card&&Array.isArray(card.payload.questions)?card.payload.questions as Array<{id:string}>:[]
-  if(action.choice!==undefined&&(!Number.isInteger(action.choice)||!questions[action.choice]))throw Error('SIMULATED_USER_CHOICE_INVALID')
+  if(questions.length&&action.choice!==undefined&&(!Number.isInteger(action.choice)||!questions[action.choice]))throw Error('SIMULATED_USER_CHOICE_INVALID')
   const visual=['ux_confirm','ux_feedback'].includes(String(card?.payload.kind))||!card
   if(visual&&(!view||action.observation!==view.id))throw Error('SIMULATED_USER_OBSERVATION_REQUIRED')
   if(view&&action.observation!==undefined&&action.observation!==view.id)throw Error('SIMULATED_USER_STALE_OBSERVATION')
-  return {text:action.text,selected:action.choice===undefined?undefined:questions[action.choice].id}
+  return {text:action.text,selected:questions.length&&action.choice!==undefined?questions[action.choice].id:card?.payload.kind==='ux_confirm'?'ux_adjust':undefined}
 }
 
 export async function simulateUserSession(input:{goal:string;signal:AbortSignal;maxSteps?:number;

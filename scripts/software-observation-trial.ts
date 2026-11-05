@@ -204,8 +204,13 @@ export async function main() {
               const outcome=await observeOneTurn(async record=>{
                 if(fromApp)await enterDesktopLine({projectId:project.project_id,sessionId:sid,requestId:randomUUID(),content:reply.text,initialMessagePersisted:true,maxTokens:requestMaxTokens,signal},query,binding.env,
                   {publish:(_target,type,payload)=>record({event_id:randomUUID(),session_id:sid,project_id:project.project_id,created_at:new Date().toISOString(),type,payload}),persistAssistant:(_sid,text)=>model.persistAssistant(text),persistSystem:()=>{},complete:()=>{}})
-                else await handleGuideMessage({project_id:project.project_id,session_id:sid,request_id:randomUUID(),mode:'quick',current_stage:current.current_stage,content:reply.text,
-                  ...(reply.selected?{metadata:{source:'card_option' as const,selected_option_id:reply.selected}}:{})},record,model)
+                else {
+                  const message={project_id:project.project_id,session_id:sid,request_id:randomUUID(),mode:'quick' as const,current_stage:current.current_stage,content:reply.text,
+                    ...(reply.selected?{metadata:{source:'card_option' as const,selected_option_id:reply.selected}}:{})}
+                  await handleGuideMessage(message,record,model)
+                  if(['ux_adjust','lean_adjust'].includes(reply.selected??'')&&!['有要调整的','再调整一次','补充或修改'].includes(reply.text.trim()))
+                    await handleGuideMessage({...message,request_id:randomUUID(),metadata:{source:'chat'}},record,model)
+                }
               },event,signal)
               model.history.push({role:'user',content:reply.text})
               if(outcome.error||outcome.status==='stopped')return{failed:outcome.error??outcome.status}
