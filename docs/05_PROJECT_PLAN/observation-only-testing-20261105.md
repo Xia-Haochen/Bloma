@@ -1,6 +1,6 @@
 # 无干预生成测试规范
 
-本规范用于用户要求的从零观察测试，区别于允许诊断、修复和续跑的工程验收。当前是方法约定，不代表只观察驾驶器已实现、已离线验证或已成功启动。
+本规范用于用户要求的从零观察测试，区别于允许诊断、修复和续跑的工程验收。只观察驾驶器现已实现并完成离线验证；旧software-complex-trial入口已停用。尚未执行新版在线预检或真实模型测试，之前的外部执行拒绝未据此解除。
 
 ## 历史测试口径
 
@@ -30,3 +30,24 @@
 报告区分未启动、待确认、生成失败、预算/时限停止、宿主交付、独立验收结果；保存首次结果、全部失败、自动重试、用户交互、人工干预、完整费用及未知项。方法变化留给后续独立样本，一次通过不外推可靠率。
 
 2026-11-05准备尝试在CRLF源码提取及后续执行策略处受阻，尚无模型请求或项目产物。记录在 `C:/Users/17359/.bloma-validation/doodle-observe-20261105-10rmb/REPORT.md`，不得与旧涂鸦项目的357次发送混算。
+
+## 实现与使用边界
+
+入口为 `scripts/software-observation-trial.mjs`，三个独立命令：`prepare`只编译和冻结代码/模板，`preflight`检查模型目录、余额、人工核对的模型专属报价和金额策略，`run`只向真实向导提交一次原始需求。编译失败不会发布runtime.json；后两步不重新编译。运行前核对代码、模板、思考设置、需求、渠道配置、报价证据和旧账本；独占run-claimed.json防止重复或并发重跑，同轮失败也不释放标记。
+
+此版本将首次需要用户决定作为本段终点，返回原始decision事件，既不代答也不提供续跑命令。尚未实现携带原预算、冻结身份和用户原文的人工回应续段；不能切换到未绑定本轮金额保护的普通实例继续，再算作同一次测试。首次范围确认可能就是新样本终点，不承诺一条命令跨过全部确认完成生产。
+
+配置使用全新的 `BLOMA_OBSERVATION_*` 前缀：ROOT（隔离目录）、CASES（仅一个任务，name/goal必需；兼容旧change字段但不发送）、TASK（任务键）、AUTHORIZED_CAP、AUTHORIZATION_TEXT、THINKING（low/off，冻结后不可改）、QUOTE_FILE。模型固定为既有公开DeepSeek Flash渠道；不继承旧窗口或旧续跑反馈。超时固定45分钟，产品自身的预算与执行守卫保持生效。
+
+QUOTE_FILE为人工核对后保存的JSON，包含host、model、context_tokens、input_rmb_per_million、output_rmb_per_million、cache_rmb_per_million、source_url、source_path、source_sha256、reviewed_at。来源为DeepSeek官方价格页，证据字节须匹配，核对时间不得超过24小时；费率必须按对应模型逐项核对，程序校验格式/身份/时效不等于自动认证报价正确。预检保留价格原文与哈希，不再依赖整页包含几个数字来证明对应关系。
+
+事件、请求轨迹、原始失败、项目与发布状态、usage和金额分别保存。awaiting_user、failed、stopped、incomplete、released_pending_independent_acceptance各自保留含义；独立验收不由驾驶器自动调用。
+
+旧 `software-complex-trial.mjs` 与 `.ts` 均只返回LEGACY_TRIAL_RETIRED，所有旧阶段（含preflight/inspect）不读取账号、不创建项目、不修改账本。历史脚本片段只供追溯，原始记录器、导出工具、独立验收模块及历史证据继续保留；不恢复旧运行入口来补验。
+
+## 本次离线验证
+
+- `run-artifacts/observation-check-offline-20261105.log`：类型、docs、前后端构建及10文件67项回归通过。新增覆盖真实向导只发一次需求整理请求并保持未确认、连续失败只记录、取消不派发、真实运行包编译和字节变化拒绝、重复运行/旧阶段拒绝。
+- `run-artifacts/observation-final-guards-20261105.log`：最终5文件44项观察、启动、请求记录与费用守卫回归通过；与前述套件重叠，不相加。最终类型检查日志为`observation-final-typecheck-20261105.log`。
+- 初次类型检查发现测试事件缺少event_id/session_id/created_at，补齐真实事件字段后通过；早期日志保留，不把它归为产品生成失败。文档50个本地引用及diff空白检查通过。
+- 本轮仅本机编译、可控查询、浏览器/CLI及文件验证，没有在线预检或供应商生成请求，没有修改旧项目/账本，也未推送。新版首次真实运行及正式产品自主交付仍未验证。
