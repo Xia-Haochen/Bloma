@@ -23,10 +23,7 @@ it('rejects old intervention commands before preparing a runtime',()=>{
   for(const phase of ['resume','confirm','retry-ux','extend-execution'])expect(()=>execFileSync(process.execPath,['scripts/software-observation-trial.mjs',phase],{env:{...process.env,BLOMA_OBSERVATION_ROOT:root},stdio:'pipe'})).toThrow()
   expect(existsSync(join(root,'runtime.json'))).toBe(false)
 })
-it('retires every old launcher phase before reading accounts or creating a project',()=>{
-  for(const phase of ['preflight','run','resume','confirm','inspect']){
-    try{execFileSync(process.execPath,['scripts/software-complex-trial.mjs'],{env:{...process.env,BLOMA_COMPLEX_TRIAL_ROOT:root,BLOMA_COMPLEX_TRIAL_PHASE:phase},stdio:'pipe'});throw Error('legacy command unexpectedly succeeded')}
-    catch(error){expect(String(error.stderr)).toContain('LEGACY_TRIAL_RETIRED')}
-  }
-  expect(existsSync(join(root,'home'))).toBe(false);expect(existsSync(join(root,'manifest.json'))).toBe(false)
+it('keeps both legacy entry files removed',()=>{
+  expect(existsSync('scripts/software-complex-trial.mjs')).toBe(false)
+  expect(existsSync('scripts/software-complex-trial.ts')).toBe(false)
 })

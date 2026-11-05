@@ -1,6 +1,6 @@
 # 无干预生成测试规范
 
-本规范用于用户要求的从零观察测试，区别于允许诊断、修复和续跑的工程验收。只观察驾驶器现已实现并完成离线验证；旧software-complex-trial入口已停用。尚未执行新版在线预检或真实模型测试，之前的外部执行拒绝未据此解除。
+本规范用于用户要求的从零观察测试，区别于允许诊断、修复和续跑的工程验收。只观察驾驶器现已实现并完成离线验证；旧software-complex-trial两个入口文件已删除。尚未执行新版在线预检或真实模型测试，之前的外部执行拒绝未据此解除。
 
 ## 历史测试口径
 
@@ -43,7 +43,7 @@ QUOTE_FILE为人工核对后保存的JSON，包含host、model、context_tokens�
 
 事件、请求轨迹、原始失败、项目与发布状态、usage和金额分别保存。awaiting_user、failed、stopped、incomplete、released_pending_independent_acceptance各自保留含义；独立验收不由驾驶器自动调用。
 
-旧 `software-complex-trial.mjs` 与 `.ts` 均只返回LEGACY_TRIAL_RETIRED，所有旧阶段（含preflight/inspect）不读取账号、不创建项目、不修改账本。历史脚本片段只供追溯，原始记录器、导出工具、独立验收模块及历史证据继续保留；不恢复旧运行入口来补验。
+旧 `software-complex-trial.mjs` 与 `.ts` 已实际删除，所有旧阶段（含preflight/inspect）均无入口。历史脚本片段只供追溯，原始记录器、导出工具、独立验收模块及历史证据继续保留；不恢复旧运行入口来补验。
 
 ## 本次离线验证
 
@@ -51,3 +51,5 @@ QUOTE_FILE为人工核对后保存的JSON，包含host、model、context_tokens�
 - `run-artifacts/observation-final-guards-20261105.log`：最终5文件44项观察、启动、请求记录与费用守卫回归通过；与前述套件重叠，不相加。最终类型检查日志为`observation-final-typecheck-20261105.log`。
 - 初次类型检查发现测试事件缺少event_id/session_id/created_at，补齐真实事件字段后通过；早期日志保留，不把它归为产品生成失败。文档50个本地引用及diff空白检查通过。
 - 本轮仅本机编译、可控查询、浏览器/CLI及文件验证，没有在线预检或供应商生成请求，没有修改旧项目/账本，也未推送。新版首次真实运行及正式产品自主交付仍未验证。
+
+后续删除检查：用户要求移除停用占位文件，两个旧入口已删除；启动器回归改为检查文件不存在。此前停用回归仍为当时结果，不改写旧日志。
