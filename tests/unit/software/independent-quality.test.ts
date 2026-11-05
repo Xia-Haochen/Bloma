@@ -82,6 +82,19 @@ async function freeze() {
   writeFileSync(join(project.root_path, 'INDEPENDENT_ADAPTER.json'), JSON.stringify({ version: 1, design_digest: design.digest, controls: Object.fromEntries(Object.entries(controls).filter(([control]) => contract.cases.some(c => c.steps.some(s => 'control' in s && s.control === control)))) }))
   return design
 }
+it('records a real B-only renderer crash as a confirmed defect and closes it after the same contract passes',async()=>{
+  await freeze()
+  writeFileSync(join(project.root_path,'index.html'),html(false).replace("el('error').textContent='';render()}","el('error').textContent='';render();if(value==='Gamma')throw Error('B save crashed')}"))
+  const failed=await verifySoftwareCandidate(project.project_id,'b-runtime',ctx().signal,true)
+  expect(failed.core?.status).toBe('passed');expect(failed.status).toBe('failed')
+  expect(failed.independent?.case_results?.find(c=>c.id==='identity')).toMatchObject({status:'failed',kind:'product_runtime'})
+  const finding=readQualityLedger(project.project_id).findings.find(f=>f.independent?.case_id==='identity')!
+  expect(finding.disposition).toBe('confirmed');expect(finding.checks.at(-1)?.outcome).toBe('failed')
+  writeFileSync(join(project.root_path,'index.html'),html(false))
+  const passed=await verifySoftwareCandidate(project.project_id,'b-runtime-fixed',ctx().signal,true)
+  expect(passed.status,passed.summary).toBe('passed')
+  expect(readQualityLedger(project.project_id).findings.find(f=>f.id===finding.id)?.disposition).toBe('closed')
+},150000)
 it('actual isolated B cases expose cross-object corruption, preserve cancel/error/reopen evidence and close through the existing finding tool only after a same-contract host retest', async () => {
   const design = await freeze(), before = readFileSync(join(home, 'software-independent-design', project.project_id, 'current.json'))
   expect(assessIndependentCases(readPrdBackplane(project.project_id), contract).ready).toBe(true)

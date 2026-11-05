@@ -12,6 +12,7 @@ import { dirname } from 'node:path'
 import { selectOwnedNativeFile } from './native-file-dialog'
 import { closeOwnedGui } from './gui-cleanup'
 import type { ChildProcess } from 'node:child_process'
+import { captureDiagnosticScreenshot } from './ui-observation'
 
 import { electronEntry } from './electron-entry'
 export { electronEntry } from './electron-entry'
@@ -101,7 +102,11 @@ export async function observeGuiStep(page: Page, step: GuiAcceptanceSuite['steps
       actual = step.property === 'count' ? String(await locator.count()) : step.property === 'value' ? await locator.inputValue({ timeout: 300 }) : await locator.innerText({ timeout: 300 })
       if (step.equals !== undefined ? String(actual) === step.equals : step.contains !== undefined ? String(actual).includes(step.contains)
         : step.property === 'count' ? Number(actual) > 0 : String(actual).trim().length > 0) return actual
-    } catch { /* a genuine async UI may not have its output yet */ }
+    } catch (error) {
+      // Only a pending element may become available later. Invalid selectors,
+      // wrong element types and a closed page are not business mismatches.
+      if ((error as Error).name !== 'TimeoutError') throw error
+    }
     await new Promise(resolve => setTimeout(resolve, 75))
   } while (Date.now() < deadline)
   throw Object.assign(new Error(`GUI_ASSERTION_FAILED:${step.id}`), { actual, expected: step.equals ?? step.contains ?? 'nonempty', selector: step.selector, has_text: step.has_text })
@@ -109,9 +114,9 @@ export async function observeGuiStep(page: Page, step: GuiAcceptanceSuite['steps
 
 /** DOM actions are host-owned and run against the normal application. No product
  * self-test mode, injected business assertions or self-reported PASS scripts. */
-export async function observeSoftwareGui(input: { projectId: string; root: string; launch: LaunchDeclaration; suite: GuiAcceptanceSuite; temporary: string; signal?: AbortSignal; screenshotDir?: string; purpose?:'acceptance'|'development' }): Promise<Pick<GuiAcceptanceResult, 'status' | 'steps' | 'error'>> {
+export async function observeSoftwareGui(input: { projectId: string; root: string; launch: LaunchDeclaration; suite: GuiAcceptanceSuite; temporary: string; signal?: AbortSignal; screenshotDir?: string; purpose?:'acceptance'|'development' }): Promise<Pick<GuiAcceptanceResult, 'status' | 'steps' | 'error' | 'failure_kind' | 'evidence_warnings'>> {
   const { _electron, chromium } = await import('playwright')
-  const result: Pick<GuiAcceptanceResult, 'status' | 'steps' | 'error'> = { status: 'unverified', steps: [] }
+  const result: Pick<GuiAcceptanceResult, 'status' | 'steps' | 'error' | 'failure_kind' | 'evidence_warnings'> = { status: 'unverified', steps: [], evidence_warnings: [] }
   const data = join(input.temporary, 'data'), userData = join(input.temporary, 'user-data'), screenshotDir = input.screenshotDir ?? join(input.temporary, 'evidence')
   mkdirSync(screenshotDir, { recursive: true })
   const owner = `host-gui-${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -142,22 +147,35 @@ export async function observeSoftwareGui(input: { projectId: string; root: strin
         await page.goto(input.launch.url, { waitUntil: 'domcontentloaded', timeout: 15000 })
       } else throw new Error('SOFTWARE_GUI_ADAPTER_UNSUPPORTED')
       page.setDefaultTimeout(4000)
+      const checkRuntime = async () => {
+        const errors = await page.pageErrors()
+        if (errors.length) {
+          result.failure_kind = 'runtime'
+          throw Error(`GUI_RUNTIME_ERROR: ${redactSoftwareOutput(errors.slice(-3).map(error=>error.stack||error.message).join('\n')).slice(0,4000)}`)
+        }
+      }
+      const screenshot = async (name:string) => {
+        const captured=await captureDiagnosticScreenshot(page,join(screenshotDir,name),input.signal??new AbortController().signal)
+        if(captured.error)result.evidence_warnings!.push(captured.error)
+      }
       for (const step of steps) {
         input.signal?.throwIfAborted()
-        try { const actual = await observeGuiStep(page, step, { data, fixtures: input.suite.fixtures, nativeProcessRoot: child?.pid, signal: input.signal }); result.steps.push({ id: step.id, passed: true, actual }) }
+        try { await checkRuntime(); const actual = await observeGuiStep(page, step, { data, fixtures: input.suite.fixtures, nativeProcessRoot: child?.pid, signal: input.signal }); await checkRuntime(); result.steps.push({ id: step.id, passed: true, actual }) }
         catch (error) {
           result.steps.push({ id: step.id, passed: false, actual: (error as { actual?: unknown }).actual ?? String(error) })
           result.error = error instanceof Error ? error.message : String(error)
-          result.status = result.error.startsWith('GUI_ACTION_UNSUPPORTED') || result.error.startsWith('GUI_FIXTURE_') ? 'unverified' : 'failed'
-          await page.screenshot({ path: join(screenshotDir, `gui-${index}-failed.png`) }).catch(() => {})
+          result.status = result.failure_kind==='runtime'||/^GUI_(?:FILE_)?ASSERTION_FAILED:/.test(result.error) ? 'failed' : 'unverified'
+          result.failure_kind ??= result.status==='failed'?'assertion':'unresolved'
+          await screenshot(`gui-${index}-failed.png`)
           return result
         }
       }
-      await page.screenshot({ path: join(screenshotDir, `gui-${index}.png`) })
+      await screenshot(`gui-${index}.png`)
+      await checkRuntime()
       result.status = 'passed'
     } catch (error) {
       if (input.signal?.aborted) throw error
-      result.status = 'unverified'; result.error = error instanceof Error ? error.message : String(error); return result
+      result.status = result.failure_kind==='runtime'?'failed':'unverified'; result.error = error instanceof Error ? error.message : String(error); return result
     } finally { input.signal?.removeEventListener('abort', abort); await close() }
   }
   return result

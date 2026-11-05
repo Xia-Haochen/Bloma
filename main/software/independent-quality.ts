@@ -72,7 +72,7 @@ export async function recordIndependentFindings(projectId: string, candidate: So
         independent: { design_version: result.design_version, design_digest: result.design_digest, case_id: observed.id } } satisfies QualityFinding
       ledger.findings.push(finding)
     }
-    const outcome = observed.status === 'failed' && observed.kind === 'product_assertion' ? 'failed' : observed.status === 'passed' ? 'passed' : 'unverified'
+    const outcome = observed.status === 'failed' && ['product_assertion','product_runtime'].includes(observed.kind) ? 'failed' : observed.status === 'passed' ? 'passed' : 'unverified'
     const baseline = finding.checks.some(c => c.outcome === 'failed')
     finding.checks.push({ at: new Date().toISOString(), identity, case_name: observed.id, rules: result.design_version, outcome, report: result.report_path, candidate: candidate.id,
       observation: redactSoftwareOutput(JSON.stringify({ case: observed, overall_passed: canClose, scope: 'frozen_independent_business_case' })) })

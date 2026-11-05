@@ -15,7 +15,7 @@ import type { IndependentSemantics } from './independent-semantics'
 import { currentIndependentSemantics, independentChallengeVersion } from './independent-quality'
 import { qualityHash } from './quality-ledger'
 
-export interface IndependentCaseResult { id: string; feature: string; status: 'passed' | 'failed' | 'unverified' | 'not_run'; kind: 'product_assertion' | 'semantic' | 'adapter' | 'environment' | 'none'; expected_source?: string; issues?: string[]; steps: Array<{ id: string; passed: boolean; actual?: unknown }>; error?: string }
+export interface IndependentCaseResult { id: string; feature: string; status: 'passed' | 'failed' | 'unverified' | 'not_run'; kind: 'product_assertion' | 'product_runtime' | 'semantic' | 'adapter' | 'environment' | 'none'; expected_source?: string; issues?: string[]; steps: Array<{ id: string; passed: boolean; actual?: unknown }>; error?: string; evidence_warnings?:string[] }
 export interface IndependentVerification { status: 'disabled' | 'passed' | 'failed' | 'unverified'; semantics?: IndependentSemantics; case_results?: IndependentCaseResult[]; design_version?: string; design_digest?: string
   error?: string; diagnostic?: { id: string; expected: string; actual: unknown }; report_path?: string }
 
@@ -81,8 +81,9 @@ export async function verifyIndependentDesign(projectId:string,candidate:Softwar
       finally{const target=realpathSync(temporary);if(dirname(target)!==realpathSync(tmpdir())||!basename(target).startsWith('bloma-b-'))throw Error('INDEPENDENT_CLEANUP_PATH_INVALID');rmSync(target,{recursive:true,force:true,maxRetries:5,retryDelay:100})}
       const failed=observed.steps.find(s=>!s.passed),step=suite.steps.find(s=>s.id===failed?.id)
       const assertion=observed.status==='failed'&&step?.kind==='expect'&&observed.error?.startsWith(`GUI_ASSERTION_FAILED:${step.id}`)
-      const status=observed.status==='passed'?'passed':assertion?'failed':'unverified'
-      cases.push({id:item.id,feature:item.feature,status,kind:status==='passed'?'none':assertion?'product_assertion':failed?'adapter':'environment',steps:observed.steps,error:observed.error,expected_source:trustedAcceptance(brief,requirement)})
+      const runtime=observed.failure_kind==='runtime'
+      const status=observed.status==='passed'?'passed':assertion||runtime?'failed':'unverified'
+      cases.push({id:item.id,feature:item.feature,status,kind:status==='passed'?'none':runtime?'product_runtime':assertion?'product_assertion':failed?'adapter':'environment',steps:observed.steps,error:observed.error,evidence_warnings:observed.evidence_warnings,expected_source:trustedAcceptance(brief,requirement)})
       if(failed&&!diagnostic)diagnostic={id:failed.id,expected:step?.kind==='expect'?(step.equals??'冻结的独立业务预期'):'冻结的独立业务步骤',actual:failed.actual}
     }catch(error){signal?.throwIfAborted();cases.push({id:item.id,feature:item.feature,status:'unverified',kind:'adapter',steps:[],error:String(error),expected_source:trustedAcceptance(brief,requirement)})}
     progress()

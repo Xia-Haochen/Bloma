@@ -175,7 +175,8 @@ export async function runGuiAcceptance(options: { projectId: string; root: strin
       result.case_results=Object.entries(suite.acceptance_refs).flatMap(([id,features])=>{
         const step=suite.steps.find(step=>step.id===id),observed=result.steps.find(step=>step.id===id)
         if(!step||!['expect','expect_file'].includes(step.kind))return []
-        return features.map(feature=>({name:id,feature,status:!observed?'not_run' as const:observed.passed?'passed' as const:'failed' as const,assertions:observed?1:0,interactions:0}))
+        const invalid=result.failure_kind==='runtime'||result.failure_kind==='unresolved'
+        return features.map(feature=>({name:id,feature,status:!observed?'not_run' as const:invalid?'unverified' as const:observed.passed?'passed' as const:'failed' as const,assertions:observed&&!invalid?1:0,interactions:0}))
       })
     }
     result.source_unchanged = verificationFingerprint(root, null, fingerprintPolicy) === before
