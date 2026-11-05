@@ -239,6 +239,24 @@ it('a manually requested C enters host closeout without another discretionary im
   expect(findProject(project.project_id).status).toBe('completed')
 },90000)
 
+it('stops repeated failed full checks after manual C instead of treating successful review-tool calls as progress',async()=>{
+  const {enterDesktopLine}=await import('../../../main/desktop/desktop-route'),{findProject}=await import('../../../main/project/project-service')
+  let parentCalls=0;const children=new Set<string>()
+  const use=(name:string,input:Record<string,unknown>)=>({type:'tool_use' as const,id:`repeat-${parentCalls}-${name}`,name,input})
+  const query:SDKQuery=async function*(_prompt,options){
+    let content
+    if(JSON.stringify(options.messages?.filter(m=>m.role==='system')).includes('独立只读代码/数据审阅C')){
+      if(!children.has(options.sessionId)){children.add(options.sessionId);content=[use('read_quality_review',{}),use('read_file',{path:'app.cjs'}),use('submit_quality_findings',{findings:[]})]}
+      else content=[{type:'text' as const,text:'结构化审阅已提交，不代表业务通过。'}]
+    }else{if(++parentCalls>5)throw Error('REPEATED_HOST_FAILURE_NOT_STOPPED');content=[use('start_quality_review',{})]}
+    yield{type:'assistant',message:{role:'assistant',content}};yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
+  }
+  await enterDesktopLine({projectId:project.project_id,sessionId:parent,requestId:'repeat-review',content:'核对失败检查',maxTokens:2048,signal:AbortSignal.timeout(60000)},query,{},
+    {publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
+  expect(parentCalls).toBe(3);expect(children.size).toBe(1)
+  expect(findProject(project.project_id).status).not.toBe('completed');expect(findProject(project.project_id).desktop_blocked?.note).toContain('no_progress')
+},90000)
+
 it('keeps uncertain experience observations open and permits a new current review to resolve them', async () => {
   const brief = readPrdBackplane(project.project_id)
   const model = organizedPrd(brief.requirements, '核心体验需核对').requirements_model

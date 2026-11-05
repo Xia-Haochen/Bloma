@@ -182,7 +182,7 @@ export interface AgentLoopInput {
   beforeComplete?: (ctx: ToolContext) => Promise<string | undefined>
   /** Host-owned closeout after actual tool results, without buying a model turn
    * merely to ask it to announce completion. Undefined keeps normal execution. */
-  afterTools?: (ctx: ToolContext, calls: AgentLoopToolCallRecord[]) => Promise<{ complete?: boolean; feedback?: string } | undefined>
+  afterTools?: (ctx: ToolContext, calls: AgentLoopToolCallRecord[]) => Promise<{ complete?: boolean; feedback?: string; verification?: ToolFeedback } | undefined>
   /** Bounded current host facts after compaction; does not replay tools. */
   recoveryContext?: () => string
   /** Host decision pending: end this turn before another tool or request. */

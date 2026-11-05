@@ -1,4 +1,5 @@
 import { trialOutputCap } from './trial-output-cap'
+import {trialResultStatus} from './trial-status'
 import {createTrialRequestRecorder} from './trial-request-recorder'
 import {softwareVerificationFingerprint} from '../main/desktop/verification-fingerprint'
 import {readQualityLedger} from '../main/software/quality-ledger'
@@ -113,7 +114,8 @@ export async function main() {
     if (!response.ok) throw Error('PRICING_UNAVAILABLE')
     const pricing = await response.text(), compact = pricing.replace(/<[^>]*>/g, '').replace(/\s+/g, '')
     if (!compact.includes('deepseek-flash') || !compact.includes('2元') || !compact.includes('8元') || !compact.includes('0.04元')) throw Error('PRICING_REVIEW_REQUIRED')
-    writeFileSync(join(root, 'pricing.html'), pricing)
+    const pricingPath=join(root,'pricing'+suffix+'.html')
+    writeFileSync(pricingPath, pricing)
     const oldEpoch = join(process.env.LOCALAPPDATA!, 'Bloma', 'monetary-epochs', hash('api.deepseek.com\ndeepseek-flash') + '.json')
     const oldFiles = existsSync(oldEpoch) ? [oldEpoch, JSON.parse(readFileSync(oldEpoch, 'utf8')).policy_path] : []
     if (windowId) for (const name of readdirSync(root).filter(name => /^monetary-policy(?:-[a-z0-9-]+)?\.json$/.test(name))) { const prior = join(root, name); if (prior !== policy) oldFiles.push(prior) }
@@ -123,7 +125,7 @@ export async function main() {
     writeFileSync(policy, JSON.stringify({ version: 1, models: [rates] }, null, 2))
     writeFileSync(manifestPath, JSON.stringify({ version: 1, at: new Date().toISOString(), source_head: execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),
       authorization: { source: 'direct_user_confirmation', cap_rmb: capRmb, user_text: (customCases || windowId || capRmb !== 10) ? process.env.BLOMA_COMPLEX_TRIAL_AUTHORIZATION_TEXT : '换一个大型一点的真实的任务，上限10元，你自己安排，可以多跑几种' },
-      selector_sha256: hash(readFileSync(source)), policy_sha256: hash(readFileSync(policy)), rates, tasks,
+      selector_sha256: hash(readFileSync(source)), policy_sha256: hash(readFileSync(policy)), pricing_path:pricingPath,pricing_sha256:hash(pricing),rates, tasks,
       balance_before: cny.total_balance, model_catalog: models.data.map((r: any) => r.id),
       old_accounting: oldFiles.map(path => ({ path, sha256: hash(readFileSync(path)) })),
       boundaries: `All tasks, changes, repairs and retries share one ${capRmb} RMB window. Previous policies and ledgers are preserved; B disabled. No product-side paid services or server-side search tools.` }, null, 2))
@@ -132,6 +134,7 @@ export async function main() {
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
   if (manifest.aggregation_status && manifest.aggregation_status !== 'active') throw Error('TRIAL_MERGE_NOT_ACTIVE')
   if (manifest.authorization?.cap_rmb !== capRmb || JSON.stringify(manifest.tasks)!==JSON.stringify(tasks) || manifest.selector_sha256 !== hash(readFileSync(source)) || manifest.policy_sha256 !== hash(readFileSync(policy))) throw Error('TRIAL_AUTHORIZATION_OR_CONFIGURATION_CHANGED')
+  if(manifest.pricing_path&&hash(readFileSync(manifest.pricing_path))!==manifest.pricing_sha256)throw Error('TRIAL_PRICING_EVIDENCE_CHANGED')
   const policyRate = JSON.parse(readFileSync(policy, 'utf8')).models.find((r: any) => r.host === 'api.deepseek.com' && r.model === binding.modelName)
   if (!policyRate || policyRate.cap_rmb !== capRmb) throw Error('TRIAL_POLICY_CAP_MISMATCH')
   const requestMaxTokens = trialOutputCap(capRmb, generationMaxTokens, policyRate)
@@ -261,7 +264,7 @@ export async function main() {
     report.longterm = state; report.release = (await activeSoftwareRelease(project.project_id))?.id; report.usage = readProjectUsage(project.project_id)
     const milestone=state?.milestones.find(m=>m.id===state.current_id),source=(await runtimeInventory(final.root_path)).digest
     report.current_source_matches_milestone=source===milestone?.source_digest
-    report.status = report.independent?.status==='failed'?'independent_failed':report.host_verification?.is_error||report.stage_verification?.status==='failed'?'host_verification_failed':report.release&&final.status==='completed'&&final.current_stage==='completed'?'released_pending_independent_acceptance':milestone?.status==='awaiting_confirmation'&&report.current_source_matches_milestone?'host_checked_pending_independent_acceptance':'incomplete'
+    report.status = trialResultStatus({...report,milestone_status:milestone?.status,source_matches_milestone:report.current_source_matches_milestone})
   } catch (error) { report.status = 'failed'; report.error = String(error) }
   finally {
     trace.finish()

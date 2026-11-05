@@ -44,6 +44,23 @@ function tool(name: string, execute: AgentLoopTool['execute']): AgentLoopTool {
 function nativeFile() { return piSessionPath('test-project', 'test-session', 'desktop-implement:', process.cwd()) }
 
 describe('real upstream Pi AgentSession integration', () => {
+  it('stops repeated host closeout failures even when the initiating model tool succeeds',async()=>{
+    const q=scripted([[call('review','start_quality_review')]])
+    const failed=verificationToolFeedback({status:'failed',summary:'wrong total',core:{host_cli:{cases:[{name:'total',passed:false,exit_code:0,expected:{stdout:'4',exit_code:0},actual:'5'}]}}} as never)
+    const result=await runAgentLoop(input(q.query,{maxTurns:8,tools:[tool('start_quality_review',async()=>({output:'review handed to host'}))],
+      afterTools:async()=>({feedback:'QUALITY_CLOSEOUT_CHECK_REQUIRED: wrong total',verification:failed})}))
+    expect(q.received).toHaveLength(3)
+    expect(result.termination_detail).toMatchObject({reason:'no_progress',observed:3})
+    expect(result.toolCalls).toHaveLength(3)
+  })
+  it('clears the host closeout failure count only after an actual passing host observation',async()=>{
+    const q=scripted([[call('one','start_quality_review')],[call('two','start_quality_review')],[call('three','start_quality_review')],[call('four','start_quality_review')],[call('five','start_quality_review')],[text('done')]])
+    const failed=verificationToolFeedback({status:'failed',summary:'wrong total'} as never),passed=verificationToolFeedback({status:'passed',summary:'checked'} as never)
+    let checks=0
+    const result=await runAgentLoop(input(q.query,{maxTurns:8,tools:[tool('start_quality_review',async()=>({output:'review returned'}))],
+      afterTools:async()=>({feedback:'host observation',verification:++checks===3?passed:failed})}))
+    expect(checks).toBe(5);expect(q.received).toHaveLength(6);expect(result.status).toBe('completed')
+  })
   it.each(['verify_project_stage','future_verification_entry'])('stops repeated typed host refusals from %s despite changed filenames and intervening successful writes',async name=>{
     let calls=0
     const query:SDKQuery=async function*(){calls++;yield{type:'assistant',message:{role:'assistant',content:[{type:'tool_use',id:'edit-'+calls,name:'write_file',input:{}},{type:'tool_use',id:'check-'+calls,name,input:{file:'renamed-'+calls}}]}};yield done}

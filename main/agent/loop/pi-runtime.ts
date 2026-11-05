@@ -201,8 +201,17 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
       if(protocolFailure){status='budget_exhausted';termination={reason:'no_progress',limit:3,observed:protocolFailure.count};input.publish('message_delta',{text:'相同工具拒因或验收失败证据已重复三次，停止当前执行并保留记录；先诊断，不继续原样重试：'+protocolFailure.key});return true}
       if (toolResults.length && input.afterTools && !pendingSteerCount(input.sessionId)) {
         const handoff = await input.afterTools(ctx, calls)
-        if (handoff?.complete && !pendingSteerCount(input.sessionId)) return true
-        if (handoff?.feedback) activeSession.agent.steer({ role: 'user', content: handoff.feedback, timestamp: Date.now() })
+        // Host checks run after the model tool has returned successfully. Feed
+        // their real outcome into the same guard without inventing a model tool
+        // call or counting unrelated successful tools as a repaired host check.
+        const hostFacts=handoff?.verification?formatToolFeedback(handoff.verification,''):undefined
+        if(handoff?.verification){
+          const repeated=protocolGuard([{name:'__host_after_tools_verification',turn:turns,
+            status:handoff.verification.verification==='passed'?'ok':'error',failureKey:toolFailureKey('__host_after_tools_verification',hostFacts!)}])
+          if(repeated){status='budget_exhausted';termination={reason:'no_progress',limit:3,observed:repeated.count};input.publish('message_delta',{text:'同一个检查问题连续出现三次，已停止这轮制作并保留记录，需要先查清原因再继续。'});return true}
+        }
+        if (handoff?.complete && (!handoff.verification||handoff.verification.verification==='passed') && !pendingSteerCount(input.sessionId)) return true
+        if (handoff?.feedback) activeSession.agent.steer({ role: 'user', content: (hostFacts?hostFacts+'\n':'')+handoff.feedback, timestamp: Date.now() })
       }
       budgetStalls = budgetHitThisTurn ? budgetStalls + 1 : 0
       if (budgetStalls >= 2) { status = 'budget_exhausted'; return true }

@@ -38,7 +38,7 @@ import { closeDebugSessions, retainedDebugVersion } from '../software/debug-sess
 import { prepareSoftwareRelease, promoteSoftwareRelease, sealSoftwareRelease, verifyReleaseSource } from '../software/release-store'
 import { saveSoftwareRegressionBaseline } from '../software/regression-baseline'
 import { verifySoftwareCandidate, recentSoftwareVerification } from '../software/verification'
-import { verificationToolReport } from '../software/verification-report'
+import { verificationToolReport, verificationToolFeedback } from '../software/verification-report'
 import { importedProjectContext } from '../software/import-project'
 import { saveSoftwareRunState, readSoftwareRunState, recordSoftwareRepair, type SoftwareRunStatus } from '../software/run-state'
 import { monetaryStopMessage, monetaryInputBlocked } from '../platform/llm/monetary-budget'
@@ -331,13 +331,14 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
           // before returning control; otherwise A can drift into optional edits
           // between C and V and invalidate the very candidate just reviewed.
           if(reviewed){const waiting=await waitForProductionChildren(ctx);if(waiting)return{feedback:waiting}}
-          if (!await recentSoftwareVerification(input.projectId,input.requestId,ctx.signal)) {
+          let verified=await recentSoftwareVerification(input.projectId,input.requestId,ctx.signal)
+          if (!verified) {
             if(!reviewed)return
-            const checked=await verifySoftwareCandidate(input.projectId,input.requestId,ctx.signal)
-            if(checked.status!=='passed')return{feedback:'QUALITY_CLOSEOUT_CHECK_REQUIRED: '+JSON.stringify(verificationToolReport(input.projectId,checked))}
+            verified=await verifySoftwareCandidate(input.projectId,input.requestId,ctx.signal)
+            if(verified.status!=='passed')return{feedback:'QUALITY_CLOSEOUT_CHECK_REQUIRED: '+JSON.stringify(verificationToolReport(input.projectId,verified)),verification:verificationToolFeedback(verified)}
           }
           const feedback = await advanceCloseout(ctx)
-          return feedback ? { feedback } : { complete: true }
+          return feedback ? { feedback,verification:verificationToolFeedback(verified) } : { complete: true,verification:verificationToolFeedback(verified) }
         }, recoveryContext: () => renderSoftwareWorkingContext(input.projectId), publish: emit }) }
       catch (error) {
         const reason = error instanceof Error ? error.message : String(error)
