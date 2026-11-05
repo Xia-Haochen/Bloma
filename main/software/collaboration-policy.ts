@@ -1,3 +1,4 @@
+import {createExperiments} from './experiments'
 import { existsSync, realpathSync } from 'node:fs'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import type { ToolContext } from '../agent/loop/agent-loop'
@@ -13,6 +14,7 @@ const overlap = (a: string, b: string) => a === b || a.endsWith('/') && b.starts
  * stay with the integrator: a language/shell allowlist cannot enforce write paths. */
 export function createSoftwareCollaborationPolicy(projectId: string, root: string, parentSessionId: string) {
   const assignments = new Map<string, Assignment>(), canonicalRoot = realpathSync(root)
+  const experiments=createExperiments(projectId,root,parentSessionId)
   let reviewFrozen = false
   const pathOf = (raw: string): string => {
     if (!raw || isAbsolute(raw) || /^[A-Za-z]:/.test(raw) || raw.split(/[\\/]/).some(part => part === '..') || /[*?\0]/.test(raw)) throw new Error('DELEGATION_WRITE_PATH_INVALID')
@@ -47,6 +49,7 @@ export function createSoftwareCollaborationPolicy(projectId: string, root: strin
     if (parent.projectId !== projectId || parent.sessionId !== parentSessionId) throw new Error('DELEGATION_PARENT_MISMATCH')
     parent.signal.throwIfAborted()
     if (reviewFrozen && args.role !== 'review') throw Error('QUALITY_REVIEW_FROZEN')
+    if(args.experiment)return experiments.prepare(childSessionId,args)
     const writable = args.role === 'implement' && args.readOnly !== true || args.role === 'custom' && args.readOnly === false
     if (writable && (hasSoftwareSessionProcess(projectId, parentSessionId) || hasDebugSession(projectId, parentSessionId))) throw Error('DELEGATION_STOP_DEV_SERVICE_BEFORE_WRITING: 先停止会话中的开发服务/调试实例，再划分写入任务；避免后台构建与子任务改动互相覆盖')
     const paths = writable ? (args.writePaths ?? []).map(pathOf) : []
@@ -60,7 +63,7 @@ export function createSoftwareCollaborationPolicy(projectId: string, root: strin
     return { release: () => { assignment.active = false }, completionNote: () => assignment.readOnly && assignment.source !== verificationFingerprint(root)
       ? '\n核查期间源码已变化；以上仅供定位，不能作为当前版本通过证据。' : '' }
   }
-  return { prepare, assertFileWrite, assertCommand,
+  return { prepare, assertFileWrite, assertCommand, experiments,
     freezeReview: () => {
       if (reviewFrozen || [...assignments.values()].some(a => a.active && !a.readOnly)) throw Error('QUALITY_REVIEW_WAIT_FOR_WRITERS')
       reviewFrozen = true

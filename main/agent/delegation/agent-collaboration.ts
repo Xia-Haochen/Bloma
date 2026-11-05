@@ -66,6 +66,7 @@ import type { DelegationRunRole as DelegationRole } from '../../../shared/delega
 export type DelegationStatus = 'running' | 'completed' | 'failed' | 'cancelled'
 
 export interface DelegateAgentArgs {
+  experiment?: { criterion: string; inputs?: string[] }
   writePaths?: string[]
   readOnly?: boolean
   task: string
@@ -108,7 +109,7 @@ export interface AskSignal {
 }
 
 export interface DelegationRecord {
-  assignment?: { writePaths?: string[]; readOnly?: boolean }
+  assignment?: { writePaths?: string[]; readOnly?: boolean; experiment?: DelegateAgentArgs['experiment'] }
   workspaceLease?: { release: () => void; completionNote?: () => string }
   taskHandoff?: TaskHandoff
   delegationId: string
@@ -228,7 +229,7 @@ export function startDelegation(parent: ToolContext, args: DelegateAgentArgs): S
     askSignal: createAskSignal(),
     channelOverride: resolveDelegationChannelOverride(args) ?? undefined,
   }
-  record.assignment = { writePaths: args.writePaths, readOnly: args.readOnly }
+  record.assignment = { writePaths: args.writePaths, readOnly: args.readOnly, experiment: args.experiment }
   record.workspaceLease = parentCtx.prepareDelegation?.({ parent, args, childSessionId, delegationId })
   delegations.set(delegationId, record)
   ensureDelegationWatchStarted()

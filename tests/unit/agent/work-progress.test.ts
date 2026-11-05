@@ -3,6 +3,11 @@ import { commandProgressKey, createWorkProgress, isPendingToolExecution, pruneDu
 import type { ConversationTurn } from '../../../main/orchestration/stages/orchestration-contracts'
 
 describe('writable executor progress', () => {
+  it('recognizes a new experiment conclusion once, not repeated identical reports',()=>{
+    const progress=createWorkProgress(),key=commandProgressKey('record_experiment_result',{finding:'decoder unavailable'})!
+    expect(progress.observe([{name:'record_experiment_result',turn:1,status:'ok',progressKey:key}]).idleTurns).toBe(0)
+    expect(progress.observe([{name:'record_experiment_result',turn:2,status:'ok',progressKey:key}]).idleTurns).toBe(1)
+  })
   it('projects only the latest successful host state, preserving failures, explicit history and audit pairs', () => {
     const result=(id:string,name:string,body:string,input={},is_error=false):ConversationTurn[]=>[
       {role:'assistant',content:[{type:'tool_use',id,name,input}]},

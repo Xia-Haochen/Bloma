@@ -1,5 +1,6 @@
 /** Discovery metadata only. Full protocols remain behind the context tool. */
 export const SOFTWARE_CONTEXT_CATALOG = [
+  {name:'experiments',when:'关键未知需要查资料和实际小实验；委派experiment并读取封存结果后集成，不增加固定前置阶段',topic:'working-state',tools:['delegate_agent','read_experiment']},
   {name:'verification-report',when:'按报告hash读取失败优先的GUI/CLI案例及省略细节；section=raw读取脱敏原始记录片段，历史记录不代替当前验证',topic:'verification-report',tools:['read_production_context']},
   { name:'project-stages',when:'已确认阶段的累计局部GUI检查、快照和下一项；最终仍需完整验收',topic:'project-stages',tools:['verify_project_stage','verify_app'] },
   { name:'project-tasks',when:'当前目标执行归属、attempt历史与宿主报告；不恢复旧进程',topic:'project-tasks',tools:['read_production_context'] },

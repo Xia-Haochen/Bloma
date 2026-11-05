@@ -26,7 +26,8 @@ import {verificationRefusalFeedback} from './verification-report'
 
 type Policy = ReturnType<typeof createSoftwareCollaborationPolicy>
 const FILE_TOOLS = new Set(['read_file', 'list_files', 'find', 'grep', 'web_fetch', 'write_file', 'edit_file'])
-export function buildSoftwareAgentTools(projectId: string, role: DelegationRunRole | 'parent', policy: Policy, previewChanged?: (url?: string) => void, suggestionsChanged?: () => void, longtermChanged?:()=>void): AgentLoopTool[] {
+export function buildSoftwareAgentTools(projectId: string, role: DelegationRunRole | 'parent', policy: Policy, previewChanged?: (url?: string) => void, suggestionsChanged?: () => void, longtermChanged?:()=>void, childSessionId?:string): AgentLoopTool[] {
+  if(childSessionId&&policy.experiments.has(childSessionId))return policy.experiments.tools(childSessionId)
   const readonly = ['review', 'research', 'explore'].includes(role)
   const files = buildAgentTools({ projectId, role: readonly ? 'research' : 'implement', realFullstackVariant: true, software: true,
     assertFileWrite: policy.assertFileWrite }).filter(tool => FILE_TOOLS.has(tool.name))
@@ -50,7 +51,7 @@ export function buildSoftwareAgentTools(projectId: string, role: DelegationRunRo
         return{output:JSON.stringify(result),isError:result.status!=='passed',feedback:result.feedback}
       }catch(error){return{output:String(error),isError:true,feedback:verificationRefusalFeedback(error)}}
     }})
-  if(role==='parent')tools.push(...buildTestCorrectionTools(projectId,policy))
+  if(role==='parent')tools.push(policy.experiments.parentTool,...buildTestCorrectionTools(projectId,policy))
   return tools
 }
 

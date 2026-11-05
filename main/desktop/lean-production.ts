@@ -239,7 +239,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     '临时截图/观察使用inspect_app(script_source)或steps，脚本由宿主保存在诊断目录；不要在稳定候选中增删临时脚本导致审阅失效。正式回归仍用冻结验收登记，临时观察不代替正式结果。重要疑点必须check_quality_finding取得当前实际案例证据，改源码或重开审阅不会把它清掉。',
     '已执行测试预期与确认需求矛盾时，不改产品迎合，也不换文件绕过冻结。用read_test_contract读取原文，propose_test_correction提交精确差异与确认来源；独立宿主裁定期间停止。批准后apply_test_correction，再重跑所有保留案例，原失败不删除。累计阶段入口只default导入旧入口和新增模块，函数体仅顺序await imported(ctx)，新增测试注册放到新增模块。',
     '宿主选定V的界面候选还须经独立V审阅；小范围纯样式改动可能只选V，其他业务/未知变更保留C/V。未变化的已验证候选不重复自动审阅，仍须原宿主验收。start_visual_review封存当前真实PNG与同次DOM/操作事实，子会话用专属图片授权，不能传父debug_session_id替代。必要操作先inspect_app，再启动V；未看图、图像渠道拒绝或旧图不能当视觉通过，不另选付费渠道或用OCR代替。',
-    `项目根：${project.root_path}。已有平台组件和骨架优先复用，当前未有的环境先探测；不重做已证明的环境研究。不要求架构文档、阶段任务书或推进标记。`,
+    `项目根：${project.root_path}。平台组件是可选积木，先核对契约是否适用；未知方法可查资料并实验，不把组件目录当能力上限。关键未知可delegate_agent传experiment:{criterion,inputs}，task写要回答的问题；子任务独立运行探针，主负责人用read_experiment读取证据与代码，按正常文件工具集成后复验。不重做同版本已证明的研究。不要求架构文档、阶段任务书或推进标记。`,
     ...(project.imported_source ? [JSON.stringify(importedProjectContext(input.projectId))] : []),
     ux?.html_path ? `已确认外观：${ux.html_path}，先读后沿用；用户后续修改仅改相关部分。` : brief.lean_brief.ui === 'required' ? '用户明确授权直接制作界面，无需先画草图。' : '本任务无需额外外观设计。',
     '局部外观和缺陷直接修改。用户新增、删除业务能力或改变业务预期时，先用propose_scope_change保留原功能及新增预期并等待确认，不能在旧任务单下宣称新增功能已验收。',
@@ -277,9 +277,9 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
         } }
       },
       childSystemBuilder: (_role: import('../../shared/delegation-run-context').DelegationRunRole, child: string) =>
-        quality.system(child) ?? `完成主负责人交付的具体子任务，先读相关文件，沿用现有接口。项目根：${project.root_path}。文件权限：${collaboration.describe(child)}。仅在归属范围内修改；不运行命令、不再委派、不修改目标/验收输入。需要跨边界修改时回报主负责人。简短交接实际修改、检查和未验证项，不自报产品通过。全局约束：${JSON.stringify(brief.constraints)}` })),
+        quality.system(child) ?? (collaboration.experiments.has(child) ? `你负责独立实验。先核对输入和关键未知，查必要资料，再运行最小可判定探针；失败先定位类别再调整，不原样重试。${collaboration.experiments.describe(child)}。可写文件和执行命令仅用于实验，不修改正式项目、不递归委派。用record_experiment_result交接方法、结论及真实产物；supports/refutes是解释，不是产品PASS。` : `完成主负责人交付的具体子任务，先读相关文件，沿用现有接口。项目根：${project.root_path}。文件权限：${collaboration.describe(child)}。仅在归属范围内修改；不运行命令、不再委派、不修改目标/验收输入。需要跨边界修改时回报主负责人。简短交接实际修改、检查和未验证项，不自报产品通过。全局约束：${JSON.stringify(brief.constraints)}`) })),
     childToolsBuilder: (id, role, _format, child) => {
-      const childTools = buildSoftwareAgentTools(id, role, collaboration)
+      const childTools = buildSoftwareAgentTools(id, role, collaboration,undefined,undefined,undefined,child)
       return role === 'review' ? quality.reviewTools(childTools, child) : childTools
     } })
   const cancelChildren = () => { stopDelegations(input.sessionId) }

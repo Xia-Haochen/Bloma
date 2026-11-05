@@ -1,7 +1,8 @@
 import {chromium,_electron,type Page,type BrowserContext,type ElectronApplication,type ElementHandle} from 'playwright'
 import {existsSync,mkdirSync,writeFileSync,readFileSync} from 'node:fs'
-import {join,basename} from 'node:path'
+import {join,basename,extname} from 'node:path'
 import {randomUUID,createHash} from 'node:crypto'
+import {resolvePreviewFile} from '../main/delivery/preview-file'
 import {savePastedImage} from '../main/platform/shell/pasted-images'
 import {findProject} from '../main/project/project-service'
 import {prepareSoftwareRelease,verifyReleaseSource} from '../main/software/release-store'
@@ -94,10 +95,27 @@ export class SimulatedUserSurface {
   async openPreview(url:string){
     if(this.preview===url&&this.surface)return
     const target=new URL(url)
-    if(!['http:','https:'].includes(target.protocol)||!['localhost','127.0.0.1','[::1]'].includes(target.hostname))throw Error('SIMULATED_USER_PREVIEW_NOT_LOCAL')
+    const native=target.protocol==='bloma-file:'
+    if(native){if(resolvePreviewFile(url,this.projectId).status!==200)throw Error('SIMULATED_USER_PREVIEW_DENIED')}
+    else if(!['http:','https:'].includes(target.protocol)||!['localhost','127.0.0.1','[::1]'].includes(target.hostname))throw Error('SIMULATED_USER_PREVIEW_NOT_LOCAL')
     await this.close();this.release=undefined;this.preview=url
     this.browser=await chromium.launchPersistentContext(join(this.folder,'preview-profile'),{headless:true,...(existsSync(chromium.executablePath())?{}:{channel:process.platform==='win32'?'msedge':'chrome'})})
-    const page=this.browser.pages()[0]??await this.browser.newPage();await page.goto(url,{waitUntil:'domcontentloaded',timeout:15000})
+    const page=this.browser.pages()[0]??await this.browser.newPage()
+    let address=url
+    if(native){
+      const prefix='/'+randomUUID()+'/'
+      await this.browser.route('http://127.0.0.1/**',async route=>{
+        const request=new URL(route.request().url())
+        if(route.request().method()!=='GET')return route.fulfill({status:403,body:'Forbidden'})
+        const relative=request.pathname.startsWith(prefix)?request.pathname.slice(prefix.length):request.pathname.replace(/^\/+/,'')
+        const file=resolvePreviewFile(`bloma-file://${this.projectId}/${relative}${request.search}`,this.projectId)
+        if(file.status!==200)return route.fulfill({status:file.status,body:'Preview unavailable'})
+        const types:Record<string,string>={'.html':'text/html; charset=utf-8','.htm':'text/html; charset=utf-8','.css':'text/css','.js':'text/javascript','.json':'application/json','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.svg':'image/svg+xml','.webp':'image/webp','.woff2':'font/woff2'}
+        await route.fulfill({status:200,contentType:types[extname(file.path!).toLowerCase()]??'application/octet-stream',body:readFileSync(file.path!)})
+      })
+      address='http://127.0.0.1'+prefix+target.pathname.replace(/^\/+/,'')+target.search
+    }
+    await page.goto(address,{waitUntil:'domcontentloaded',timeout:15000})
     this.surface=new UserPage(page,'preview',join(this.folder,'observations'),this.session,this.files)
   }
   async openApp(restart=false){
