@@ -1,7 +1,7 @@
 import {chromium,_electron,type Page,type BrowserContext,type ElectronApplication,type ElementHandle} from 'playwright'
-import {existsSync,mkdirSync,writeFileSync} from 'node:fs'
-import {join} from 'node:path'
-import {randomUUID} from 'node:crypto'
+import {existsSync,mkdirSync,writeFileSync,readFileSync} from 'node:fs'
+import {join,basename} from 'node:path'
+import {randomUUID,createHash} from 'node:crypto'
 import {savePastedImage} from '../main/platform/shell/pasted-images'
 import {findProject} from '../main/project/project-service'
 import {prepareSoftwareRelease,verifyReleaseSource} from '../main/software/release-store'
@@ -10,13 +10,23 @@ import {electronEntry} from '../main/software/electron-entry'
 import {isolatedBrowserLaunch} from '../main/software/isolated-launch'
 import {startSoftwareProcess,stopSoftwareProcess} from '../main/software/process-manager'
 import {runSecurityScan} from '../main/verification/security-scan'
+import type {UserTestFile} from './user-test-files'
 import type {UserAction,UserView} from './simulated-user'
 
 /** Public UI only: no selector, eval, file, request or shell tool is exposed. */
 export class UserPage {
   private controls:ElementHandle[]=[]
   private observation=''
-  constructor(readonly page:Page,readonly kind:'preview'|'app',readonly folder:string,readonly session:string){}
+  private chooser?:ElementHandle
+  private downloads:NonNullable<UserView['downloads']>=[]
+  constructor(readonly page:Page,readonly kind:'preview'|'app',readonly folder:string,readonly session:string,readonly files:UserTestFile[]=[]){
+    page.on('filechooser',chooser=>{this.chooser=chooser.element()})
+    page.on('download',download=>{
+      const row={id:randomUUID(),name:basename(download.suggestedFilename()),status:'saving'};this.downloads.push(row)
+      const directory=join(folder,'downloads');mkdirSync(directory,{recursive:true})
+      void download.saveAs(join(directory,row.id+'-'+row.name)).then(()=>{row.status='saved'},()=>{row.status='failed'}).finally(()=>writeFileSync(join(directory,row.id+'.json'),JSON.stringify(row)))
+    })
+  }
   async snapshot():Promise<UserView>{
     for(const control of this.controls)await control.dispose();this.controls=[]
     const controls:UserView['controls']=[]
@@ -31,10 +41,11 @@ export class UserPage {
       })
       controls.push({ref:this.controls.length,...item});this.controls.push(element)
     }
+    if(this.chooser){controls.push({ref:this.controls.length,label:'文件选择对话框',tag:'input'});this.controls.push(this.chooser);this.chooser=undefined}
     this.observation=randomUUID();mkdirSync(this.folder,{recursive:true})
     const bytes=await this.page.screenshot({fullPage:false});writeFileSync(join(this.folder,this.observation+'.png'),bytes)
     const view:UserView={id:this.observation,kind:this.kind,text:(await this.page.locator('body').innerText()).slice(0,16000),controls,
-      image:[savePastedImage(this.session,bytes.toString('base64'),'png')],audio:{status:'not_measured',limit:'截图和DOM不能证明实际音频，请勿声称已听到声音'}}
+      files:this.files.map(({id,name,description})=>({id,name,description})),downloads:this.downloads.map(row=>({...row})),image:[savePastedImage(this.session,bytes.toString('base64'),'png')],audio:{status:'not_measured',limit:'截图和DOM不能证明实际音频，请勿声称已听到声音'}}
     writeFileSync(join(this.folder,this.observation+'.json'),JSON.stringify(view));return view
   }
   async act(action:UserAction){
@@ -44,8 +55,12 @@ export class UserPage {
       await this.page.waitForTimeout(action.milliseconds!);return
     }
     const element=Number.isInteger(action.ref)?this.controls[action.ref!]:undefined
-    if(!element||!await element.isVisible())throw Error('SIMULATED_USER_CONTROL_MISSING')
-    if(action.action==='click')await element.click({timeout:5000})
+    if(!element||action.action!=='upload'&&!await element.isVisible())throw Error('SIMULATED_USER_CONTROL_MISSING')
+    if(action.action==='upload'){
+      if(!action.files?.length||action.files.length>this.files.length)throw Error('USER_TEST_FILES_INVALID')
+      const paths=action.files.map(id=>{const file=this.files.find(f=>f.id===id);if(!file||createHash('sha256').update(readFileSync(file.path)).digest('hex')!==file.sha256)throw Error('USER_TEST_FILE_CHANGED_OR_OUTSIDE');return file.path})
+      await element.setInputFiles(paths,{timeout:5000})
+    }else if(action.action==='click')await element.click({timeout:5000})
     else if(action.action==='fill'||action.action==='select'){
       if(typeof action.value!=='string'||action.value.length>2000)throw Error('SIMULATED_USER_VALUE_INVALID')
       if(action.action==='fill')await element.fill(action.value,{timeout:5000});else await element.selectOption({label:action.value},{timeout:5000})
@@ -66,7 +81,7 @@ export class SimulatedUserSurface {
   private surface?:UserPage
   private release?:Awaited<ReturnType<typeof prepareSoftwareRelease>>
   private preview?:string
-  constructor(private projectId:string,private folder:string,private session:string){}
+  constructor(private projectId:string,private folder:string,private session:string,private files:UserTestFile[]=[]){}
   async close(){
     const app=this.app,browser=this.browser,service=this.service
     this.app=undefined;this.browser=undefined;this.service=undefined;this.surface=undefined
@@ -83,7 +98,7 @@ export class SimulatedUserSurface {
     await this.close();this.release=undefined;this.preview=url
     this.browser=await chromium.launchPersistentContext(join(this.folder,'preview-profile'),{headless:true,...(existsSync(chromium.executablePath())?{}:{channel:process.platform==='win32'?'msedge':'chrome'})})
     const page=this.browser.pages()[0]??await this.browser.newPage();await page.goto(url,{waitUntil:'domcontentloaded',timeout:15000})
-    this.surface=new UserPage(page,'preview',join(this.folder,'observations'),this.session)
+    this.surface=new UserPage(page,'preview',join(this.folder,'observations'),this.session,this.files)
   }
   async openApp(restart=false){
     if(this.surface?.kind==='app'&&!restart)return
@@ -102,7 +117,7 @@ export class SimulatedUserSurface {
       this.browser=await chromium.launchPersistentContext(join(this.folder,'profile'),{headless:true,...(existsSync(chromium.executablePath())?{}:{channel:process.platform==='win32'?'msedge':'chrome'})})
       page=this.browser.pages()[0]??await this.browser.newPage();await page.goto(launch.url,{waitUntil:'domcontentloaded',timeout:15000})
     }else throw Error('SIMULATED_USER_UI_UNSUPPORTED')
-    this.surface=new UserPage(page,'app',join(this.folder,'observations'),this.session)
+    this.surface=new UserPage(page,'app',join(this.folder,'observations'),this.session,this.files)
   }
   async snapshot(){
     const view=await this.surface?.snapshot()

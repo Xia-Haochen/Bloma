@@ -5,6 +5,7 @@ import {afterEach,beforeEach,it,expect} from 'vitest'
 import {chromium} from 'playwright'
 import {publicUserCard,userReply,simulateUserSession,decideAsUser} from '../../scripts/simulated-user'
 import {UserPage,SimulatedUserSurface} from '../../scripts/simulated-user-surface'
+import {loadUserTestFiles} from '../../scripts/user-test-files'
 import {assertSimulatedContinuation,observationHash} from '../../scripts/observation-control'
 import {createProject} from '../../main/project/project-service'
 import type {AgentEvent} from '../../shared/types'
@@ -88,4 +89,21 @@ it('adopts the old boundary without resetting its budget or report, and rejects 
   expect(()=>assertSimulatedContinuation(home,'low','new')).toThrow('BOUNDARY_REQUIRED')
   rmSync(join(home,'user-run-claimed.json'))
   writeFileSync(join(home,'monetary-policy.json'),'changed');expect(()=>assertSimulatedContinuation(home,'low','new')).toThrow('IDENTITY_CHANGED')
+})
+it('uploads only frozen test files through the UI and records actual downloads',async()=>{
+  writeFileSync(join(home,'clip.webm'),'synthetic fixture');writeFileSync(join(home,'user-files.json'),JSON.stringify([{id:'clip',name:'clip.webm',description:'测试片段',path:'clip.webm',sha256:observationHash('synthetic fixture')}]))
+  const files=loadUserTestFiles(home),browser=await chromium.launch({headless:true,...(existsSync(chromium.executablePath())?{}:{channel:process.platform==='win32'?'msedge':'chrome'})})
+  try{
+    const page=await browser.newPage()
+    await page.route('http://127.0.0.1:12345/**',route=>route.request().url().endsWith('/download')?route.fulfill({body:'exported',headers:{'content-type':'application/octet-stream','content-disposition':'attachment; filename=result.webm'}}):route.fulfill({contentType:'text/html',body:'<input type="file" onchange="document.querySelector(\'output\').textContent=this.files[0].name"><output></output><a href="/download">Export</a>'}))
+    await page.goto('http://127.0.0.1:12345/')
+    const surface=new UserPage(page,'app',join(home,'observations'),'sim-user',files),view=await surface.snapshot()
+    expect(JSON.stringify(view.files)).not.toContain(home)
+    await expect(surface.act({action:'upload',observation:view.id,ref:0,files:['arbitrary-file']})).rejects.toThrow('OUTSIDE')
+    await surface.act({action:'upload',observation:view.id,ref:0,files:['clip']})
+    expect((await surface.snapshot()).text).toContain('clip.webm')
+    const current=await surface.snapshot();await surface.act({action:'click',observation:current.id,ref:current.controls.find(c=>c.label==='Export')!.ref})
+    await expect.poll(async()=>(await surface.snapshot()).downloads?.[0]?.status).toBe('saved')
+    writeFileSync(join(home,'clip.webm'),'changed');expect(()=>loadUserTestFiles(home)).toThrow('CHANGED_OR_OUTSIDE')
+  }finally{await browser.close()}
 })

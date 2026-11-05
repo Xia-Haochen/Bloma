@@ -1,3 +1,4 @@
+import {loadUserTestFiles} from './user-test-files'
 import { trialOutputCap } from './trial-output-cap'
 import {createTrialRequestRecorder} from './trial-request-recorder'
 import {softwareVerificationFingerprint} from '../main/desktop/verification-fingerprint'
@@ -99,7 +100,7 @@ export async function main() {
     writeFileSync(policy, JSON.stringify({ version: 1, models: [rates] }, null, 2))
     writeFileSync(manifestPath, JSON.stringify({ version: 1, at: new Date().toISOString(), source_head: execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),
       runtime_sha256:runtimeHash,runtime_tree_sha256:runtimeTree,thinking:trialThinking,authorization: { source: 'direct_user_confirmation', cap_rmb: capRmb, user_text: process.env.BLOMA_OBSERVATION_AUTHORIZATION_TEXT },
-      selector_sha256: hash(readFileSync(source)), policy_sha256: hash(readFileSync(policy)), pricing_path:pricingPath,pricing_sha256:hash(pricing),quote_reviewed_at:quote.reviewed_at,pricing_source_url:quote.source_url,rates, tasks,
+      selector_sha256: hash(readFileSync(source)), policy_sha256: hash(readFileSync(policy)), pricing_path:pricingPath,pricing_sha256:hash(pricing),quote_reviewed_at:quote.reviewed_at,pricing_source_url:quote.source_url,rates, tasks,user_files_sha256:existsSync(join(root,'user-files.json'))?hash(readFileSync(join(root,'user-files.json'))):null,
       balance_before: availableBalance, model_catalog: models.data.map((r: any) => r.id),
       old_accounting: oldFiles.map(path => ({ path, sha256: hash(readFileSync(path)) })),
       boundaries: `One original request and product-native execution share one ${capRmb} RMB window. Previous policies and ledgers are preserved; B disabled. No product-side paid services or server-side search tools.` }, null, 2))
@@ -108,6 +109,8 @@ export async function main() {
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
   if (manifest.authorization?.cap_rmb !== capRmb || JSON.stringify(manifest.tasks)!==JSON.stringify(tasks) || manifest.selector_sha256 !== hash(readFileSync(source)) || manifest.policy_sha256 !== hash(readFileSync(policy))) throw Error('TRIAL_AUTHORIZATION_OR_CONFIGURATION_CHANGED')
   if(manifest.pricing_path&&hash(readFileSync(manifest.pricing_path))!==manifest.pricing_sha256)throw Error('TRIAL_PRICING_EVIDENCE_CHANGED')
+  if((manifest.user_files_sha256??null)!==(existsSync(join(root,'user-files.json'))?hash(readFileSync(join(root,'user-files.json'))):null))throw Error('USER_TEST_FILES_CHANGED')
+  const userFiles=loadUserTestFiles(root)
   const policyRate = JSON.parse(readFileSync(policy, 'utf8')).models.find((r: any) => r.host === 'api.deepseek.com' && r.model === binding.modelName)
   if (!policyRate || policyRate.cap_rmb !== capRmb) throw Error('TRIAL_POLICY_CAP_MISMATCH')
   const requestMaxTokens = trialOutputCap(capRmb, generationMaxTokens, policyRate)
@@ -176,7 +179,7 @@ export async function main() {
     save(true)
     if(continuation){
       const userSid=`simulated-user-${randomUUID()}`;recordSessionActivity(userSid,project.project_id)
-      const surface=new SimulatedUserSurface(project.project_id,join(taskDir,'simulated-user'),userSid)
+      const surface=new SimulatedUserSurface(project.project_id,join(taskDir,'simulated-user'),userSid,userFiles)
       latestCard=continuation.turn?.decisions?.at(-1)
       if(!latestCard)throw Error('SIMULATED_USER_DECISION_MISSING')
       try{
