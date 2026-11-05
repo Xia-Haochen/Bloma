@@ -30,7 +30,7 @@ export async function prepareObservation(root,compile,userAuthorization){
     const report=JSON.parse(readFileSync(join(folder,reports[0]),'utf8'))
     let boundary
     if(suffix){
-      if(report.status!=='failed'||!report.finished_at||!(typeof report.error==='string'&&(report.error==='Error: SIMULATED_USER_PREVIEW_NOT_LOCAL'||report.error==='Error: SIMULATED_USER_OBSERVATION_REQUIRED'||report.error.startsWith('TimeoutError: elementHandle.'))))throw Error('RETEST_REQUIRES_RECORDED_PREVIEW_FAILURE')
+      if(report.status!=='failed'||!report.finished_at||!(typeof report.error==='string'&&(report.error==='Error: SIMULATED_USER_PREVIEW_NOT_LOCAL'||report.error==='Error: SIMULATED_USER_OBSERVATION_REQUIRED'||report.error==='Error: SIMULATED_USER_DECISION_MISSING'||report.error.startsWith('TimeoutError: elementHandle.'))))throw Error('RETEST_REQUIRES_RECORDED_PREVIEW_FAILURE')
       const ledger=JSON.parse(readFileSync(join(root,'monetary-policy.json.state.json'),'utf8'));if(ledger.entries.some(row=>row.status!=='reported'))throw Error('RETEST_UNSETTLED_REQUEST')
       const project=JSON.parse(readFileSync(join(root,'home/projects.json'),'utf8')).projects.find(p=>p.project_id===report.project_id)
       if(!project||project.current_stage!=='blocked_for_user_decision')throw Error('RETEST_NOT_AT_USER_BOUNDARY')

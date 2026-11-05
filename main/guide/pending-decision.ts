@@ -26,7 +26,7 @@ export function readPendingDecision(projectId: string, sessionId: string):{proje
     return { project_id: projectId, payload: leanScopeDecision(brief, parseLeanSuggestions(prd.data.suggestions, brief.requirements.map(row => row.description))) }
   }
   const ux = readGuideConfirmation('ux', projectId)
-  if (brief.user_confirmed_at && ux?.state === 'pending' && ux.session_id === sessionId) {
+  if (brief.user_confirmed_at && ux && ['pending','adjust'].includes(ux.state) && ux.session_id === sessionId) {
     if (ux.scope_hash !== scope) throw Error('UX_CONFIRMATION_SCOPE_CHANGED')
     const pending = ux.data as unknown as PendingUxConfirm
     if (pending.project_id !== projectId || pending.session_id !== sessionId || pending.prdFingerprint !== scope) throw Error('UX_CONFIRMATION_INVALID')
@@ -34,7 +34,7 @@ export function readPendingDecision(projectId: string, sessionId: string):{proje
       const actual = createHash('sha256').update(readFileSync(join(project.root_path, '00_UX/ux-sketch.html'))).digest('hex')
       if (actual !== pending.sketchHash) throw Error('UX_CONFIRMATION_SKETCH_CHANGED')
     }
-    return { project_id: projectId, payload: uxDecisionPayload(pending),
+    return { project_id: projectId, payload: ux.state==='adjust'?{kind:'ux_feedback',title:'请说明要调整的地方',summary:'此前已选择调整草图，请说明具体意见；当前草图与原需求已保留。',questions:[]}:uxDecisionPayload(pending),
       ...(pending.sketchHash && !pending.generationFailed ? { preview_url: `bloma-file://${projectId}/00_UX/ux-sketch.html` } : {}) }
   }
 }
