@@ -53,6 +53,28 @@ it('preserves the original failure and archive; only exact independently approve
   const other=freezeNativeGuiTests(p.project_id,p.root_path,'acceptance.mjs',['F-001'])
   expect(filterApprovedTestChanges(p.project_id,before,other,nativeTestContractChanges(before,other)).length).toBeGreaterThan(0)
 })
+it('makes a registered contract readable and reviewable before execution without permitting unchecked edits',()=>{
+  rmSync(join(home,'software-stage-checks',p.project_id,'state.json'))
+  const scope=prdScopeFingerprint(readPrdBackplane(p.project_id));updateProject(p.project_id,{ux_confirmation:{prd_fingerprint:scope,design_hash:scope,html_hash:null}})
+  before=registerNativeGuiTests(p.project_id,'acceptance.mjs').native_tests!
+  expect(readTestContractFile(p.project_id,before.digest,'acceptance.mjs').text).toBe(original)
+  expect(testCorrectionView(p.project_id).contracts[0]).toMatchObject({origin:'registered_formal',execution:'not_observed'})
+  expect(()=>readTestContractFile(p.project_id,'0'.repeat(64),'acceptance.mjs')).toThrow('NOT_REGISTERED')
+  writeFileSync(join(p.root_path,'acceptance.mjs'),original.replace("toHaveText('current')","toHaveText('wrong')"))
+  expect(()=>registerNativeGuiTests(p.project_id,'acceptance.mjs')).toThrow('GUI_EXISTING_EXPECTATIONS_CHANGED')
+  const proposed=proposal();expect(()=>applyTestCorrection(p.project_id,proposed.id)).toThrow('NOT_APPROVED')
+  expect(readTestContractFile(p.project_id,before.digest,'acceptance.mjs').text).toBe(original)
+})
+it('keeps frozen contract inspection available during review while mutations stay blocked',async()=>{
+  const policy=createSoftwareCollaborationPolicy(p.project_id,p.root_path,'s'),tools=buildTestCorrectionTools(p.project_id,policy),release=policy.freezeReview()
+  const ctx={projectId:p.project_id,sessionId:'s',requestId:'r',signal:new AbortController().signal,state:createToolState()}
+  try{
+    const result=await tools.find(t=>t.name==='read_test_contract')!.execute({contract_digest:before.digest,file:'acceptance.mjs'},ctx)
+    expect(result.isError).not.toBe(true);expect(JSON.parse(result.output).text).toBe(original)
+    expect((await tools.find(t=>t.name==='apply_test_correction')!.execute({proposal_id:'none'},ctx)).isError).toBe(true)
+    expect((await tools.find(t=>t.name==='read_test_contract')!.execute({}, {...ctx,sessionId:'foreign'})).isError).toBe(true)
+  }finally{release()}
+})
 it('rejects changed evidence, altered scope, working-file interference and corrupted decisions',()=>{
   const a=proposal(),d=decision(a.id);decideTestCorrection(p.project_id,a.id,d)
   writeFileSync(join(p.root_path,'acceptance.mjs'),original+'\n// independent edit')
@@ -75,7 +97,7 @@ it('maker tools have no approval route and reject forged reviewer fields',async(
   expect(JSON.parse((await tools[0].execute({contract_digest:item.contract_digest,file:item.entry},ctx)).output).text).toBe(original)
   const state=readProjectStages(p.project_id);state.attempts[0].executed=false
   writeFileSync(join(home,'software-stage-checks',p.project_id,'state.json'),JSON.stringify({...state,checksum:sha(JSON.stringify(state))}))
-  expect(testCorrectionView(p.project_id).contracts).toEqual([])
+  expect(testCorrectionView(p.project_id).contracts).toEqual([expect.objectContaining({origin:'registered_stage',execution:'not_started',contract_digest:before.digest})])
 })
 it('rejects case removal and undeclared features without altering the original test or creating a pending approval',()=>{
   expect(()=>proposeTestCorrection(p.project_id,{contract_digest:before.digest,file:'acceptance.mjs',old_text:original,new_text:'export default async()=>{}',feature_ids:['F-001'],reason:'remove failing test'})).toThrow()

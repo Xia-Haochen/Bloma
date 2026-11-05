@@ -18,6 +18,13 @@ let home:string,old:string|undefined
 beforeEach(()=>{old=process.env.PROMA_HOME;home=mkdtempSync(join(tmpdir(),'feedback-contract-'));process.env.PROMA_HOME=home})
 afterEach(()=>{if(old===undefined)delete process.env.PROMA_HOME;else process.env.PROMA_HOME=old;rmSync(home,{recursive:true,force:true})})
 const result=(value:unknown)=>value as SoftwareVerification
+it('routes a frozen-contract refusal directly to its readable original without implying execution or PASS',()=>{
+  const native={layout:'project',entry:'tests/a.mjs',directory:'tests',digest:'a'.repeat(64)} as any
+  const error=new NativeTestContractError(['tests/a.mjs'],native)
+  const view=verificationFailure(result({status:'unverified',summary:error.message}),error)
+  expect(view?.next_action).toEqual({tool:'read_test_contract',arguments:{contract_digest:native.digest,file:'tests/a.mjs'}})
+  expect(view?.next).toContain('不依赖测试成功执行')
+})
 function receipt(id:string,r:SoftwareVerification){
   mkdirSync(join(home,'software-verification'),{recursive:true})
   const hash=createHash('sha256').update(JSON.stringify(r)).digest('hex')

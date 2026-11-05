@@ -24,6 +24,20 @@ const script = `export default async({test,page,expect,assert,phase,evidenceDir}
  await test('F-001 create Alice',async()=>{await page.goto('/');await page.locator('#name').focus();await page.keyboard.type('Alice');await page.locator('#save').click();await expect(page.locator('#list')).toHaveText('Alice')});
  await test('F-002 reject blank',async()=>{await page.locator('#name').fill('');await page.locator('#save').click();await expect(page.locator('#status')).toHaveText('required');assert.equal(await page.locator('#list').innerText(),'Alice')});
 }`;
+it('owns registered case lifetimes even when the entry does not await each case',async()=>{
+  writeFileSync(join(project.root_path,'tests/acceptance.mjs'),script.replaceAll('await test(', 'test('))
+  registerNativeGuiTests(project.project_id,'tests/acceptance.mjs',true)
+  const result=await verifySoftwareCandidate(project.project_id,'unawaited-entry',AbortSignal.timeout(60000))
+  expect(result.status,JSON.stringify(result)).toBe('passed')
+  expect(result.core?.host_gui?.case_results?.every(row=>row.status==='passed')).toBe(true)
+},60000)
+it('keeps an unawaited real assertion failure as failed after draining registered cases',async()=>{
+  writeFileSync(join(project.root_path,'tests/acceptance.mjs'),script.replaceAll('await test(', 'test(').replace("toHaveText('Alice')","toHaveText('WRONG')"))
+  registerNativeGuiTests(project.project_id,'tests/acceptance.mjs')
+  const result=await verifySoftwareCandidate(project.project_id,'unawaited-failure',AbortSignal.timeout(60000))
+  expect(result.status,JSON.stringify(result)).toBe('failed')
+  expect(result.core?.host_gui?.case_results?.some(row=>row.status==='failed')).toBe(true)
+},60000)
 beforeEach(async () => {
     previous = process.env.PROMA_HOME;
     home = mkdtempSync(join(tmpdir(), 'bloma-native-gui-'));

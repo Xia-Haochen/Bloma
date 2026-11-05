@@ -52,7 +52,7 @@ export function verificationFailure(result: SoftwareVerification, error?: unknow
   const expected = independent?.expected ?? assertion?.expected ?? cli?.expected ?? (security?.length ? '通过现役静态安全规则；规则命中不等同已证实漏洞' : undefined)
   const actual = independent?.actual ?? assertion?.actual ?? failed?.actual ?? (cli ? {stdout:cli.actual,exit_code:cli.exit_code,stderr:cli.stderr} : security?.length ? security : summary)
   const basis = category==='security_policy'?'static_policy':kind==='runtime'?'host_runtime':category==='test_adapter'?'adapter_contract':explicitAssertion?'assertion':'unresolved'
-  const next_action=category==='environment'?{tool:'inspect_software_environment',arguments:{}}
+  const next_action=error instanceof NativeTestContractError&&error.readOriginal?error.readOriginal:category==='environment'?{tool:'inspect_software_environment',arguments:{}}
     :category==='security_policy'&&security?.[0]?.file?{tool:'read_file',arguments:{path:security[0].file}}
     :category==='product_assertion'&&explicitAssertion?{tool:'read_production_context',arguments:{topic:'features',...(cli?{feature_ids:cli.covers}:{})}}
     :category==='test_adapter'?{tool:'read_production_context',arguments:{topic:'verification-gui'}}
@@ -66,5 +66,5 @@ export function verificationFailure(result: SoftwareVerification, error?: unknow
     paths: release?.differences.map(item => item.path) ?? (error instanceof NativeTestContractError ? error.paths.slice(0, 24) : []),
     allowed_changes: category==='security_policy'?['核对命中规则及具体数据来源；修正应用写法，不关闭规则或宣称已证实漏洞']:category === 'unknown'?['先核对实际界面、进程和日志；原因尚未确定，不修改业务输入或断言'] : category === 'test_adapter' ? ['测试定位的静态字面量', '有界等待时间和导航等待选项；业务输入、目标页面和断言保持冻结'] : category === 'product_assertion' ? ['先核对断言预期的确认来源，再修应用实现；断言不等同业务根因，不得降低已确认预期'] : ['宿主证据目录和执行环境；不得绕过完整性校验'],
     next_tool:next_action.tool,next_action,
-    next: category==='unknown'?'根因尚未确定，先读diagnostics核对进程和日志；涉及GUI时再inspect_app，不把命令行失败送到GUI工具。不放宽预期或超时掩盖问题。':category==='environment'?'先检查实际运行环境，确认缺失的runtime后再准备；不猜参数、不修改业务预期。':release ? '将测试输出写入上下文 evidenceDir；相对截图路径自动落入该目录。不要在成品增加验收痕迹清理逻辑。业务或依赖改变需重新生成候选并实测。' : category === 'test_adapter' ? '使用inspect_app核对实际UI后修正定位或等待适配，再verify_app(script)；若冻结规则拒绝改动，保留契约错误并核对适配范围，不改产品迎合脚本，不改输入和断言。' : '先核对具体证据和确认预期，原因明确后再修复并重新验收。' }
+    next: error instanceof NativeTestContractError&&error.readOriginal?'先读取当前确认范围的冻结原文，核对误改或预期争议；只读不依赖测试成功执行。恢复原文后重验；语义纠正必须独立裁定，不清空契约或降低断言。':category==='unknown'?'根因尚未确定，先读diagnostics核对进程和日志；涉及GUI时再inspect_app，不把命令行失败送到GUI工具。不放宽预期或超时掩盖问题。':category==='environment'?'先检查实际运行环境，确认缺失的runtime后再准备；不猜参数、不修改业务预期。':release ? '将测试输出写入上下文 evidenceDir；相对截图路径自动落入该目录。不要在成品增加验收痕迹清理逻辑。业务或依赖改变需重新生成候选并实测。' : category === 'test_adapter' ? '使用inspect_app核对实际UI后修正定位或等待适配，再verify_app(script)；若冻结规则拒绝改动，保留契约错误并核对适配范围，不改产品迎合脚本，不改输入和断言。' : '先核对具体证据和确认预期，原因明确后再修复并重新验收。' }
 }

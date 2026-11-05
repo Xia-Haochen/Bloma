@@ -39,9 +39,12 @@ export function createSoftwareCollaborationPolicy(projectId: string, root: strin
     const assignment = assignments.get(ctx.sessionId)
     if (!assignment?.active || assignment.readOnly || !assignment.paths.some(owned => overlap(owned, target))) throw new Error('DELEGATION_WRITE_SCOPE_DENIED')
   }
-  const assertCommand = (ctx: ToolContext) => {
+  const assertRead = (ctx: ToolContext) => {
     ctx.signal.throwIfAborted()
     if (ctx.projectId !== projectId || ctx.sessionId !== parentSessionId) throw new Error('COMMAND_INTEGRATOR_ONLY')
+  }
+  const assertCommand = (ctx: ToolContext) => {
+    assertRead(ctx)
     if (reviewFrozen) throw Error('QUALITY_REVIEW_FROZEN: 审阅期间不能运行可能修改候选的命令')
     if ([...assignments.values()].some(assignment => assignment.active && !assignment.readOnly)) throw new Error('COMMAND_WAIT_FOR_WRITERS: 先收齐文件改动，再统一构建/验证；只读调研可继续并行')
   }
@@ -63,7 +66,7 @@ export function createSoftwareCollaborationPolicy(projectId: string, root: strin
     return { release: () => { assignment.active = false }, completionNote: () => assignment.readOnly && assignment.source !== verificationFingerprint(root)
       ? '\n核查期间源码已变化；以上仅供定位，不能作为当前版本通过证据。' : '' }
   }
-  return { prepare, assertFileWrite, assertCommand, experiments,
+  return { prepare, assertFileWrite, assertCommand, assertRead, experiments,
     freezeReview: () => {
       if (reviewFrozen || [...assignments.values()].some(a => a.active && !a.readOnly)) throw Error('QUALITY_REVIEW_WAIT_FOR_WRITERS')
       reviewFrozen = true

@@ -19,7 +19,7 @@ export function verificationToolFeedback(result:SoftwareVerification):ToolFeedba
     reason:failure?.code,fingerprint:failure?digest([category,failure.code,failure.step,...(category==='product_assertion'?[failure.expected,failure.actual]:[])]):undefined,recovery:result.status==='passed'?'none':category==='environment'?'prepare_environment':'inspect'})!
 }
 export function verificationRefusalFeedback(error:unknown):ToolFeedback{
-  const code=String(error).match(/\b(?:PROJECT_STAGE|GUI_NATIVE|GUI_EXISTING|TEST_CORRECTION)_[A-Z_]+/)?.[0]
+  const code=String(error).match(/\b(?:PROJECT_STAGE|GUI_NATIVE|GUI_EXISTING|TEST_CORRECTION|TEST_CONTRACT)_[A-Z_]+/)?.[0]
   const contract=String(error).match(/"contract_digest":"([a-f0-9]{64})"/)?.[1]
   return{schema_version:1,source:'host',execution:'not_run',verification:'unverified',scope:'verification_admission',
     category:code?'invalid_input':'unknown',reason:code??'VERIFICATION_ADMISSION_UNRESOLVED',fingerprint:code?digest([code,contract]):undefined,recovery:code?'correct_input':'inspect'}

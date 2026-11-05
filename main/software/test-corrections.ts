@@ -29,17 +29,29 @@ function mutate<T>(id:string,fn:(state:State)=>T):T{
   try{const state=read(id),result=fn(state);writeTextFileAtomic(join(base(id),'state.json'),JSON.stringify({...state,checksum:hash(JSON.stringify(state))}));return result}
   finally{closeSync(fd);unlinkSync(lock)}
 }
-function contract(id:string,digest:string){
-  const current=scope(id),found=readProjectStages(id).attempts.find(a=>a.scope===current&&a.executed!==false&&a.native.digest===digest)?.native
-  if(found)return found
+/** Contract identity is a registration fact. Execution success is not permission
+ * to read or propose a correction; approval and actual re-verification stay separate. */
+function registeredContracts(id:string){
+  const current=scope(id),contracts=new Map<string,{native:NativeGuiTests;origin:string;execution:string}>()
+  for(const a of readProjectStages(id).attempts.filter(a=>a.scope===current))
+    contracts.set(a.native.digest,{native:a.native,origin:a.executed===true?'executed_stage':'registered_stage',execution:a.executed===false?'not_started':a.executed===true?'attempted':'unknown'})
   if(existsSync(guiSuitePath(id))){
-    const bytes=readFileSync(guiSuitePath(id)),s=parseGuiSuite(JSON.parse(bytes.toString('utf8'))),receipt=join(getPromaHome(),'software-verification',id+'.json')
-    if(s.scope_hash===current&&s.native_tests?.digest===digest&&existsSync(receipt)){
-      const r=JSON.parse(readFileSync(receipt,'utf8'))
-      if(r.state==='complete'&&r.result_hash===hash(JSON.stringify(r.result))&&r.result?.native_plan?.suite_hash===hash(bytes)&&r.result.native_plan.execution==='attempted'&&nativeCheckExecuted(r.result.core?.host_gui))return s.native_tests
+    const bytes=readFileSync(guiSuitePath(id)),suite=parseGuiSuite(JSON.parse(bytes.toString('utf8')))
+    if(suite.scope_hash===current&&suite.native_tests){
+      let execution='not_observed'
+      try{const r=JSON.parse(readFileSync(join(getPromaHome(),'software-verification',id+'.json'),'utf8'))
+        if(r.state==='complete'&&r.result_hash===hash(JSON.stringify(r.result))&&r.result?.native_plan?.suite_hash===hash(bytes))execution=r.result.native_plan.execution==='attempted'?(nativeCheckExecuted(r.result.core?.host_gui)?'observed':'incomplete'):'not_started'
+      }catch{/* Contract remains readable without a trustworthy execution receipt. */}
+      contracts.set(suite.native_tests.digest,{native:suite.native_tests,origin:execution==='observed'?'executed_formal':'registered_formal',execution})
     }
   }
-  throw Error('TEST_CORRECTION_EXECUTED_CONTRACT_REQUIRED')
+  return contracts
+}
+function contract(id:string,digest:string){
+  const entry=registeredContracts(id).get(digest)
+  if(!entry)throw Error('TEST_CONTRACT_NOT_REGISTERED_IN_CURRENT_SCOPE')
+  frozenNativeGuiVersion(id,entry.native)
+  return entry.native
 }
 export function readTestContractFile(id:string,digest:string,path:string){
   const n=contract(id,digest),file=n.files.find(f=>pathOf(n,f.path)===path);if(!file)throw Error('TEST_CORRECTION_FILE_NOT_IN_CONTRACT')
@@ -70,10 +82,8 @@ export function proposeTestCorrection(id:string,input:{contract_digest:string;fi
   return{id:pid,status:'pending',old_hash:proposal.old_hash,new_hash:newHash,expected_sources:proposal.expected_sources,verification:'not_issued',next:'独立宿主裁定前不写回测试、不继续付费重试；原失败记录保留。'}
 }
 export function testCorrectionView(id:string){
-  const current=scope(id),contracts=new Map<string,{native:NativeGuiTests;origin:string}>()
-  for(const a of readProjectStages(id).attempts.filter(a=>a.scope===current&&a.executed!==false))contracts.set(a.native.digest,{native:a.native,origin:'executed_stage'})
-  if(existsSync(guiSuitePath(id))){const s=parseGuiSuite(JSON.parse(readFileSync(guiSuitePath(id),'utf8')));if(s.native_tests&&s.scope_hash===current){try{contract(id,s.native_tests.digest);contracts.set(s.native_tests.digest,{native:s.native_tests,origin:'executed_formal'})}catch{/* an unexecuted formal draft is not an approved correction baseline */}}}
-  return{contracts:[...contracts.values()].map(({native:n,origin})=>({origin,contract_digest:n.digest,entry:pathOf(n,n.entry),files:n.files.map(f=>({path:pathOf(n,f.path),sha256:f.sha256})),cases:n.cases.map(c=>({name:c.name,feature:c.feature}))})),
+  const current=scope(id),contracts=registeredContracts(id)
+  return{contracts:[...contracts.values()].map(({native:n,origin,execution})=>({origin,execution,contract_digest:n.digest,entry:pathOf(n,n.entry),files:n.files.map(f=>({path:pathOf(n,f.path),sha256:f.sha256})),cases:n.cases.map(c=>({name:c.name,feature:c.feature}))})),
     proposals:read(id).proposals.filter(p=>p.scope===current).map(({replacement,before,after,...p})=>({...p,contract_digest:before.digest,replacement_digest:after.digest})),verification:'not_issued'}
 }
 export function pendingTestCorrection(id:string){return read(id).proposals.some(p=>p.scope===scope(id)&&p.status==='pending')}
