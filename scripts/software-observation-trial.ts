@@ -114,10 +114,15 @@ export async function main() {
   const userFiles=loadUserTestFiles(root)
   const policyRate = JSON.parse(readFileSync(policy, 'utf8')).models.find((r: any) => r.host === 'api.deepseek.com' && r.model === binding.modelName)
   if (!policyRate || policyRate.cap_rmb !== capRmb) throw Error('TRIAL_POLICY_CAP_MISMATCH')
-  const requestMaxTokens = trialOutputCap(capRmb, generationMaxTokens, policyRate)
+  let requestMaxTokens = trialOutputCap(capRmb, generationMaxTokens, policyRate)
   for (const old of manifest.old_accounting) if (hash(readFileSync(old.path)) !== old.sha256) throw Error('OLD_ACCOUNTING_CHANGED')
   process.env.BLOMA_MONETARY_POLICY = policy; process.env.BLOMA_MONETARY_EPOCH_DIR = join(root, 'epochs')
-  const liveBalance=observationBalance(await get('models'),await get('user/balance'),continuation?readMonetaryBudget(policy)[0].remaining_rmb:capRmb)
+  const liveModels=await get('models'),liveBalanceReply=await get('user/balance')
+  const liveBalance=observationBalance(liveModels,liveBalanceReply,0)
+  const fundedAllowance=Math.min(Number(liveBalance),continuation?readMonetaryBudget(policy)[0].remaining_rmb:capRmb)
+  requestMaxTokens=trialOutputCap(fundedAllowance,requestMaxTokens,policyRate)
+  const requestReserve=(Math.ceil(policyRate.context_tokens*policyRate.input_rmb_per_million)+Math.ceil(requestMaxTokens*policyRate.output_rmb_per_million))/1e6
+  observationBalance(liveModels,liveBalanceReply,requestReserve)
   if(!continuation&&existsSync(policy+'.state.json'))throw Error('OBSERVATION_LEDGER_NOT_FRESH')
   const existingRequests=existsSync(policy+'.state.json')?JSON.parse(readFileSync(policy+'.state.json','utf8')).entries.length:0
   if(existingRequests>=512)throw Error('TRIAL_REQUEST_LIMIT')
@@ -129,7 +134,7 @@ export async function main() {
     if (existsSync(startedMarker)) throw Error('TRIAL_ACCOUNTING_MISSING')
     return []
   }
-  const control = createRequestBudget(binding.env, { requests: requestLimit, outputTokens: requestMaxTokens, rmb: capRmb })
+  const control = createRequestBudget(binding.env, { requests: requestLimit, outputTokens: requestMaxTokens, rmb: fundedAllowance })
   let latestStage:string|undefined
   const trace=createTrialRequestRecorder(join(root,'trace'),safe,session=>{
     try{const p=findProject(project.project_id);return{project_id:p.project_id,status:p.status,current_stage:latestStage??p.current_stage,persisted_stage:p.current_stage,desktop_phase:p.desktop_phase,source:softwareVerificationFingerprint(p.root_path),review_kind:readQualityLedger(p.project_id).reviews.find(r=>r.child===session)?.kind}}catch{return{phase}}
@@ -162,7 +167,7 @@ export async function main() {
   const sid=prior?.session_id??`observation-${randomUUID()}`,runId=randomUUID(),reportPath=join(taskDir,`${continuation?'user-run':'run'}-${runId}.json`)
   if(!continuation)writeFileSync(projectFile,JSON.stringify({project_id:project.project_id,session_id:sid,root:project.root_path}),{flag:'wx'})
   recordSessionActivity(sid, project.project_id)
-  const report: any = { version: 1, phase, task: which, project_id: project.project_id, session_id: sid, started_at: new Date().toISOString(), status: 'running', paid_cap_rmb: capRmb, budget_window: 'shared-original-window', method:continuation?'simulated-user':'observation-only', carried_requests:existingRequests,balance_before_current:liveBalance, thinking_mode:trialThinking, runtime_sha256: hash(readFileSync(fileURLToPath(import.meta.url))) }
+  const report: any = { version: 1, phase, task: which, project_id: project.project_id, session_id: sid, started_at: new Date().toISOString(), status: 'running', paid_cap_rmb: capRmb, budget_window: 'shared-original-window', method:continuation?'simulated-user':'observation-only', carried_requests:existingRequests,balance_before_current:liveBalance,funded_allowance_rmb:fundedAllowance,next_request_reserve_rmb:requestReserve, thinking_mode:trialThinking, runtime_sha256: hash(readFileSync(fileURLToPath(import.meta.url))) }
   let lastSave=0
   const save = (force=false) => { if(!force&&Date.now()-lastSave<500)return; lastSave=Date.now();writeTextFileAtomic(reportPath, safe({ ...report, operation: control.snapshot(), money: money() })) }
   let latestCard:AgentEvent|undefined,previewUrl:string|undefined,publicReplyText=''

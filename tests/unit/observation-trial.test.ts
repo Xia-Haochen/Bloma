@@ -62,4 +62,5 @@ it('rejects missing, malformed or insufficient balance before admitting a run',(
   for(const total_balance of ['', 'NaN','Infinity','9.99'])expect(()=>observationBalance(models,{is_available:true,balance_infos:[{currency:'CNY',total_balance}]},10)).toThrow('UNAVAILABLE')
   expect(()=>observationBalance(models,{is_available:true},10)).toThrow('UNAVAILABLE')
   expect(observationBalance(models,{is_available:true,balance_infos:[{currency:'CNY',total_balance:'10.00'}]},10)).toBe('10.00')
+  expect(observationBalance(models,{is_available:true,balance_infos:[{currency:'CNY',total_balance:'8.66'}]},4.194304)).toBe('8.66')
 })
