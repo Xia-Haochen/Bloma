@@ -18,7 +18,7 @@
 
 1. 当前会话的 AGENTS/环境说明与 `C:\Users\17359\.codex\memories\proma\CODEX-MEMORY.md`，按入口查看项目记忆。
 2. 本交接。
-3. [Harness 改进与可选建议恢复计划](harness-improvement-plan-20261027.md)。
+3. [Harness 逐批实施记录](harness-improvement-progress-20261027.md)（原计划已清理）。
 4. [Proma-Easy 与 Bloma harness 对照](../../outputs/harness-comparison-20261026.md)。
 
 记忆只是查证入口：Proma 主记忆含 2026-10-10 旧状态，Codex registry 仍可能记着 `9206cda`；它们不能覆盖本次实查的工程基线，也不能让接手者倒退或重启历史实验。

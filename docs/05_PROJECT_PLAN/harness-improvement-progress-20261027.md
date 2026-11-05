@@ -8,6 +8,10 @@
 
 日期：2026-10-27，Asia/Shanghai。接手基线 `sprint2 / ee4891c`（以 Git 实际父提交校正）。按 [执行交接](harness-improvement-handoff-20261027.md) 继续；用户原有 `production-workflow-v2-20261020.md` 两行改动不纳入提交。不 push，不发付费模型请求，不修改真实 home 的项目、账本或进程。
 
+## 批次 0：可选建议恢复（历史结果）
+
+原计划中的批次0证据保留于此：工程提交 `840f8eb`，短任务单同轮生成0–3条可选建议，默认不选，宿主按保存的ID合并后重新确认；未采纳不进入制作范围。定向7文件32项通过（含一次Pi超时后单文件复跑，不重复计数），类型/构建/docs检查通过，隔离Electron渲染、恢复、键盘、IPC和窄屏7组通过。日志为 `run-artifacts/lean-suggestions-tests-20261027.log`、`lean-suggestions-production-serial-20261027.log`、`lean-suggestions-native-final-20261027.log`，原生脚本 `scripts/verify-lean-suggestions.mjs`。这是原批次工程与替身验证，不证明真实建议质量或完整交付；原规划可从清理前Git版本追溯。
+
 ## 批次 1：验收证据隔离与诊断
 
 - 原生测试和开发脚本上下文增加宿主提供的工程外 `evidenceDir`；`page.screenshot` 和 locator 截图的相对路径自动落入该目录，越界绝对路径拒绝。正式验收、开发观察及 initial/reopened 证据分开，关闭重开共享本次隔离数据。平台截图也写工程外；旧动作观察器默认截图改用其隔离临时目录。

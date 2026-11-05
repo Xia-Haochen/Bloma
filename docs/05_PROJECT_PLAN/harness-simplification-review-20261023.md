@@ -2,7 +2,7 @@
 
 结论：需要削减默认流程和重复协议。Pi 接入只替换执行内核，不会自动消除向导、草图和审查阶段的冗余。下一刀优先落在草图阶段，不能把生成失败包装成成功，也不靠增加提示词和重试预算解决协议过重。
 
-后续完整方案见 [完整流程缩减计划](C:/Users/17359/OneDrive/Desktop/guide-agent-platform-sprint0/docs/05_PROJECT_PLAN/workflow-reduction-plan-20261023.md)。该文件是待实施计划，不代表本复盘中的缺陷修复已经完成流程重构。
+后续实施结果见[流程缩减实施记录](workflow-reduction-implementation-20261023.md)。原待实施计划已清理；该实现亦属历史lean-v1阶段，现役流程见[当前索引](README.md)。
 
 ## 本次真实草图故障
 
