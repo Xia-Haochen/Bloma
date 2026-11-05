@@ -8,11 +8,13 @@ import {prepareSoftwareRelease,readSoftwareCandidate,verifyReleaseSource,runtime
 import {prepareDataUpdate} from '../main/software/data-update'
 import {softwareEnvironment} from '../main/software/command-runtime'
 import {electronEntry} from '../main/software/electron-entry'
+import {checkMuteContrast,requireMuteContrast,setDoodleMuted} from './doodle-mute-check'
 import {isolateNativeTestWindows} from '../main/software/native-window-isolation'
 
 /** Independent adapter for the second generated UI. Business oracles stay the
  * same; no generated acceptance helpers or simulated sound engine are used. */
-export async function inspectRetestDoodle(projectId:string,folder:string,muteSelector?:string,baselineSnapshot?:string){
+export async function inspectRetestDoodle(projectId:string,folder:string,muteSelector?:string,baselineSnapshot?:string,muteSoundSelector?:string){
+  requireMuteContrast(muteSelector,muteSoundSelector)
   mkdirSync(folder,{recursive:true});const prefix=join(folder,'actual-'+randomUUID())
   const state=readLongtermState(projectId),milestone=state?.milestones.find(m=>m.id===state.current_id)
   const currentRoot=findProject(projectId).root_path,pending=milestone?.status==='awaiting_confirmation'&&milestone.candidate_id?await readSoftwareCandidate(projectId,milestone.candidate_id):undefined
@@ -57,23 +59,37 @@ export async function inspectRetestDoodle(projectId:string,folder:string,muteSel
     await page.locator('#timbre-6d8268').selectOption(first);await page.locator('#timbre-c58a5b').selectOption(second)
     const response=page.waitForResponse(r=>r.url().endsWith('/api/mapping')&&r.request().method()==='POST');await page.locator('#save-mapping').click();const saved=await response;expect(saved.ok()).toBe(true);const payload=await saved.json();await expect(page.locator('body')).toContainText('当前版本 '+payload.state.currentVersionId)
   }
-  const play=async(id:string,mode:string)=>{
-    const row=page.locator(`.art-item[data-artwork-id="${id}"]`);await row.locator('.ap-rule-select').selectOption(mode);await resetAudio();await row.locator('.ap-play').click()
-    await page.waitForTimeout(200)
+  const observeAudio=async(action:()=>Promise<unknown>)=>{
+    await resetAudio();await action();await page.waitForTimeout(300)
     const wait=await page.evaluate(()=>{const a=(window as any).__independentDoodleAudio;return Math.max(0,...a.events.map((e:any)=>e.stop))-Math.max(0,...a.contexts.map((c:AudioContext)=>c.currentTime))})
-    expect(wait).toBeLessThan(15);await page.waitForTimeout(Math.max(100,(wait+.2)*1000))
-    const audio=await page.evaluate(()=>{const a=(window as any).__independentDoodleAudio;return{events:a.events,samples:a.samples,peak:a.peak,rms:Math.sqrt(a.sum/Math.max(a.samples,1))}})
+    expect(wait).toBeLessThan(15);await page.waitForTimeout(Math.max(300,(wait+.2)*1000))
+    return page.evaluate(()=>{const a=(window as any).__independentDoodleAudio;return{events:a.events,samples:a.samples,peak:a.peak,rms:Math.sqrt(a.sum/Math.max(a.samples,1))}})
+  }
+  const play=async(id:string,mode:string)=>{
+    const row=page.locator(`.art-item[data-artwork-id="${id}"]`);await row.locator('.ap-rule-select').selectOption(mode)
+    const audio=await observeAudio(()=>row.locator('.ap-play').click())
     expect(audio.events.length).toBeGreaterThan(0);expect(audio.samples).toBeGreaterThan(1024);expect(audio.peak).toBeGreaterThan(.0001);expect(audio.rms).toBeGreaterThan(.00001);return audio
   }
   try{
     await start();report.data_dir=dataDir;const prior=data();report.prior_artworks=prior.artworks.length
     if(baselineSnapshot){const baseline=JSON.parse(readFileSync(baselineSnapshot,'utf8'));for(const art of baseline.artworks)expect(prior.artworks.find((a:any)=>a.id===art.id)).toMatchObject(art);for(const version of baseline.mappingVersions)expect(prior.mappingVersions.find((v:any)=>v.id===version.id)).toMatchObject(version);expect(prior.currentVersionId).toBe(baseline.currentVersionId);report.checks.push('增量版本启动前后对照基线快照：旧画、笔画、原版本引用和历史映射均保留')}
     await map(['60','80','100'],'sine','sine');const oldVersion=data().mappingVersions.at(-1)
-    if(muteSelector){const control=page.locator(muteSelector);await control.check();await expect(control).toBeChecked();await resetAudio()}
+    if(muteSelector)await setDoodleMuted(page,muteSelector,false)
     await page.locator('#new-doodle').click();await draw('#6d8268',0,350);await draw('#c58a5b',80,0);await expect(page.locator('#stroke-list li')).toHaveCount(2)
-    if(muteSelector){await page.waitForTimeout(400);const silent=await page.evaluate(()=>{const a=(window as any).__independentDoodleAudio;return{events:a.events.length,peak:a.peak}});expect(silent.peak).toBeLessThan(.00001);expect(silent.events).toBe(0);report.muted_drawing=silent;await page.locator(muteSelector).uncheck()}
+    if(muteSelector){
+      report.mute_contrast=await checkMuteContrast(page,muteSelector,()=>observeAudio(()=>page.locator(muteSoundSelector!).click()))
+      await page.locator('#new-doodle').click();await setDoodleMuted(page,muteSelector,true);await resetAudio();await draw('#6d8268',0,350);await draw('#c58a5b',80,0);await expect(page.locator('#stroke-list li')).toHaveCount(2)
+      await page.waitForTimeout(400);const silent=await page.evaluate(()=>{const a=(window as any).__independentDoodleAudio;return{events:a.events.length,peak:a.peak}});expect(silent.peak).toBeLessThan(.00001);report.muted_drawing=silent}
     const save=page.waitForResponse(r=>r.url().endsWith('/api/artworks')&&r.request().method()==='POST');await page.locator('#save-artwork').click();expect((await save).ok()).toBe(true)
     const saved=data(),art=saved.artworks.at(-1);expect(art.strokes).toHaveLength(2);expect(art.mappingVersionId).toBe(oldVersion.id)
+    if(muteSelector){
+      // Save while muted, then close the actual process before unmuting.
+      await app!.close();app=undefined;await start()
+      expect(data().artworks.find((a:any)=>a.id===art.id)).toEqual(art)
+      await setDoodleMuted(page,muteSelector,false)
+      report.checks.push('有效有声/静音/恢复对照；静音期间绘制并保持静音保存，进程重开后记录保留并可回放')
+      report.mute_limits=['未据此验证播放中切换或开关跨重启持久化；按确认范围另测']
+    }
     const old=await play(art.id,'own');expect(new Set(old.events.map((e:any)=>e.type))).toEqual(new Set(['sine']))
     await map(['160','180','200'],'square','sawtooth');const fresh=await play(art.id,'current')
     expect(new Set(fresh.events.map((e:any)=>e.type))).toEqual(new Set(['square','sawtooth']))

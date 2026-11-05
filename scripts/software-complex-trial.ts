@@ -227,7 +227,7 @@ export async function main() {
       if (which !== 'interaction-doodle') throw Error('FAULT_ADAPTER_NOT_AVAILABLE')
       report.independent = await inspectDoodleFaults(project.project_id, join(taskDir, 'independent'))
     } else if(phase==='inspect'&&process.env.BLOMA_TRIAL_UI_ADAPTER==='retest-doodle'){
-      report.independent=await inspectRetestDoodle(project.project_id,join(taskDir,'independent'),process.env.BLOMA_TRIAL_MUTE_SELECTOR,process.env.BLOMA_TRIAL_BASELINE_DATA)
+      report.independent=await inspectRetestDoodle(project.project_id,join(taskDir,'independent'),process.env.BLOMA_TRIAL_MUTE_SELECTOR,process.env.BLOMA_TRIAL_BASELINE_DATA,process.env.BLOMA_TRIAL_MUTE_SOUND_SELECTOR)
     } else if (phase === 'inspect') {
       report.independent=customCases?which==='interaction-doodle'?await inspectDoodle(project.project_id,join(taskDir,'independent')):{status:'unverified',reason:'需按当前样本独立oracle执行实际交互；不使用旧任务的专用验收器冒充通过。'}:which==='primary'?await inspectPrimary(project.project_id,join(taskDir,'independent'),process.env.BLOMA_COMPLEX_REGRESSION==='1'):await inspectDocuments(project.project_id,join(taskDir,'independent'))
     } else if (phase === 'extend-execution') {
