@@ -10,6 +10,7 @@ import { syncDocuments } from '../../../main/project/document-sync'
 import { parseLeanBrief } from '../../../main/guide/lean-brief'
 import { createSoftwareCollaborationPolicy } from '../../../main/software/collaboration-policy'
 import { createQualityReview, readQualityLedger, qualityLedgerPath } from '../../../main/software/quality-review'
+import { verifySoftwareCandidate } from '../../../main/software/verification'
 import { buildSoftwareAgentTools } from '../../../main/software/agent-tools'
 import { buildLeanCliTool, cliSuitePath } from '../../../main/desktop/lean-cli-check'
 import { registerParentLoopContext, disposeParentDelegationState, settleParentDelegationRuns, findDelegation } from '../../../main/agent/delegation/agent-collaboration'
@@ -96,6 +97,25 @@ it('parent cannot forge a C submission; no-source opinions remain disputed/sugge
   expect(closeout.next_tool).toBe('verify_app')
   await expect(quality.parentTools.find(t => t.name === 'check_quality_finding')!.execute({ finding_id: ledger.findings[0].id, case_name: 'sum' }, ctx())).rejects.toThrow('UNGROUNDED')
 })
+it('projects current observed evidence into a finding without repeating verification, but reexecutes after source changes', async () => {
+  await review()
+  const id = readQualityLedger(project.project_id).findings[0].id
+  writeFileSync(join(project.root_path, 'app.cjs'), 'console.log(5)')
+  const verified = await verifySoftwareCandidate(project.project_id, 'r', ctx().signal)
+  expect(verified.status).toBe('passed')
+  const check = quality.parentTools.find(t => t.name === 'check_quality_finding')!
+  for (let i = 0; i < 2; i++) {
+    const reply = await check.execute({ finding_id: id, case_name: 'sum' }, ctx())
+    expect(reply.isError).toBe(false)
+    expect(readQualityLedger(project.project_id).findings[0].checks.at(-1)?.candidate).toBe(verified.candidate!.id)
+  }
+  writeFileSync(join(project.root_path, 'app.cjs'), 'console.log(999)')
+  await check.execute({ finding_id: id, case_name: 'sum' }, ctx())
+  const changed = readQualityLedger(project.project_id).findings[0]
+  expect(changed.disposition).toBe('confirmed')
+  expect(changed.checks.at(-1)?.outcome).toBe('failed')
+  expect(changed.checks.at(-1)?.candidate).not.toBe(verified.candidate!.id)
+}, 120000)
 it('does not mark an unobserved reproduction as not reproduced', async () => {
   await review()
   const id = readQualityLedger(project.project_id).findings[0].id

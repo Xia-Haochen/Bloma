@@ -190,14 +190,17 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       if (!finding || ['suggestion', 'disputed'].includes(finding.disposition)) throw Error('QUALITY_FINDING_UNGROUNDED')
       if (finding.independent) {
         if (finding.disposition === 'superseded' || finding.independent.case_id !== input.case_name || finding.independent.design_version !== independentDesignVersion(projectId)) throw Error('INDEPENDENT_RETEST_CONTRACT_CHANGED')
-        const result = await verifySoftwareCandidate(projectId, ctx.requestId, ctx.signal, true)
+        const result = await verifySoftwareCandidate(projectId, ctx.requestId, ctx.signal)
         const updated = readQualityLedger(projectId).findings.find(f => f.id === finding.id)!
         return { output: JSON.stringify({ finding: updated, status: result.status, summary: result.summary }), isError: result.status !== 'passed' || updated.disposition !== 'closed' }
       }
       const before = await identity(projectId, ctx.signal), rules = rulesVersion(projectId), baseline = finding.checks.find(c => c.outcome === 'failed')
       if (!baseline && !sameQualityScope(finding.identity, before)) throw Error('QUALITY_REPRODUCTION_SCOPE_CHANGED')
       if (baseline && (baseline.case_name !== input.case_name || baseline.rules !== rules || baseline.identity.target !== before.target || baseline.identity.environment !== before.environment)) throw Error('QUALITY_RETEST_CONTRACT_CHANGED')
-      const result = await verifySoftwareCandidate(projectId, ctx.requestId, ctx.signal, true)
+      // Finding assessment consumes the same host evidence as verification.
+      // Its cache validates source, rules, environment, request and receipt;
+      // changed inputs or failed/incomplete evidence still execute afresh.
+      const result = await verifySoftwareCandidate(projectId, ctx.requestId, ctx.signal)
       const after = await identity(projectId, ctx.signal)
       if (!same(before, after) || rules !== rulesVersion(projectId)) throw Error('QUALITY_CHECK_INPUT_CHANGED')
       const outcome = observedQualityFinding(result, finding, input.case_name)
