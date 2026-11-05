@@ -5,6 +5,14 @@ import { writeTextFileAtomic } from '../../storage/json-store'
 import { findProject } from '../project/project-service'
 
 interface ExecutionLimits { version: 1; operation: string; requests: number; output: number; reason: string; at: string }
+/** Translate an explicitly admitted outer window into cumulative inner limits.
+ * This never grants money or resets usage; callers must keep monetary admission. */
+export function fundedExecutionLimits(current:{requests:number;output:number;limits:{requests:number;output:number}},window:{remainingRequests:number;remainingRmb:number;outputRmbPerMillion:number}){
+  if(![current.requests,current.output,window.remainingRequests].every(n=>Number.isSafeInteger(n)&&n>=0)
+    ||!Number.isFinite(window.remainingRmb)||window.remainingRmb<=0||!Number.isFinite(window.outputRmbPerMillion)||window.outputRmbPerMillion<=0)throw Error('EXECUTION_WINDOW_INVALID')
+  return{requests:Math.min(4096,Math.max(current.limits.requests,current.requests+window.remainingRequests)),
+    output:Math.min(16777216,Math.max(current.limits.output,current.output+Math.floor(window.remainingRmb*1e6/window.outputRmbPerMillion)))}
+}
 const path = (id: string) => { if (!/^[a-zA-Z0-9_-]+$/.test(id)) throw Error('EXECUTION_LIMITS_PROJECT_INVALID'); return join(getPromaHome(),'software-execution-limits',id+'.json') }
 function validate(value: ExecutionLimits) {
   if (!value || value.version !== 1 || typeof value.operation !== 'string'
