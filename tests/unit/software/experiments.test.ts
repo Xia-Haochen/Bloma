@@ -47,6 +47,14 @@ it('keeps reviews read-only and refuses escapes and unsupported evidence claims'
   expect((await tools.find(t=>t.name==='write_file')!.execute({path:'../escape.js',content:'bad'},ctx('c'))).isError).toBe(true)
   lease.release()
 })
+it('retains unfinished artifacts for parent review without inventing an experiment verdict',async()=>{
+  const policy=createSoftwareCollaborationPolicy(project.project_id,project.root_path,'parent'),lease=policy.prepare({parent:ctx(),args:{task:'unfinished',experiment:{criterion:'not yet checked'}},childSessionId:'c',delegationId:'d'})
+  await policy.experiments.tools('c').find(t=>t.name==='write_file')!.execute({path:'partial.py',content:'print(5)'},ctx('c'))
+  expect(lease.completionNote?.()).toContain('unverified');lease.release()
+  const report=JSON.parse((await policy.experiments.parentTool.execute({session_id:'c'},ctx())).output)
+  expect(report.result).toBeUndefined();expect(report.unfinished.artifacts[0].path).toBe('partial.py')
+  expect(JSON.parse((await policy.experiments.parentTool.execute({session_id:'c',artifact:'partial.py'},ctx())).output).text).toBe('print(5)')
+})
 it('cancels an in-flight experiment when its delegation lease ends',async()=>{
   const policy=createSoftwareCollaborationPolicy(project.project_id,project.root_path,'parent'),lease=policy.prepare({parent:ctx(),args:{task:'cancel probe',experiment:{criterion:'must stop'}},childSessionId:'c',delegationId:'d'})
   const tools=policy.experiments.tools('c'),child=ctx('c')

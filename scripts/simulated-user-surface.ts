@@ -46,7 +46,7 @@ export class UserPage {
     this.observation=randomUUID();mkdirSync(this.folder,{recursive:true})
     const bytes=await this.page.screenshot({fullPage:false});writeFileSync(join(this.folder,this.observation+'.png'),bytes)
     const view:UserView={id:this.observation,kind:this.kind,text:(await this.page.locator('body').innerText()).slice(0,16000),controls,
-      files:this.files.map(({id,name,description})=>({id,name,description})),downloads:this.downloads.map(row=>({...row})),image:[savePastedImage(this.session,bytes.toString('base64'),'png')],audio:{status:'not_measured',limit:'截图和DOM不能证明实际音频，请勿声称已听到声音'}}
+      files:(this.kind==='app'?this.files:[]).map(({id,name,description})=>({id,name,description})),downloads:this.downloads.map(row=>({...row})),image:[savePastedImage(this.session,bytes.toString('base64'),'png')],audio:{status:'not_measured',limit:'截图和DOM不能证明实际音频，请勿声称已听到声音'}}
     writeFileSync(join(this.folder,this.observation+'.json'),JSON.stringify(view));return view
   }
   async act(action:UserAction){

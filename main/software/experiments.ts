@@ -28,7 +28,8 @@ export function createExperiments(projectId:string,projectRoot:string,parent:str
     if(meta.parent!==parent)throw Error('EXPERIMENT_OWNER_MISMATCH')
     const result=existsSync(join(folder,'result.json'))?JSON.parse(readFileSync(join(folder,'result.json'),'utf8')):undefined
     const runs=readdirSync(folder).filter(name=>/^run-.*\.json$/.test(name)).map(name=>{const row=JSON.parse(readFileSync(join(folder,name),'utf8'));return{file:name,...row,stdout:row.stdout?.slice(-2000),stderr:row.stderr?.slice(-1000)}})
-    return{...meta,result,runs,source_changed:meta.source!==softwareVerificationFingerprint(projectRoot),product_verified:false}
+    const unfinished=existsSync(join(folder,'unfinished.json'))?JSON.parse(readFileSync(join(folder,'unfinished.json'),'utf8')):undefined
+    return{...meta,result,unfinished,runs,source_changed:meta.source!==softwareVerificationFingerprint(projectRoot),product_verified:false}
   }
   const prepare=(child:string,args:DelegateAgentArgs)=>{
     const spec=args.experiment
@@ -50,12 +51,26 @@ export function createExperiments(projectId:string,projectRoot:string,parent:str
       writeFileSync(metaFile,JSON.stringify({projectId,parent,session:child,source,question:args.task,criterion:spec.criterion,inputs:spec.inputs??[]}),{flag:'wx'})
     }
     active.set(child,{root,folder,cancel:new AbortController(),source,question:args.task,criterion:spec.criterion,inputsKey:JSON.stringify(spec.inputs??[])})
-    return{release:()=>{active.get(child)?.cancel.abort();active.delete(child)},completionNote:()=>{const saved=read(child);return '\n实验交接（Agent解释不签发产品PASS）：'+JSON.stringify({session:child,result:saved.result,run_count:saved.runs.length,source_changed:saved.source_changed,read_tool:'read_experiment'})}}
+    const sealUnfinished=()=>{
+      if(existsSync(join(folder,'result.json')))return
+      const id=randomUUID(),destination=join(folder,'evidence',id);mkdirSync(destination,{recursive:true})
+      const artifacts:Array<{path:string;stored:string;sha256:string;bytes:number}>=[];let bytes=0
+      const visit=(dir:string,prefix='',depth=0)=>{for(const item of readdirSync(dir,{withFileTypes:true})){
+        if(artifacts.length>=32||item.isSymbolicLink()||['node_modules','.venv','.git'].includes(item.name))continue
+        const path=prefix+item.name,file=join(dir,item.name)
+        if(item.isDirectory()){if(depth<2)visit(file,path+'/',depth+1);continue}
+        if(!item.isFile()||statSync(file).size>16*1024*1024||bytes+statSync(file).size>32*1024*1024)continue
+        const target=join(destination,String(artifacts.length));copyFileSync(file,target);const data=readFileSync(target);bytes+=data.length
+        artifacts.push({path,stored:`evidence/${id}/${artifacts.length}`,sha256:sha(data),bytes:data.length})
+      }}
+      visit(root);writeFileSync(join(folder,'unfinished.json'),JSON.stringify({id,status:'unverified',reason:'child ended without a sealed interpretation',artifacts,at:new Date().toISOString()}))
+    }
+    return{release:()=>{active.get(child)?.cancel.abort();sealUnfinished();active.delete(child)},completionNote:()=>{sealUnfinished();const saved=read(child);return '\n实验交接（Agent解释不签发产品PASS）：'+JSON.stringify({session:child,result:saved.result,unfinished:saved.unfinished,run_count:saved.runs.length,source_changed:saved.source_changed,read_tool:'read_experiment'})}}
   }
   const tools=(child:string):AgentLoopTool[]=>{
     const x=info(child)
     const check=(ctx:ToolContext)=>{authorize(ctx);if(ctx.sessionId!==child)throw Error('EXPERIMENT_OWNER_MISMATCH')}
-    const invalidate=()=>{const file=join(x.folder,'result.json');if(existsSync(file))unlinkSync(file)}
+    const invalidate=()=>{const file=join(x.folder,'result.json');if(existsSync(file))unlinkSync(file);const unfinished=join(x.folder,'unfinished.json');if(existsSync(unfinished))unlinkSync(unfinished)}
     const files=buildAgentTools({projectId,role:'implement',realFullstackVariant:true,software:true,assertFileWrite:(_path,ctx)=>check(ctx)})
       .filter(t=>['read_file','write_file','edit_file','list_files','find','grep','web_fetch'].includes(t.name))
       .map(t=>({...t,execute:async(input:Record<string,unknown>,ctx:ToolContext)=>{check(ctx);if(['write_file','edit_file'].includes(t.name))invalidate();return runWithProjectRootOverride(x.root,()=>t.execute(input,ctx))}}))
@@ -80,7 +95,7 @@ export function createExperiments(projectId:string,projectRoot:string,parent:str
   const parentTool:AgentLoopTool={name:'read_experiment',description:'读取实验子任务的事实、结论和封存产物。可按artifact读取UTF-8代码再用正常文件工具集成；源版本变化时重新核对适用性，不将实验结论当产品验收。',input_schema:{type:'object',required:['session_id'],properties:{session_id:{type:'string'},artifact:{type:'string'}}},execute:async(input,ctx)=>{
     if(ctx.projectId!==projectId||ctx.sessionId!==parent)throw Error('EXPERIMENT_PARENT_REQUIRED')
     const id=String(input.session_id),result=read(id)
-    if(input.artifact!==undefined){const artifact=result.result?.artifacts.find((a:{path:string})=>a.path===input.artifact);if(!artifact||artifact.bytes>128*1024)throw Error('EXPERIMENT_ARTIFACT_UNAVAILABLE')
+    if(input.artifact!==undefined){const artifact=(result.result??result.unfinished)?.artifacts.find((a:{path:string})=>a.path===input.artifact);if(!artifact||artifact.bytes>128*1024)throw Error('EXPERIMENT_ARTIFACT_UNAVAILABLE')
       const file=bounded(valid(id),artifact.stored),bytes=readFileSync(file);if(sha(bytes)!==artifact.sha256)throw Error('EXPERIMENT_EVIDENCE_CHANGED')
       return{output:JSON.stringify({path:artifact.path,sha256:artifact.sha256,text:bytes.toString('utf8'),source_changed:result.source_changed,product_verified:false})}}
     return{output:JSON.stringify(result)}

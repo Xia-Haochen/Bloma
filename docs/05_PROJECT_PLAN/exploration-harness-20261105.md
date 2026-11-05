@@ -41,3 +41,7 @@ Electron预览handler和模拟用户共用resolvePreviewFile：授权项目、re
 停止后独立解码out_concat.mp4通过；元数据2秒、H.264、AAC，0.5秒红/1.5秒蓝、非静音音轨。读取38帧，不宣称逐帧同步已验；原片0–2秒恒红，不能证明准确截取起点。没有将独立检查回传给子Agent补成功。
 
 窗口累计22请求、0.570345元，剩余9.429655元，全部reported。完整报告：[RETEST-exploration-v1.md](C:/Users/17359/.bloma-validation/video-boundary-20261105-10rmb/RETEST-exploration-v1.md)。待补：UI动作失败的观察反馈、限额前实验交接、带时间变化的素材、真实主Agent整合及产品交付；本轮仅记录，不隐去失败续跑。
+
+## 完整链路复测前补强
+
+用户要求尝试完整测试。普通UI操作TimeoutError现在保留原始回执，向用户代理返回无工程细节的“操作未成功”观察，允许其查看新截图并反馈；完整性/权限/取消错误仍停止，不使用force点击。草图只评价布局，真实文件输入在app阶段开放。实验到限或未提交解释时，宿主封存有界产物清单并标unverified，主负责人可读取，不冒充子Agent结论或产品PASS。明确复测仍使用独立attempt，原费用和失败不覆盖。类型与4文件27项回归通过，日志run-artifacts/fullchain-preflight-tests-20261105.log。

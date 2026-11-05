@@ -44,6 +44,15 @@ it('rejects a made-up successful trial and stops at a bounded number of actions'
   await expect(simulateUserSession({...deps,decide:async()=>({action:'finish',observation:'v',text:'都好了'})})).rejects.toThrow('TRIAL_REQUIRED')
   expect((await simulateUserSession({...deps,maxSteps:2,decide:async()=>({action:'wait',observation:'v',milliseconds:1})})).status).toBe('user_step_limit')
 })
+it('returns a UI timeout to user observation without leaking engine errors or forcing the click',async()=>{
+  let turns=0,decisions=0;const rows:unknown[]=[]
+  const result=await simulateUserSession({goal:'保存',signal:new AbortController().signal,
+    turn:async reply=>{turns++;return reply?{failed:'producer stopped'}:{card:card('ux_confirm')}},
+    view:async()=>({id:'v',kind:'preview',text:'保存',controls:[]}),
+    decide:async state=>{if(++decisions===1)return{action:'click',observation:'v',ref:0};expect(JSON.stringify(state.history)).not.toContain('private-engine-path');expect(JSON.stringify(state.history)).toContain('没有成功');return{action:'reply',observation:'v',text:'按钮被遮挡了，请调整布局。'}},
+    act:async()=>{const error=new Error('private-engine-path');error.name='TimeoutError';throw error},record:row=>rows.push(row)})
+  expect(result.status).toBe('product_stopped');expect(turns).toBe(2);expect(rows.some(row=>(row as any).type==='ui_action_failed')).toBe(true)
+})
 it('operates actual visible controls and canvas, captures evidence and rejects stale or arbitrary actions',async()=>{
   const browser=await chromium.launch({headless:true,...(existsSync(chromium.executablePath())?{}:{channel:process.platform==='win32'?'msedge':'chrome'})})
   try{
