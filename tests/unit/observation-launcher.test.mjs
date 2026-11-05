@@ -42,3 +42,13 @@ it('prepares simulated-user mode separately without overwriting the original run
   expect(readFileSync(join(root,'monetary-policy.json.state.json'),'utf8')).toBe('old spend')
   await expect(prepareObservation(root,async()=>{},'再次')).rejects.toThrow('NOT_FRESH')
 })
+it('records an explicit preview-failure retest without resetting old spend or attempt markers',async()=>{
+  const {mkdirSync}=await import('node:fs');mkdirSync(join(root,'task'));mkdirSync(join(root,'home'))
+  writeFileSync(join(root,'manifest.json'),JSON.stringify({tasks:{task:{}},runtime_tree_sha256:'old'}))
+  writeFileSync(join(root,'monetary-policy.json'),'policy');writeFileSync(join(root,'monetary-policy.json.state.json'),'{"entries":[{"status":"reported","charged_micro_rmb":385620}]}')
+  writeFileSync(join(root,'task/project.json'),'project');writeFileSync(join(root,'home/projects.json'),JSON.stringify({projects:[{project_id:'p',status:'active',current_stage:'blocked_for_user_decision'}]}))
+  writeFileSync(join(root,'task/user-run-first.json'),JSON.stringify({status:'failed',error:'Error: SIMULATED_USER_PREVIEW_NOT_LOCAL',project_id:'p',session_id:'s',started_at:'2026-11-05T10:00:00Z',finished_at:'2026-11-05T10:01:00Z'}))
+  writeFileSync(join(root,'user-run-claimed.json'),'old claim');const previous=process.env.BLOMA_OBSERVATION_RETEST;process.env.BLOMA_OBSERVATION_RETEST='preview-fixed'
+  try{await prepareObservation(root,async options=>writeFileSync(options.outfile,'// test'),'测试新版本');expect(readObservationRuntime(root,true).migration.boundary.project_id).toBe('p');expect(readFileSync(join(root,'user-run-claimed.json'),'utf8')).toBe('old claim');expect(readFileSync(join(root,'monetary-policy.json.state.json'),'utf8')).toContain('385620')}
+  finally{if(previous===undefined)delete process.env.BLOMA_OBSERVATION_RETEST;else process.env.BLOMA_OBSERVATION_RETEST=previous}
+})

@@ -33,8 +33,10 @@ export function claimObservationRun(root:string,identity:unknown){
 export function requireObservationPhase(phase:string){
   if(!['preflight','run','simulate'].includes(phase))throw Error('OBSERVATION_PHASE_REFUSED')
 }
+export function observationAttemptSuffix(){const id=process.env.BLOMA_OBSERVATION_RETEST??'';if(id&&!/^[a-z0-9-]{1,40}$/.test(id))throw Error('RETEST_ID_INVALID');return id?'-'+id:''}
 export function assertSimulatedContinuation(root:string,thinking:string,runtimeTree:string){
-  const frozen=JSON.parse(readFileSync(join(root,'user-runtime.json'),'utf8')),m=frozen.migration
+  const suffix=observationAttemptSuffix()
+  const frozen=JSON.parse(readFileSync(join(root,'user-runtime'+suffix+'.json'),'utf8')),m=frozen.migration
   const manifest=JSON.parse(readFileSync(join(root,'manifest.json'),'utf8')),task=Object.keys(manifest.tasks)[0]
   if(frozen.digest!==runtimeTree||manifest.thinking!==thinking||!m?.authorization?.trim()
     ||m.manifest_sha256!==observationHash(readFileSync(join(root,'manifest.json')))
@@ -43,8 +45,8 @@ export function assertSimulatedContinuation(root:string,thinking:string,runtimeT
     ||typeof m.report!=='string'||!m.report.startsWith(task+'/')&&!m.report.startsWith(task+'\\')||m.report.includes('..')
     ||m.report_sha256!==observationHash(readFileSync(join(root,m.report))))throw Error('SIMULATED_USER_IDENTITY_CHANGED')
   const report=JSON.parse(readFileSync(join(root,m.report),'utf8'))
-  if(report.status!=='awaiting_user'||existsSync(join(root,'user-run-claimed.json')))throw Error('SIMULATED_USER_BOUNDARY_REQUIRED')
-  return report
+  if((suffix?report.status!=='failed'||report.error!=='Error: SIMULATED_USER_PREVIEW_NOT_LOCAL'||m.attempt!==suffix||!m.boundary:report.status!=='awaiting_user')||existsSync(join(root,'user-run-claimed'+suffix+'.json')))throw Error('SIMULATED_USER_BOUNDARY_REQUIRED')
+  return suffix?{...report,...m.boundary,status:'awaiting_user',retest_of:m.report}:report
 }
 export function assertFrozenObservation(root:string,runtimeHash:string,thinking:string,runtimeTree:string){
   const manifest=JSON.parse(readFileSync(join(root,'manifest.json'),'utf8'))

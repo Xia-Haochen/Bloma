@@ -1,3 +1,4 @@
+import {readPendingDecision} from '../main/guide/pending-decision'
 import {loadUserTestFiles} from './user-test-files'
 import { trialOutputCap } from './trial-output-cap'
 import {createTrialRequestRecorder} from './trial-request-recorder'
@@ -29,7 +30,7 @@ import type { SDKQuery } from '../main/orchestration/stages/orchestration-contra
 import {simulateUserSession,decideAsUser} from './simulated-user'
 import {enterDesktopLine} from '../main/desktop/desktop-route'
 import {SimulatedUserSurface} from './simulated-user-surface'
-import {assertSimulatedContinuation,observationBalance,readObservationQuote,claimObservationRun,requireObservationPhase,assertFrozenObservation,observeOneTurn,observationOutcome} from './observation-control'
+import {observationAttemptSuffix,assertSimulatedContinuation,observationBalance,readObservationQuote,claimObservationRun,requireObservationPhase,assertFrozenObservation,observeOneTurn,observationOutcome} from './observation-control'
 const hash = (s: string | Buffer) => createHash('sha256').update(s).digest('hex')
 function trialTasks(): Record<string, { name: string; goal: string; change?: string }> {
   const path = process.env.BLOMA_OBSERVATION_CASES
@@ -116,10 +117,11 @@ export async function main() {
   const requestMaxTokens = trialOutputCap(capRmb, generationMaxTokens, policyRate)
   for (const old of manifest.old_accounting) if (hash(readFileSync(old.path)) !== old.sha256) throw Error('OLD_ACCOUNTING_CHANGED')
   process.env.BLOMA_MONETARY_POLICY = policy; process.env.BLOMA_MONETARY_EPOCH_DIR = join(root, 'epochs')
+  const liveBalance=observationBalance(await get('models'),await get('user/balance'),continuation?readMonetaryBudget(policy)[0].remaining_rmb:capRmb)
   if(!continuation&&existsSync(policy+'.state.json'))throw Error('OBSERVATION_LEDGER_NOT_FRESH')
   const existingRequests=existsSync(policy+'.state.json')?JSON.parse(readFileSync(policy+'.state.json','utf8')).entries.length:0
   if(existingRequests>=512)throw Error('TRIAL_REQUEST_LIMIT')
-  if(continuation)writeFileSync(join(root,'user-run-claimed.json'),JSON.stringify({at:new Date().toISOString(),runtimeHash,previous_report:continuation.session_id}),{flag:'wx'})
+  if(continuation)writeFileSync(join(root,'user-run-claimed'+observationAttemptSuffix()+'.json'),JSON.stringify({at:new Date().toISOString(),runtimeHash,previous_report:continuation.session_id}),{flag:'wx'})
   else claimObservationRun(root,{runtimeHash,thinking:trialThinking})
   const requestLimit=512-existingRequests
   const money = () => {
@@ -160,7 +162,7 @@ export async function main() {
   const sid=prior?.session_id??`observation-${randomUUID()}`,runId=randomUUID(),reportPath=join(taskDir,`${continuation?'user-run':'run'}-${runId}.json`)
   if(!continuation)writeFileSync(projectFile,JSON.stringify({project_id:project.project_id,session_id:sid,root:project.root_path}),{flag:'wx'})
   recordSessionActivity(sid, project.project_id)
-  const report: any = { version: 1, phase, task: which, project_id: project.project_id, session_id: sid, started_at: new Date().toISOString(), status: 'running', paid_cap_rmb: capRmb, budget_window: 'shared-original-window', method:continuation?'simulated-user':'observation-only', carried_requests:existingRequests, thinking_mode:trialThinking, runtime_sha256: hash(readFileSync(fileURLToPath(import.meta.url))) }
+  const report: any = { version: 1, phase, task: which, project_id: project.project_id, session_id: sid, started_at: new Date().toISOString(), status: 'running', paid_cap_rmb: capRmb, budget_window: 'shared-original-window', method:continuation?'simulated-user':'observation-only', carried_requests:existingRequests,balance_before_current:liveBalance, thinking_mode:trialThinking, runtime_sha256: hash(readFileSync(fileURLToPath(import.meta.url))) }
   let lastSave=0
   const save = (force=false) => { if(!force&&Date.now()-lastSave<500)return; lastSave=Date.now();writeTextFileAtomic(reportPath, safe({ ...report, operation: control.snapshot(), money: money() })) }
   let latestCard:AgentEvent|undefined,previewUrl:string|undefined,publicReplyText=''
@@ -180,7 +182,10 @@ export async function main() {
     if(continuation){
       const userSid=`simulated-user-${randomUUID()}`;recordSessionActivity(userSid,project.project_id)
       const surface=new SimulatedUserSurface(project.project_id,join(taskDir,'simulated-user'),userSid,userFiles)
-      latestCard=continuation.turn?.decisions?.at(-1)
+      const pending=readPendingDecision(project.project_id,sid)
+      latestCard=pending?{event_id:randomUUID(),session_id:sid,project_id:project.project_id,created_at:new Date().toISOString(),type:'user_decision_required',payload:pending.payload}:undefined
+      previewUrl=pending?.preview_url
+      report.retest_of=continuation.retest_of
       if(!latestCard)throw Error('SIMULATED_USER_DECISION_MISSING')
       try{
         report.user_trial=await simulateUserSession({goal:task.goal,signal,
