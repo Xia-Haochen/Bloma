@@ -50,7 +50,8 @@
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "sherpa-onnx-node": "^1.13.8",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "json5": "2.2.3"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
