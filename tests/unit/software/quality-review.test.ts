@@ -1,3 +1,4 @@
+import {applicableQualityLedger} from '../../../main/software/quality-ledger'
 import { organizedPrd } from '../../support/organized-prd'
 import { projectRequirementsModel } from '../../../main/model/requirements-model'
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
@@ -20,7 +21,7 @@ import type { SDKQuery } from '../../../main/orchestration/stages/orchestration-
 let home: string, oldHome: string | undefined, project: ReturnType<typeof createProject>, policy: ReturnType<typeof createSoftwareCollaborationPolicy>, quality: ReturnType<typeof createQualityReview>
 const parent = 'quality-parent'
 const ctx = (sessionId = parent): ToolContext => ({ projectId: project.project_id, sessionId, requestId: 'r', state: createToolState(), signal: AbortSignal.timeout(60000) })
-const finding = { requirement: 'F-001', expected_source: '2加3得5', category: 'data', severity: 'high', location: 'app.cjs:1', trigger: '输入2与3', evidence: '实现输出999', reproduction: '正常入口传2与3', unknowns: '', kind: 'suspected' }
+const finding = { case_name:'sum', requirement: 'F-001', expected_source: '2加3得5', category: 'data', severity: 'high', location: 'app.cjs:1', trigger: '输入2与3', evidence: '实现输出999', reproduction: '正常入口传2与3', unknowns: '', kind: 'suspected' }
 it.each(['code','visual'] as const)('rejects known local blockers before creating a paid %s review', async kind => {
   writeFileSync(join(project.root_path, 'unsafe.js'), 'document.body.innerHTML = location.hash')
   await expect(quality.begin(ctx(),kind)).rejects.toThrow('QUALITY_LOCAL_CHECK_REQUIRED')
@@ -50,13 +51,13 @@ function register(query: SDKQuery) {
     prepareDelegation: quality.prepare, childSystemBuilder: (_role, child) => quality.system(child)!,
     childToolsBuilder: (id, role) => quality.reviewTools(buildSoftwareAgentTools(id, role, policy)), publish: () => {} })
 }
-async function review(findings: Record<string, unknown>[] = [finding], intent?: unknown[]) {
+async function review(findings: Record<string, unknown>[] = [finding], intent?: unknown[], resolutions?: unknown[]) {
   let calls = 0
   register(async function* (_prompt, options) {
     if (calls > 0) expect(JSON.stringify(options.messages)).toContain('只检查已保存记录，不自动保存草稿')
     expect(JSON.stringify(options.messages?.filter(m => m.role === 'system'))).not.toContain('A_SUCCESS_STORY_MUST_NOT_LEAK')
     yield { type: 'assistant', message: { role: 'assistant', content: ++calls === 1
-      ? [{ type: 'tool_use', id: 'materials', name: 'read_quality_review', input: {} }, { type: 'tool_use', id: 'source', name: 'read_file', input: { path: 'app.cjs' } }, { type: 'tool_use', id: 'submit', name: 'submit_quality_findings', input: { findings, ...(intent ? { intent_observations: intent } : {}) } }]
+      ? [{ type: 'tool_use', id: 'materials', name: 'read_quality_review', input: {} }, { type: 'tool_use', id: 'source', name: 'read_file', input: { path: 'app.cjs' } }, { type: 'tool_use', id: 'submit', name: 'submit_quality_findings', input: { findings, ...(resolutions?{resolutions}:{}), ...(intent ? { intent_observations: intent } : {}) } }]
       : [{ type: 'text', text: '已提交疑点，未验证。' }] } }
     yield { type: 'result', subtype: 'success', usage: { input_tokens: 10, output_tokens: 10 } }
   })
@@ -114,7 +115,7 @@ it('parent cannot forge a C submission; no-source opinions remain disputed/sugge
   await expect(quality.parentTools.find(t => t.name === 'check_quality_finding')!.execute({ finding_id: ledger.findings[0].id, case_name: 'sum' }, ctx())).rejects.toThrow('UNGROUNDED')
 })
 it('projects current observed evidence into a finding without repeating verification, but reexecutes after source changes', async () => {
-  await review()
+  const {case_name,...unbound}=finding; await review([unbound])
   const id = readQualityLedger(project.project_id).findings[0].id
   writeFileSync(join(project.root_path, 'app.cjs'), 'console.log(5)')
   const verified = await verifySoftwareCandidate(project.project_id, 'r', ctx().signal)
@@ -122,13 +123,13 @@ it('projects current observed evidence into a finding without repeating verifica
   const check = quality.parentTools.find(t => t.name === 'check_quality_finding')!
   for (let i = 0; i < 2; i++) {
     const reply = await check.execute({ finding_id: id, case_name: 'sum' }, ctx())
-    expect(reply.isError).toBe(false)
+    expect(reply.isError).toBe(true)
     expect(readQualityLedger(project.project_id).findings[0].checks.at(-1)?.candidate).toBe(verified.candidate!.id)
   }
   writeFileSync(join(project.root_path, 'app.cjs'), 'console.log(999)')
   await check.execute({ finding_id: id, case_name: 'sum' }, ctx())
   const changed = readQualityLedger(project.project_id).findings[0]
-  expect(changed.disposition).toBe('confirmed')
+  expect(changed.disposition).toBe('suspected')
   expect(changed.checks.at(-1)?.outcome).toBe('failed')
   expect(changed.checks.at(-1)?.candidate).not.toBe(verified.candidate!.id)
 }, 120000)
@@ -168,17 +169,21 @@ it('does not buy a duplicate complete review and cannot erase important doubts b
   expect(await quality.begin(ctx())).toMatchObject({already_reviewed:true})
   expect(readQualityLedger(project.project_id).reviews).toHaveLength(1)
   writeFileSync(join(project.root_path,'app.cjs'),'console.log(998)')
-  await review()
+  const {case_name,...unbound}=finding;await review([unbound])
   writeFileSync(join(project.root_path,'app.cjs'),'console.log(Number(process.argv[2])+Number(process.argv[3]))')
-  await expect(quality.begin(ctx())).rejects.toThrow('REPRODUCTION_REQUIRED')
+  expect(await quality.gate()).toContain('REPRODUCTION_REQUIRED')
   const f=readQualityLedger(project.project_id).findings[0]
   await quality.parentTools.find(t=>t.name==='check_quality_finding')!.execute({finding_id:f.id,case_name:'sum'},ctx())
   const observed=readQualityLedger(project.project_id).findings[0]
-  expect(observed.disposition).toBe('not_reproduced')
+  expect(observed.disposition).toBe('suspected')
   expect(observed.checks).toHaveLength(1)
   expect(observed.checks[0].observation).toContain('"current_candidate_only":true')
   expect(observed.identity).toEqual(f.identity)
-  expect(await quality.gate()).toContain('REVIEW_REQUIRED')
+  expect(await quality.gate()).toContain('REPRODUCTION_REQUIRED')
+  await review([],undefined,[{finding_id:f.id,evidence:'已核对原触发输入2和3以及当前加法实现，原999分支已不存在。'}])
+  expect(await quality.gate()).toBeUndefined()
+  writeFileSync(join(project.root_path,'app.cjs'),'console.log(7)')
+  expect(await quality.gate()).toContain('REPRODUCTION_REQUIRED')
 },60000)
 it('a model saying PASS without reading material and submitting the protocol cannot satisfy the completion gate', async () => {
   register(async function* () {
@@ -232,12 +237,10 @@ it('complete production runs C, reproduces and repairs a finding, reruns C on th
         content = [use('read_quality_review', {}), use('read_file', { path: 'app.cjs' }), use('submit_quality_findings', { findings: cReviews === 1 ? [finding] : [] })]
       } else content = [{ type: 'text' as const, text: '只读意见已提交。' }]
     } else {
-      const id = readQualityLedger(project.project_id).findings[0]?.id
       switch (parentStep++) {
         case 0: content = [{ type: 'text' as const, text: '稳定候选已保留，请核查。' }]; break
-        case 1: content = [use('check_quality_finding', { finding_id: id, case_name: 'sum' })]; break
-        case 2: content = [use('read_file', { path: 'app.cjs' }), use('write_file', { path: 'app.cjs', content: 'console.log(Number(process.argv[2]||2)+Number(process.argv[3]||3))' })]; break
-        case 3: content = [use('check_quality_finding', { finding_id: id, case_name: 'sum' })]; break
+        case 1: content = [use('read_file', { path: 'app.cjs' }), use('write_file', { path: 'app.cjs', content: 'console.log(Number(process.argv[2]||2)+Number(process.argv[3]||3))' })]; break
+        case 2: content = [use('verify_app', {})]; break
         default: content = [{ type: 'text' as const, text: '修复和复测已执行，请核对当前候选。' }]
       }
     }
@@ -249,7 +252,7 @@ it('complete production runs C, reproduces and repairs a finding, reruns C on th
   expect(findProject(project.project_id).desktop_blocked, JSON.stringify(readQualityLedger(project.project_id))).toBeUndefined()
   expect(findProject(project.project_id).status).toBe('completed')
   expect(cReviews).toBe(2)
-  expect(parentStep).toBe(4) // After the actual passing retest, host owns C and publication.
+  expect(parentStep).toBe(3) // After the actual passing retest, host owns C and publication.
   const ledger = readQualityLedger(project.project_id)
   expect(ledger.findings[0].disposition).toBe('closed')
   expect(ledger.findings[0].checks.map(c => c.outcome)).toEqual(['failed', 'passed'])
@@ -304,4 +307,31 @@ it('keeps uncertain experience observations open and permits a new current revie
   expect(await quality.gate()).toContain('INTENT_UNRESOLVED')
   await review([], [{...observation,status:'supported',evidence:'已读实现输出具体结果',limitations:'真实行为仍由宿主验证'}])
   expect(await quality.gate()).toBeUndefined()
+  writeFileSync(join(project.root_path,'app.cjs'),'console.log(7)')
+  expect(await quality.gate()).toContain('REVIEW_REQUIRED')
 },60000)
+
+it('requires independent contract rebinding and actual retest after a rule revision',async()=>{
+ await review();const f=readQualityLedger(project.project_id).findings[0]
+ const check=quality.parentTools.find(t=>t.name==='check_quality_finding')!
+ await check.execute({finding_id:f.id,case_name:'sum'},ctx())
+ const file=cliSuitePath(project.project_id);writeFileSync(file,readFileSync(file,'utf8')+'\n')
+ writeFileSync(join(project.root_path,'app.cjs'),'console.log(5)')
+ await expect(check.execute({finding_id:f.id,case_name:'sum'},ctx())).rejects.toThrow('CONTRACT_CHANGED')
+ await review([],undefined,[{finding_id:f.id,case_name:'sum',evidence:'已核对修订前后sum的输入2/3及预期5未变，批准原案例按当前合同重新执行。'}])
+ expect(readQualityLedger(project.project_id).findings[0].disposition).toBe('confirmed')
+ await verifySoftwareCandidate(project.project_id,'rebound',ctx().signal)
+ expect(readQualityLedger(project.project_id).findings[0].disposition).toBe('closed')
+ expect(readQualityLedger(project.project_id).findings[0].checks[0].outcome).toBe('failed')
+},120000)
+
+it('retires a removed business expectation from the current gate without deleting its failed history',async()=>{
+ await review();const id=readQualityLedger(project.project_id).findings[0].id
+ await quality.parentTools.find(t=>t.name==='check_quality_finding')!.execute({finding_id:id,case_name:'sum'},ctx())
+ const parsed=parseLeanBrief(JSON.stringify({action:'brief',goal:'输出7',ui:'none',delivery:'command',requirements:[{description:'输出7',expected:'显示7'}]}),{projectId:project.project_id,sessionId:parent,source:'确认改为输出7',previous:readPrdBackplane(project.project_id),software:true})!
+ if(parsed.action!=='brief')throw Error('fixture')
+ syncDocuments({request_id:'change',project_id:project.project_id,session_id:parent,checkpoint:'requirement_confirmed'},parsed.brief);markPrdUserConfirmed(project.project_id)
+ expect(applicableQualityLedger(project.project_id).findings.some(f=>f.id===id)).toBe(false)
+ expect(readQualityLedger(project.project_id).findings.find(f=>f.id===id)?.disposition).toBe('confirmed')
+ expect(await quality.gate()).toContain('REVIEW_REQUIRED')
+},120000)

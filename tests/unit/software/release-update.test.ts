@@ -1,8 +1,9 @@
+import * as projectService from '../../../main/project/project-service'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync, symlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:net'
-import { beforeEach, afterEach, it, expect } from 'vitest'
+import { beforeEach, afterEach, it, expect, vi } from 'vitest'
 import { createProject } from '../../../main/project/project-service'
 import { activeSoftwareRelease, prepareSoftwareRelease, promoteSoftwareRelease, validateSoftwareRelease, runtimeInventory, ReleaseIntegrityError } from '../../../main/software/release-store'
 import { verificationFailure } from '../../../main/software/verification-diagnostics'
@@ -153,3 +154,15 @@ it('preserves 100 actual SQLite records through a failed migration, schema updat
   expect((await launchSoftwareForUser(project.project_id, root, launch, async () => {}, true, latest.id)).detail).toContain('DATA_RESTORE_SNAPSHOT_CHANGED')
   await validateSoftwareRelease(project.project_id, updated)
 }, 90000)
+
+it('commits the active pointer and completed lifecycle together, preserving both on write failure',async()=>{
+ writeFileSync(join(project.root_path,'app.cjs'),'console.log(1)');writeFileSync(join(project.root_path,'LAUNCH.json'),JSON.stringify({schema_version:2,mode:'command',command:['node','app.cjs']}))
+ const release=await prepareSoftwareRelease(project.project_id,project.root_path),proof={version:'fixture',scope:'fixture',at:new Date().toISOString()}
+ const spy=vi.spyOn(projectService,'updateProject').mockImplementationOnce(()=>{throw Error('audit write interrupted')})
+ try{await expect(promoteSoftwareRelease(release,proof,undefined,undefined,true)).rejects.toThrow('audit write interrupted')}finally{spy.mockRestore()}
+ expect(projectService.findProject(project.project_id).status).toBe('active');expect(await activeSoftwareRelease(project.project_id)).toBeUndefined()
+ await promoteSoftwareRelease(release,proof,undefined,undefined,true)
+ expect(projectService.findProject(project.project_id)).toMatchObject({software_release_id:release.id,status:'completed',current_stage:'completed',desktop_phase:'delivered'})
+ expect((await activeSoftwareRelease(project.project_id))?.id).toBe(release.id)
+ expect(existsSync(join(home,'software-releases',project.project_id,'active.json'))).toBe(false)
+})

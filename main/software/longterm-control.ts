@@ -1,3 +1,4 @@
+import { deliveryQualityGate } from './delivery-qualification'
 import { transferProjectTaskOwner } from './task-assignment'
 import { listSessions } from '../platform/sessions/session-service'
 import { hasSoftwareSessionProcess } from './process-manager'
@@ -10,7 +11,6 @@ import { verifySoftwareCandidate } from './verification'
 import { findProject, updateProject } from '../project/project-service'
 import { readPrdBackplane } from '../project/prd-store'
 import { prdScopeFingerprint } from '../project/requirement-contract'
-import { commitDesktopDelivery } from '../desktop/delivery-state'
 import { recordEvaluationEvent } from './harness-evaluation'
 import { adoptLeanSuggestions } from '../guide/lean-suggestions'
 import { stageLeanScope } from '../guide/lean-scope'
@@ -72,23 +72,25 @@ export async function performLongtermAction(input:LongtermActionInput,signal:Abo
   if(result.status!=='passed'||result.candidate?.id!==candidate.id)throw Error(`LONGTERM_CURRENT_VERIFICATION_REQUIRED: ${result.summary}`)
   const stillCurrent=()=>readLongtermState(input.project_id)?.revision===state.revision&&prdScopeFingerprint(readPrdBackplane(input.project_id))===scope&&isLongtermSoftware(input.project_id)
   activeSignal.throwIfAborted();if(!stillCurrent())throw Error('LONGTERM_PENDING_CHANGED_DURING_CONFIRMATION')
+  const qualityGap=await deliveryQualityGate(input.project_id,activeSignal);if(qualityGap)throw Error(qualityGap)
   const evidence={version:result.core?.fingerprint??candidate.verified!.version,scope,at:new Date().toISOString()}
   await sealSoftwareRelease(candidate,evidence,activeSignal,stillCurrent)
   return async()=>{
   signal.throwIfAborted();if(!stillCurrent())throw Error('LONGTERM_PENDING_CHANGED_DURING_CONFIRMATION')
+  const finalQualityGap=await deliveryQualityGate(input.project_id,signal);if(finalQualityGap)throw Error(finalQualityGap)
   // Persist the human's version-bound intent before changing the active release.
   // A crash leaves an explicit incomplete confirmation which needs a new click.
   current.status='confirming';current.confirmation_requested_at=new Date().toISOString()
   const intent=saveLongtermState(state)
   const stillIntentCurrent=()=>readLongtermState(input.project_id)?.revision===intent.revision&&prdScopeFingerprint(readPrdBackplane(input.project_id))===scope&&isLongtermSoftware(input.project_id)
+  const previousRelease=findProject(input.project_id).software_release_id
   const began=Date.now();let accounted=false
-  try{await promoteSoftwareRelease(candidate,evidence,signal,()=>{leanBudget(input.project_id,'desktop-verify').recordRuntime(Date.now()-began);accounted=true;return stillIntentCurrent()})}
+  try{await promoteSoftwareRelease(candidate,evidence,signal,()=>{leanBudget(input.project_id,'desktop-verify').recordRuntime(Date.now()-began);accounted=true;return stillIntentCurrent()},true)}
   finally{if(!accounted)leanBudget(input.project_id,'desktop-verify').recordRuntime(Date.now()-began)}
-  commitDesktopDelivery(input.project_id,signal)
   current.status='delivered';current.confirmed_at=new Date().toISOString()
   let next:typeof state
   try{next=saveLongtermState(intent)}catch(error){
-    try{updateProject(input.project_id,{status:'active',current_stage:'blocked_for_user_decision',desktop_phase:'desktop-verify',longterm_summary:{status:'awaiting_confirmation',pending_items:state.backlog.filter(item=>['deferred','adopt_requested'].includes(item.state)).length,milestone:current.title}})}catch{/* canonical pending file still refuses a new confirmation */}
+    try{updateProject(input.project_id,{software_release_id:previousRelease,status:'active',current_stage:'blocked_for_user_decision',desktop_phase:'desktop-verify',longterm_summary:{status:'awaiting_confirmation',pending_items:state.backlog.filter(item=>['deferred','adopt_requested'].includes(item.state)).length,milestone:current.title}})}catch{/* canonical pending file still refuses a new confirmation */}
     throw error
   }
   recordEvaluationEvent(input.project_id,'delivery_final',{status:'delivered',candidate_id:candidate.id,milestone_id:current.id})

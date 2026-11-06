@@ -1,3 +1,4 @@
+import {withFundedExecutionWindow} from '../main/software/execution-limits'
 import {readPendingDecision} from '../main/guide/pending-decision'
 import {loadUserTestFiles} from './user-test-files'
 import { trialOutputCap } from './trial-output-cap'
@@ -182,6 +183,7 @@ export async function main() {
   }
   const model = { query, env: binding.env, signal, sessionId: sid, history: [{role:'user' as const,content:task.goal}], maxTokens: requestMaxTokens,
     persistAssistant: (text: string) => appendSessionMessage(sid, { role: 'assistant', origin: 'agent', content: [{ type: 'text', text }], timestamp: Date.now() }) }
+  await withFundedExecutionWindow(()=>({remainingRequests:Math.max(0,requestLimit-control.snapshot().physical_requests),remainingRmb:Math.min(fundedAllowance-(control.snapshot().upper_rmb??0),money()[0]?.remaining_rmb??fundedAllowance),outputRmbPerMillion:policyRate.output_rmb_per_million}),async()=>{
   try {
     save(true)
     if(continuation){
@@ -252,4 +254,5 @@ export async function main() {
     report.old_accounting_unchanged = manifest.old_accounting.every((r: any) => hash(readFileSync(r.path)) === r.sha256)
     save(true); console.log(safe({ status: report.status, money: money(), report: reportPath }))
   }
+  })
 }

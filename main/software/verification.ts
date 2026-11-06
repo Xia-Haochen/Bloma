@@ -1,7 +1,8 @@
+import {qualityIdentityForInputs} from './quality-ledger'
 import { verifyComponentUsage } from './component-usage'
 import {testCorrectionVersion} from './test-corrections'
 import { verifyRequiredDesignAssets } from './design-asset-delivery'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { createRequire } from 'node:module'
@@ -39,12 +40,12 @@ export interface SoftwareVerification { status: 'passed' | 'failed' | 'unverifie
   core?: CoreVerificationResult; security?: SecurityScanResult; launch?: LaunchSmokeResult | null; reused?: boolean; report_path?: string; failure?: VerificationFailure }
 interface Receipt { version: 1; state: 'running' | 'complete'; key: string; at: number; result?: SoftwareVerification; result_hash?: string; reusable?: boolean }
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
-const hostId = randomUUID(), poisoned = new Set<string>()
+const poisoned = new Set<string>()
 function receiptPath(projectId: string) {
   if (!/^[A-Za-z0-9_-]+$/.test(projectId)) throw Error('SOFTWARE_VERIFY_PROJECT_INVALID')
   return join(getPromaHome(), 'software-verification', `${projectId}.json`)
 }
-async function inputs(projectId: string, requestId: string, signal?: AbortSignal) {
+export async function verificationInputs(projectId: string, requestId: string, signal?: AbortSignal) {
   const project = findProject(projectId), brief = readPrdBackplane(projectId)
   if (project.workflow_version !== 'software-v1' || !brief.user_confirmed_at) throw Error('SOFTWARE_VERIFY_CONFIRMED_ENTRY_REQUIRED: 必须先确认当前项目需求')
   const launch = requireLaunchDeclaration(project.root_path, 'SOFTWARE_VERIFY_CONFIRMED_ENTRY_REQUIRED')
@@ -73,7 +74,7 @@ async function inputs(projectId: string, requestId: string, signal?: AbortSignal
   const source=(await runtimeInventory(project.root_path,signal)).digest
   const input_identity={source,scope:prdScopeFingerprint(brief),rules:digest([ruleVersion,fixtureVersion]),
     environment:digest([runtime,resolved.command,resolved.env,runtimeBindingVersion(projectId),capabilityBindingVersion(projectId),implementation,process.platform,process.arch,process.versions.node]),request_id:requestId,operation_id:project.lean_operation_id}
-  return { input_identity, key: digest({ protocol: 1, hostId, source, requestId, operation: project.lean_operation_id,test_corrections:testCorrectionVersion(projectId),
+  return { input_identity, key: digest({ protocol: 2, source, operation: project.lean_operation_id,test_corrections:testCorrectionVersion(projectId),
     scope: prdScopeFingerprint(brief), confirmed: brief.user_confirmed_at, ux: project.ux_confirmation, rules: ruleVersion, fixtures: fixtureVersion,
     runtime, command: resolved.command, environment: resolved.env, managed: runtimeBindingVersion(projectId),capabilities:capabilityBindingVersion(projectId), independent:independentDesignVersion(projectId),independent_challenges:independentChallengeVersion(projectId),adapter:independentAdapterVersion(project.root_path),implementation, platform: process.platform, arch: process.arch, node: process.versions.node }), reusable }
 }
@@ -82,11 +83,12 @@ export async function recentSoftwareVerification(projectId: string, requestId: s
   try {
     const receipt = JSON.parse(readFileSync(file, 'utf8')) as Receipt
     if (receipt.version !== 1 || receipt.state !== 'complete' || !receipt.reusable || receipt.result?.status !== 'passed'
-      || Date.now() - receipt.at < 0 || Date.now() - receipt.at > 300000 || digest(receipt.result) !== receipt.result_hash) return
-    const current = await inputs(projectId, requestId, signal)
+      || Date.now() - receipt.at < 0 || digest(receipt.result) !== receipt.result_hash) return
+    const current = await verificationInputs(projectId, requestId, signal)
     if (!current.reusable || current.key !== receipt.key || !receipt.result.candidate) return
     await readSoftwareCandidate(projectId, receipt.result.candidate.id, signal)
     await verifyReleaseSource(receipt.result.candidate, signal)
+    await settleObservedQuality(projectId,receipt.result,signal,qualityIdentityForInputs(projectId,current.input_identity))
     return { ...receipt.result, reused: true, core: receipt.result.core ? { ...receipt.result.core, reused: true } : undefined }
   } catch (error) { signal?.throwIfAborted(); return } // unreadable or incomplete evidence is never reused
 }
@@ -116,11 +118,11 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
   if (active.has(file)) throw Error('SOFTWARE_VERIFY_ALREADY_RUNNING')
   active.add(file); poisoned.add(file)
   recordEvaluationEvent(projectId,'verification_started',{request_id:requestId})
-  let version: Awaited<ReturnType<typeof inputs>> | undefined
+  let version: Awaited<ReturnType<typeof verificationInputs>> | undefined
   const result: SoftwareVerification = { status: 'unverified', summary: '当前版本尚未通过检查。', report_path: file }
   try {
     writeTextFileAtomic(file, JSON.stringify({ version: 1, state: 'running', key: '', at: Date.now() } satisfies Receipt))
-    version = await inputs(projectId, requestId, signal)
+    version = await verificationInputs(projectId, requestId, signal)
     result.input_identity=version.input_identity
     if (existsSync(guiSuitePath(projectId))) {
       const bytes = readFileSync(guiSuitePath(projectId));
@@ -148,7 +150,7 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
       || launch.criteria && !launch.criteria.degraded && launch.criteria.window_found && launch.criteria.responsive && launch.criteria.stable && launch.criteria.closed_gracefully
     if (!launch.passed || !windowReady) { result.status = 'unverified'; result.summary = `正常启动未通过：${launch.detail}${launch.outputExcerpt?'\n'+launch.outputExcerpt.slice(-4000):''}`; return result }
     await verifyReleaseSource(candidate, signal)
-    if ((await inputs(projectId, requestId, signal)).key !== version.key) throw Error('SOFTWARE_VERIFY_INPUT_CHANGED')
+    if ((await verificationInputs(projectId, requestId, signal)).key !== version.key) throw Error('SOFTWARE_VERIFY_INPUT_CHANGED')
     result.status = localPending ? 'environment_blocked' : 'passed'; result.summary = localPending ? core.distribution!.detail : '当前候选已登记的本机案例、安全静态检查与正常启动通过；完整实现和真实模型效果尚未由这些检查评定。'
     return result
   } catch (error) {
@@ -159,7 +161,7 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
     if (result.independent && result.candidate && !signal?.aborted && result.independent.status !== 'disabled') {
       try {
         await verifyReleaseSource(result.candidate, signal)
-        if (!version || (await inputs(projectId, requestId, signal)).key !== version.key) throw Error('INDEPENDENT_FINDING_INPUT_CHANGED')
+        if (!version || (await verificationInputs(projectId, requestId, signal)).key !== version.key) throw Error('INDEPENDENT_FINDING_INPUT_CHANGED')
         await recordIndependentFindings(projectId, result.candidate, result.independent, result.status === 'passed', signal)
       } catch (error) { result.status = 'unverified'; result.summary = String(error) }
     }
@@ -167,8 +169,8 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
     if (result.candidate && !signal?.aborted && ['passed','failed'].includes(result.status)) {
       try {
         await verifyReleaseSource(result.candidate, signal)
-        if (!version || (await inputs(projectId, requestId, signal)).key !== version.key) throw Error('QUALITY_SETTLEMENT_INPUT_CHANGED')
-        await settleObservedQuality(projectId, result, signal)
+        if (!version || (await verificationInputs(projectId, requestId, signal)).key !== version.key) throw Error('QUALITY_SETTLEMENT_INPUT_CHANGED')
+        await settleObservedQuality(projectId, result, signal, qualityIdentityForInputs(projectId,version.input_identity))
       } catch (error) { result.status = 'unverified'; result.summary = String(error); result.failure = verificationFailure(result, error) }
     }
     // Even cancellation/write failure invalidates an older PASS. No result may

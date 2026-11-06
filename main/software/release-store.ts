@@ -1,3 +1,4 @@
+import { findProject, updateProject } from '../project/project-service'
 import { createHash, randomUUID } from 'node:crypto'
 import {testCorrectionGate} from './test-corrections'
 import * as nodeFs from 'node:fs'
@@ -176,16 +177,20 @@ export async function sealSoftwareRelease(release: SoftwareRelease, evidence: No
   release.verified = evidence
   writeTextFileAtomic(join(dirname(release.root), 'release.json'), JSON.stringify(release))
 }
-export async function promoteSoftwareRelease(release: SoftwareRelease, evidence: NonNullable<SoftwareRelease['verified']>, signal?: AbortSignal, stillCurrent?: () => boolean) {
+export async function promoteSoftwareRelease(release: SoftwareRelease, evidence: NonNullable<SoftwareRelease['verified']>, signal?: AbortSignal, stillCurrent?: () => boolean, complete = false) {
   await sealSoftwareRelease(release,evidence,signal)
   signal?.throwIfAborted()
   if(stillCurrent&&!stillCurrent())throw Error('RELEASE_VERIFICATION_SCOPE_CHANGED')
-  writeTextFileAtomic(join(base(release.projectId), 'active.json'), JSON.stringify({ id: release.id }))
+  signal?.throwIfAborted()
+  updateProject(release.projectId, { software_release_id: release.id, ...(complete ? {desktop_phase:'delivered' as const,status:'completed' as const,current_stage:'completed' as const,desktop_blocked:undefined,blocked_action:undefined} : {}) })
 }
 export async function activeSoftwareRelease(projectId: string, signal?: AbortSignal, verifyBytes = true): Promise<SoftwareRelease | undefined> {
-  let id: string
+  let id = findProject(projectId).software_release_id
+  if (id !== undefined) return loadSoftwareRelease(projectId, id, signal, verifyBytes)
+  // Read-only migration for historical releases; new publications have one authority.
   try { ({ id } = JSON.parse(await readFile(join(base(projectId), 'active.json'), 'utf8'))) }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error }
+  if(typeof id!=='string')throw Error('RELEASE_ACTIVE_ID_INVALID')
   return loadSoftwareRelease(projectId, id, signal, verifyBytes)
 }
 export async function loadSoftwareRelease(projectId: string, id: string, signal?: AbortSignal, verifyBytes = true): Promise<SoftwareRelease> {

@@ -1,48 +1,54 @@
+import type {DeliveryBlock} from './delivery-qualification'
 import { guiFindingOutcome, cliCaseOutcome } from './verification-evidence'
 import type { SoftwareVerification } from './verification'
-import { sameIdentity, type Identity, type Ledger, type QualityFinding } from './quality-ledger'
+import { qualityFailureBaseline, sameIdentity, type Identity, type Ledger, type QualityFinding } from './quality-ledger'
 
 export const importantFinding = (f: QualityFinding) => ['critical','high'].includes(f.severity) || f.review_kind === 'visual' && f.severity === 'medium'
 export const sameQualityScope = (a: Identity, b: Identity) => a.target === b.target && a.environment === b.environment
 /** A source edit does not dispose of a suspicion. A current observed case can
  * resolve it without pretending the original candidate ever failed a test. */
 export function findingNeedsInvestigation(f: QualityFinding, current: Identity, rules: string, independentRules?: string) {
-  return sameQualityScope(f.identity, current) && !f.checks.some(c => c.outcome === 'failed')
-    && ['suspected','not_reproduced'].includes(f.disposition)
-    && !(f.disposition === 'not_reproduced' && f.checks.at(-1)?.outcome === 'passed'
-      && sameIdentity(f.checks.at(-1)!.identity, current) && f.checks.at(-1)!.rules === (f.independent ? independentRules : rules))
+  return !qualityFailureBaseline(f)
+    && ['suspected','not_reproduced','confirmed','closed'].includes(f.disposition)
+    && !(f.reviewed && sameIdentity(f.reviewed.identity,current))
+    && !((f.independent || f.checks.at(-1)?.grounded) && f.disposition === 'not_reproduced' && f.checks.at(-1)?.outcome === 'passed'
+      && sameIdentity(f.checks.at(-1)!.identity, current) && f.checks.at(-1)!.rules === (f.independent?independentRules:rules))
 }
 
 export function findingNeedsClosure(f: QualityFinding, current: Identity, rules: string, independentRules?: string) {
   return f.disposition !== 'superseded'
-    && f.checks.some(c => c.outcome === 'failed')
+    && Boolean(qualityFailureBaseline(f))
     && !(f.disposition === 'closed' && f.checks.at(-1)?.outcome === 'passed'
       && sameIdentity(f.checks.at(-1)!.identity, current)
       && f.checks.at(-1)!.rules === (f.independent ? independentRules : rules))
 }
 
 /** Read-only work ordering. This never issues a release receipt or closes a finding. */
-export function qualityCloseout(ledger: Ledger, current: Identity, gate: string | undefined, rules: string, independentRules?: string) {
+export function qualityCloseout(ledger: Ledger, current: Identity, block: DeliveryBlock | undefined, rules: string, independentRules?: string) {
+  const gate=block?.message
   const mustFix = ledger.findings.filter(f => findingNeedsClosure(f, current, rules, independentRules))
   const investigate = ledger.findings.filter(f => findingNeedsInvestigation(f, current, rules, independentRules))
   const deferred = ledger.findings.filter(f => sameIdentity(f.identity, current)
     && (f.disposition === 'suggestion' || f.disposition === 'disputed'))
   const pending = ledger.reviews.filter(r => sameIdentity(r.identity, current) && ['pending', 'submitted'].includes(r.status))
-  const priority = investigate.find(importantFinding)
-  const next = pending.length ? 'wait_for_delegations' : mustFix.length || priority ? 'check_quality_finding'
-    : gate?.startsWith('TEST_CORRECTION_APPLY_REQUIRED') ? 'apply_test_correction'
-    : gate?.startsWith('QUALITY_REVIEW_REQUIRED') ? 'start_quality_review'
-    : gate?.startsWith('QUALITY_VISUAL_REVIEW_REQUIRED') ? 'start_visual_review'
+  const contractChange=mustFix.find(f=>qualityFailureBaseline(f)?.rules!==(f.independent?independentRules:rules) && !(f.retest&&sameIdentity(f.retest.identity,current)&&f.retest.rules===rules))
+  const priority = contractChange??investigate.find(importantFinding)
+  const reviewKind=priority?.review_kind??'code'
+  const freshReview=ledger.reviews.some(r=>(r.kind??'code')===reviewKind&&r.status==='complete'&&sameIdentity(r.identity,current))
+  const next = pending.length ? 'wait_for_delegations' : block?.code==='apply_correction' ? 'apply_test_correction' : mustFix.length&&!contractChange ? 'verify_app' : priority ? freshReview&&!contractChange ? 'inspect_app' : reviewKind==='visual'?'start_visual_review':'start_quality_review'
+
+    : block?.code==='code_review' ? 'start_quality_review'
+    : block?.code==='visual_review' ? 'start_visual_review'
     : gate ? 'inspect_app' : 'verify_app'
-  return { identity: current, verification: 'not_issued', gate, next_tool: next,
+  return { halt: Boolean(block?.code==='independent' || block?.code==='visual_route' || block?.code==='correction_review'), identity: current, verification: 'not_issued', gate, next_tool: next,
     must_fix: mustFix.map(f => f.id), investigate: investigate.map(f => f.id), required_investigation: investigate.filter(importantFinding).map(f => f.id), deferred: deferred.map(f => f.id),
     policy: '先复现重要疑点、修复并同案例复测，再集中审阅稳定候选。suggestion/disputed不自动扩充本轮范围；低优先疑点保留记录，不为清空意见反复改动。审阅齐备后verify_app，通过后结束制作，由宿主核对并发布。任何源码变化都不能复用旧候选证据。' }
 }
 
 /** The durable ledger remains complete. Default model input is a current work
  * queue; historical details are read explicitly by finding ID. */
-export function qualityWorkQueue(ledger: Ledger, current: Identity, gate: string | undefined, rules: string, independentRules?: string) {
-  const closeout = qualityCloseout(ledger, current, gate, rules, independentRules)
+export function qualityWorkQueue(ledger: Ledger, current: Identity, block: DeliveryBlock | undefined, rules: string, independentRules?: string) {
+  const closeout = qualityCloseout(ledger, current, block, rules, independentRules)
   const ids = new Set([...closeout.must_fix, ...closeout.required_investigation])
   return { closeout, findings: ledger.findings.filter(f => ids.has(f.id)),
     reviews: (['code','visual'] as const).map(kind => ledger.reviews.filter(r => (r.kind ?? 'code') === kind).at(-1)).filter(Boolean).map(r => ({ id:r!.id,kind:r!.kind??'code',identity:r!.identity,status:r!.status,failure_code:r!.failure_code })),

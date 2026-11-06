@@ -1,3 +1,4 @@
+import {currentFundedExecutionWindow,fundedExecutionLimits,configureSoftwareExecutionLimits} from '../software/execution-limits'
 import { productDesignPolicy } from '../project/product-design-policy'
 import { beginProjectAssignment } from '../software/task-assignment'
 import { readFileSync, existsSync } from 'node:fs'
@@ -103,6 +104,11 @@ export async function runLeanProduction(input: DesktopRouteInput, deps: DesktopR
     }
   }
   try {
+    const window=currentFundedExecutionWindow()
+    if(window&&!isStop(input.content)&&window.remainingRmb>0&&window.remainingRequests>0){
+      const current=findProject(input.projectId),before=leanBudget(input.projectId,'desktop-implement').snapshot()
+      configureSoftwareExecutionLimits(input.projectId,current.lean_operation_id??'initial',{...fundedExecutionLimits(before,window),reason:'宿主已准入外层窗口，保持累计计数并对齐剩余执行额度。'})
+    }
     activatePendingEvaluation(input.projectId)
     recordEvaluationEvent(input.projectId,'operation_started',{session_id:input.sessionId,request_id:input.requestId})
     const finish = await withLeanRuntime(input.projectId, 'desktop-implement', input.signal,
@@ -228,15 +234,15 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     url => emit('software_preview_changed', { preview_url: url ?? null }), () => emit('software_suggestions_changed', {}),()=>emit('longterm_changed',{summary:findProject(input.projectId).longterm_summary}))
   let scopePending = false
   const tools = productionAgentTools(baseTools, [
-    ...quality.parentTools,
+    ...quality.parentTools.filter(tool=>tool.name!=='check_quality_finding'),
     buildLeanScopeTool(input.projectId, input.content, emit, () => { scopePending = true }),
     brief.lean_brief.ui === 'required' ? buildLeanGuiTool(input.projectId) : buildLeanCliTool(input.projectId)])
   const system = [
     SOFTWARE_ENGINEERING_INSTRUCTIONS,
     ...(brief.project_plan ? ['已确认阶段计划：'+JSON.stringify(brief.project_plan)+'。先read_production_context(project-stages)核对进度。Electron/浏览器GUI按顺序用verify_project_stage检查，每次包含之前阶段的累计案例；通过后继续返回的next_stage，无需用户反复催继续。局部通过不是交付，最后仍用verify_app检查全部需求。命令/其它运行时沿完整目标制作和验收，不伪造阶段通过。'] : []),
-    '稳定候选结束制作前由宿主按已验证基线和实际差异选择审阅；inspect_collaboration_plan可查询理由，不能自报低风险或跳过角色。需要C时进行独立只读审阅。用start_quality_review、wait_for_delegations、read_quality_findings处理宿主台账。审阅期间不写不运行；finding是疑点，按确认预期登记必要复现案例，再check_quality_finding实际复现。修复后同案例复测并重新审阅当前候选，不能自报关闭或更改预期过关。',
-    '交付收尾：先通过verify_app定位业务/适配/环境失败；稳定后审阅，按read_quality_findings.closeout处理必修缺陷和重要疑点。建议与有争议的增强只记录，不默认扩大需求或为清空台账修改源码。修复应集中完成并同案例复测，再重新审阅稳定版本；已有有效审阅不重复发起。最终验证通过后停止改动并结束制作，由宿主检查交付。',
-    '临时截图/观察使用inspect_app(script_source)或steps，脚本由宿主保存在诊断目录；不要在稳定候选中增删临时脚本导致审阅失效。正式回归仍用冻结验收登记，临时观察不代替正式结果。重要疑点必须check_quality_finding取得当前实际案例证据，改源码或重开审阅不会把它清掉。',
+    '稳定候选交给verify_app，宿主统一执行、结算已绑定问题、安排必要的C/V并发布。模型负责实现与修复，不维护通过凭据或重复记账。read_quality_findings可查看实际阻塞；疑点与案例的对应关系由独立审阅确认，普通案例通过不能自行排除疑点。',
+    '验证失败时沿实际反馈修复；建议与争议不自动扩大需求。修复集中完成后复验，稳定候选不再作无关修改。审阅期间不写入、不运行命令；确认的缺陷仍须实际复测。',
+    '临时观察使用inspect_app，宿主保存在诊断目录；不要修改稳定候选来保存临时脚本。观察帮助定位问题，不替代冻结案例的执行证据。',
     '已执行测试预期与确认需求矛盾时，不改产品迎合，也不换文件绕过冻结。用read_test_contract读取原文，propose_test_correction提交精确差异与确认来源；独立宿主裁定期间停止。批准后apply_test_correction，再重跑所有保留案例，原失败不删除。累计阶段入口只default导入旧入口和新增模块，函数体仅顺序await imported(ctx)，新增测试注册放到新增模块。',
     '宿主选定V的界面候选还须经独立V审阅；小范围纯样式改动可能只选V，其他业务/未知变更保留C/V。未变化的已验证候选不重复自动审阅，仍须原宿主验收。start_visual_review封存当前真实PNG与同次DOM/操作事实，子会话用专属图片授权，不能传父debug_session_id替代。必要操作先inspect_app，再启动V；未看图、图像渠道拒绝或旧图不能当视觉通过，不另选付费渠道或用OCR代替。',
     `项目根：${project.root_path}。平台组件是可选积木，先核对契约是否适用；未知方法可查资料并实验，不把组件目录当能力上限。关键未知可delegate_agent传experiment:{criterion,inputs}，task写要回答的问题；子任务独立运行探针，主负责人用read_experiment读取证据与代码，按正常文件工具集成后复验。不重做同版本已证明的研究。不要求架构文档、阶段任务书或推进标记。`,
@@ -290,21 +296,25 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   const advanceCloseout = async (ctx: import('../agent/loop/agent-loop').ToolContext) => {
     const waiting = await waitForProductionChildren(ctx)
     if (waiting) return waiting
-    for (let count = 0; count < 2; count++) {
+    const attemptedReviews=new Set<string>()
+    for (;;) {
       const action = await quality.completionAction(ctx.signal), gap = action.gate
-      if (action.next_tool === 'check_quality_finding') return 'QUALITY_FINDING_REPRODUCTION_REQUIRED: ' + JSON.stringify(action)
-      if (gap?.startsWith('QUALITY_INDEPENDENT_SEMANTICS_UNRESOLVED') || gap?.startsWith('QUALITY_VISUAL_MODEL_UNSUPPORTED')) throw Error(gap)
-      if (!gap?.startsWith('QUALITY_REVIEW_REQUIRED') && !gap?.startsWith('QUALITY_VISUAL_REVIEW_REQUIRED')) return gap
-      const visual = gap.startsWith('QUALITY_VISUAL_REVIEW_REQUIRED')
+      if(action.halt)throw Error(gap)
+      if(!['start_quality_review','start_visual_review'].includes(action.next_tool))return gap
+      if(attemptedReviews.has(action.next_tool))return gap
+      attemptedReviews.add(action.next_tool)
+      const visual = action.next_tool==='start_visual_review'
       await quality.begin(ctx, visual ? 'visual' : 'code')
-      const summary = await waitForProductionChildren(ctx), after = await quality.completionAction(ctx.signal)
-      if (after.gate?.startsWith(visual ? 'QUALITY_VISUAL_REVIEW_REQUIRED' : 'QUALITY_REVIEW_REQUIRED')) {
+      const summary = await waitForProductionChildren(ctx)
+      // Reconcile new review bindings against the same candidate evidence before routing again.
+      const checked=await verifySoftwareCandidate(input.projectId,input.requestId,ctx.signal)
+      if(checked.status!=='passed')return 'QUALITY_CLOSEOUT_CHECK_REQUIRED: '+JSON.stringify(verificationResponse(input.projectId,checked))
+      const after = await quality.completionAction(ctx.signal)
+      if (after.next_tool===action.next_tool && after.gate) {
         return after.gate + '\n本次审阅没有完成，先诊断实际交接，不自动重开同一审阅。\n' + (summary ?? '')
       }
       if (!after.gate && after.next_tool === 'verify_app') return undefined
     }
-    const action = await quality.completionAction(ctx.signal)
-    return action.next_tool === 'check_quality_finding' ? 'QUALITY_FINDING_REPRODUCTION_REQUIRED: ' + JSON.stringify(action) : action.gate
   }
   try {
     for (;;) {
@@ -325,7 +335,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
           // Only an actual full verification for this request and exact inputs
           // starts closeout. Partial stage checks and self-reported success do not.
           const reviewed=calls.some(c=>c.status==='ok'&&['start_quality_review','start_visual_review'].includes(c.name))
-          if (scopePending || !reviewed&&!calls.some(c => c.status === 'ok' && !c.pending && ['verify_app','check_quality_finding'].includes(c.name))) return
+          if (scopePending || !reviewed&&!calls.some(c => c.status === 'ok' && !c.pending && c.name==='verify_app')) return
           // A manually requested review is the same closeout transition as a
           // host-requested one. Wait for it, then establish current full evidence
           // before returning control; otherwise A can drift into optional edits
@@ -435,19 +445,24 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
         blocked('验证期间目标或产物发生变化，本次通过记录未用于交付。'); return
       }
       if (candidate) await verifyReleaseSource(candidate, runSignal)
-      const launch = existsSync(join(project.root_path, 'LAUNCH.json')) ? JSON.parse(readFileSync(join(project.root_path, 'LAUNCH.json'), 'utf8')) as { command?: string[] } : undefined
       const text = `${modelBudgetStop ? '模型调用已停止；宿主沿已登记规则完成了实际验证。' : ''}已登记的本机案例、安全与启动检查通过，可从项目交付入口启动试用。完整需求效果尚未独立评定。${core.llm ? 'AI请求与异常分支已做本机HTTP检查，外部供应商连通与生成效果尚未实测。' : ''}继续修改可直接描述或点选。`
       return async () => {
         runSignal.throwIfAborted()
         const finalQualityGap = await quality.gate(runSignal)
         if (finalQualityGap) { blocked(finalQualityGap); return }
         if (prdScopeFingerprint(readPrdBackplane(input.projectId)) !== scope || versionOf() !== version) { blocked('收口前产物或验证输入发生变化，本次未交付。'); return }
-        if (candidate) {
+        const persistCandidate = async (mode: 'seal' | 'trial' | 'deliver') => {
+          if (!candidate) return
           const began = Date.now(); let accounted = false
           try {
-            await (isLongtermSoftware(input.projectId)?sealSoftwareRelease:promoteSoftwareRelease)(candidate, { version, scope, at: new Date().toISOString(),collaboration_id:readQualityLedger(input.projectId).collaboration?.at(-1)?.id }, runSignal,
-              () => { budget.recordRuntime(Date.now() - began); accounted = true; return prdScopeFingerprint(readPrdBackplane(input.projectId)) === scope && versionOf() === version })
+            await (mode === 'seal' ? sealSoftwareRelease : promoteSoftwareRelease)(candidate,
+              { version, scope, at: new Date().toISOString(), collaboration_id: readQualityLedger(input.projectId).collaboration?.at(-1)?.id }, runSignal,
+              () => { budget.recordRuntime(Date.now() - began); accounted = true; return prdScopeFingerprint(readPrdBackplane(input.projectId)) === scope && versionOf() === version }, mode === 'deliver')
           } finally { if (!accounted) budget.recordRuntime(Date.now() - began) }
+        }
+        if (candidate) {
+          if (isLongtermSoftware(input.projectId)) await persistCandidate('seal')
+          else if (cleanEnvironmentPending) await persistCandidate('trial')
           saveSoftwareRegressionBaseline(input.projectId, version)
         }
         if (cleanEnvironmentPending) {
@@ -465,7 +480,8 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
           const message='当前里程碑已登记的本机检查通过，可启动这个版本核对完整效果。确认本阶段后再决定下一轮；待办没有自动进入实现。'
           deps.persistAssistant(input.sessionId,message);emit('message_delta',{text:message});deps.complete(input.sessionId,input.projectId,'incomplete');return
         }
-        commitDesktopDelivery(input.projectId, runSignal)
+        if (candidate) await persistCandidate('deliver')
+        else commitDesktopDelivery(input.projectId, runSignal)
         recordEvaluationEvent(input.projectId,'delivery_final',{status:'delivered',candidate_id:candidate?.id})
         emit('stage_changed', { stage: 'delivered' })
         deps.persistAssistant(input.sessionId, text); emit('message_delta', { text }); deps.complete(input.sessionId, input.projectId)

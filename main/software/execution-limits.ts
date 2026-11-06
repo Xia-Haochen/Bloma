@@ -1,13 +1,19 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getPromaHome } from '../../storage/config-paths'
 import { writeTextFileAtomic } from '../../storage/json-store'
 import { findProject } from '../project/project-service'
 
+export interface FundedExecutionWindow {remainingRequests:number;remainingRmb:number;outputRmbPerMillion:number}
+const admittedWindow = new AsyncLocalStorage<() => FundedExecutionWindow>()
+/** Host scope only: the outer request/money guards remain authoritative. */
+export function withFundedExecutionWindow<T>(window:()=>FundedExecutionWindow, work:()=>T):T {return admittedWindow.run(window,work)}
+export function currentFundedExecutionWindow(){return admittedWindow.getStore()?.()}
 interface ExecutionLimits { version: 1; operation: string; requests: number; output: number; reason: string; at: string }
 /** Translate an explicitly admitted outer window into cumulative inner limits.
  * This never grants money or resets usage; callers must keep monetary admission. */
-export function fundedExecutionLimits(current:{requests:number;output:number;limits:{requests:number;output:number}},window:{remainingRequests:number;remainingRmb:number;outputRmbPerMillion:number}){
+export function fundedExecutionLimits(current:{requests:number;output:number;limits:{requests:number;output:number}},window:FundedExecutionWindow){
   if(![current.requests,current.output,window.remainingRequests].every(n=>Number.isSafeInteger(n)&&n>=0)
     ||!Number.isFinite(window.remainingRmb)||window.remainingRmb<=0||!Number.isFinite(window.outputRmbPerMillion)||window.outputRmbPerMillion<=0)throw Error('EXECUTION_WINDOW_INVALID')
   return{requests:Math.min(4096,Math.max(current.limits.requests,current.requests+window.remainingRequests)),

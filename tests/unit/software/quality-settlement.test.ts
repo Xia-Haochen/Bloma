@@ -1,11 +1,11 @@
 import {beforeEach,expect,it,vi} from 'vitest'
 import {settleObservedQuality} from '../../../main/software/quality-settlement'
 const state=vi.hoisted(()=>({ledger:{version:1,reviews:[],findings:[]} as any,save:vi.fn()}))
-vi.mock('../../../main/software/quality-ledger',()=>({qualityIdentity:async()=>({source:'new',target:'goal',environment:'env'}),qualityRulesVersion:()=> 'rules',readQualityLedger:()=>state.ledger,saveQualityLedger:state.save,sameIdentity:(a:any,b:any)=>JSON.stringify(a)===JSON.stringify(b)}))
+vi.mock('../../../main/software/quality-ledger',()=>({applicableQualityLedger:()=>state.ledger,qualityFailureBaseline:(f:any)=>f.checks.filter((c:any)=>c.outcome==='failed'&&(f.independent||c.grounded)).at(-1),qualityIdentity:async()=>({source:'new',target:'goal',environment:'env'}),qualityRulesVersion:()=> 'rules',readQualityLedger:()=>state.ledger,saveQualityLedger:state.save,sameIdentity:(a:any,b:any)=>JSON.stringify(a)===JSON.stringify(b)}))
 vi.mock('../../../main/software/process-manager',()=>({redactSoftwareOutput:(s:string)=>s}))
 const result=()=>({status:'passed',candidate:{id:'candidate',source:{digest:'new'}},core:{host_cli:{cases:[{name:'sum',covers:['F-001'],passed:true,exit_code:0}]}}} as any)
-beforeEach(()=>{state.save.mockClear();state.ledger={version:1,reviews:[],findings:[{id:'finding',requirement:'F-001',disposition:'confirmed',checks:[{identity:{source:'old',target:'goal',environment:'env'},rules:'rules',case_name:'sum',outcome:'failed'}]}]}})
-it.each(['rules','goal','environment','unbound','missing','duplicate','incomplete','independent','disputed'])('does not settle %s evidence',async kind=>{
+beforeEach(()=>{state.save.mockClear();state.ledger={version:1,reviews:[],findings:[{id:'finding',requirement:'F-001',disposition:'confirmed',checks:[{identity:{source:'old',target:'goal',environment:'env'},rules:'rules',case_name:'sum',grounded:true,outcome:'failed'}]}]}})
+it.each(['rules','unbound','missing','duplicate','incomplete','independent','disputed'])('does not settle %s evidence',async kind=>{
  const f=state.ledger.findings[0],r=result()
  if(kind==='rules')f.checks[0].rules='changed'
  if(kind==='goal')f.checks[0].identity.target='other'
@@ -30,4 +30,11 @@ it('cancellation cannot save a settlement',async()=>{
  const c=new AbortController();c.abort()
  await expect(settleObservedQuality('p',result(),c.signal)).rejects.toThrow()
  expect(state.save).not.toHaveBeenCalled()
+})
+
+it('retests an applicable grounded case after environment changes without erasing its original evidence',async()=>{
+ state.ledger.findings[0].checks[0].identity.environment='previous-runtime'
+ await settleObservedQuality('p',result())
+ expect(state.ledger.findings[0].disposition).toBe('closed')
+ expect(state.ledger.findings[0].checks[0].identity.environment).toBe('previous-runtime')
 })

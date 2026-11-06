@@ -1337,6 +1337,9 @@ export interface RepairLedgerEntry {
 }
 
 export interface Project {
+  /** Active software release committed atomically with lifecycle fields. */
+  software_release_id?: string
+
   longterm_summary?:{status:'planning'|'building'|'awaiting_confirmation'|'milestone_delivered'|'backlog_pending'|'archived';pending_items:number;milestone?:string}
   imported_source?: { path: string; head?: string; branch?: string; dirty: boolean; baseline_digest: string }
   /** Host-selected production workflow. Missing = historical compatibility. */

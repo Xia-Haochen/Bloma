@@ -1,3 +1,5 @@
+import {withFundedExecutionWindow} from '../../../main/software/execution-limits'
+import {leanBudget} from '../../../main/desktop/lean-budget'
 import { withEmptyQualityReview } from '../../fixtures/quality-review-query'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -67,7 +69,7 @@ it('runs real checks from a parent action and reuses them at final delivery only
   expect(reused.reused).toBe(true);expect(count()).toBe(2)
   expect(reused.evidence.report_hash).toBe(JSON.parse(first.output).evidence.report_hash)
   expect(()=>readVerificationReport(project.project_id,{report_hash:reused.evidence.report_hash})).not.toThrow()
-  expect(await recentSoftwareVerification(project.project_id, 'another-request')).toBeUndefined()
+  expect((await recentSoftwareVerification(project.project_id, 'another-request'))?.reused).toBe(true)
   const cached = await recentSoftwareVerification(project.project_id, 'r'); expect(cached?.core?.reused).toBe(true)
   const query: SDKQuery = async function* () { yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '当前版本已验证，请交付。' }] } }; yield { type: 'result', subtype: 'success', usage: { input_tokens: 10, output_tokens: 10 } } }
   await enterDesktopLine({ projectId: project.project_id, sessionId: 's', requestId: 'r', content: '完成原任务', maxTokens: 4096, signal: AbortSignal.timeout(90000) }, withEmptyQualityReview(query), {},
@@ -128,3 +130,15 @@ it('invalidates an earlier tool PASS when final delivery checks fail, even after
   writeFileSync(join(project.root_path, 'app.cjs'), source)
   expect(await recentSoftwareVerification(project.project_id, 'r')).toBeUndefined()
 }, 120000)
+
+it('normal production aligns an admitted outer window without clearing old request counts',async()=>{
+ await setup()
+ const budget=leanBudget(project.project_id,'desktop-implement');budget.recordRuntime(0);const snapshot=budget.snapshot()
+ writeFileSync(snapshot.file,JSON.stringify({version:1,requests:256,output:0,phases:{}}))
+ const query:SDKQuery=async function*(){yield {type:'assistant',message:{role:'assistant',content:[{type:'text',text:'完成原目标。'}]}};yield {type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}}
+ await withFundedExecutionWindow(()=>({remainingRequests:8,remainingRmb:1,outputRmbPerMillion:8}),()=>enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'funded',content:'完成原任务',maxTokens:4096,signal:AbortSignal.timeout(90000)},withEmptyQualityReview(query),{},
+ {publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}}))
+ const final=leanBudget(project.project_id,'desktop-implement').snapshot()
+ expect(final.requests).toBeGreaterThan(256);expect(final.limits.requests).toBe(264)
+ expect(findProject(project.project_id).status).toBe('completed')
+},120000)
