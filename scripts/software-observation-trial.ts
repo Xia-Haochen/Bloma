@@ -231,7 +231,7 @@ export async function main() {
             return surface.snapshot()
           },
           decide:input=>decideAsUser(query,{env:binding.env,signal,maxTokens:requestMaxTokens,sessionId:userSid,accounting:{projectId:project.project_id,runId,parentSessionId:sid,role:'simulated-user',scope:'user-experience'}},input),
-          act:action=>surface.act(action),
+          act:(action,signal)=>surface.act(action,signal),
           record:row=>{appendFileSync(join(taskDir,'simulated-user.jsonl'),safe({at:new Date().toISOString(),actor:'simulated-user',run_id:runId,...row as object})+'\n')}
         })
         report.turn={status:report.user_trial.status==='user_assessed'?'returned':report.user_trial.status}

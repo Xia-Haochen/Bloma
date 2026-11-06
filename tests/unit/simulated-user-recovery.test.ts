@@ -239,3 +239,48 @@ it('never substitutes another matching-label row when an observed identity disap
     await expect(surface.act({action:'click',ref:0,observation:snapshot.id})).rejects.toThrow('身份已消失或不再唯一')
   }finally{await browser.close()}
 })
+
+it('performs real simultaneous keyboard and canvas pointer input, then releases every held control',async()=>{
+  const browser=await chromium.launch({headless:true,...(existsSync(chromium.executablePath())?{}:{channel:process.platform==='win32'?'msedge':'chrome'})})
+  try{
+    const page=await browser.newPage();await page.setContent(`<canvas id="arena" width="300" height="150"></canvas><output></output><script>
+      const held=new Set();let overlap=0,mouse=false,moved=0;
+      const show=()=>document.querySelector('output').textContent=JSON.stringify({held:[...held],mouse,overlap,moved});
+      addEventListener('keydown',e=>{held.add(e.key);show()});addEventListener('keyup',e=>{held.delete(e.key);show()});
+      const c=document.querySelector('canvas');c.addEventListener('pointermove',()=>{moved++;show()});c.addEventListener('pointerdown',()=>{mouse=true;show()});addEventListener('pointerup',()=>{mouse=false;show()});
+      setInterval(()=>{if(held.has('w')&&held.has('ArrowRight')&&mouse)overlap++;show()},10);
+    </script>`)
+    const surface=new UserPage(page,'app',home,'input');let snapshot=await surface.snapshot()
+    const ref=snapshot.controls.find(c=>c.tag==='canvas')!.ref
+    await surface.act({action:'input',keys:['w','ArrowRight'],pointer:{ref,x:.7,y:.4,button:'left'},milliseconds:160,observation:snapshot.id})
+    let state=JSON.parse(await page.locator('output').innerText())
+    expect(state.overlap).toBeGreaterThan(2);expect(state.moved).toBeGreaterThan(0);expect(state.held).toEqual([]);expect(state.mouse).toBe(false)
+    snapshot=await surface.snapshot();const controller=new AbortController()
+    const pending=surface.act({action:'input',keys:['w','ArrowRight'],pointer:{ref,x:.5,y:.5,button:'left'},milliseconds:3000,observation:snapshot.id},controller.signal)
+    await expect.poll(async()=>JSON.parse(await page.locator('output').innerText()).mouse).toBe(true)
+    controller.abort(Error('cancelled'))
+    await expect(pending).rejects.toThrow()
+    state=JSON.parse(await page.locator('output').innerText());expect(state.held).toEqual([]);expect(state.mouse).toBe(false)
+    await expect(surface.act({action:'input',keys:['w'],milliseconds:1,observation:snapshot.id})).rejects.toThrow('STALE')
+    await page.evaluate(()=>{const cover=document.createElement('div');cover.style.cssText='position:fixed;inset:0;z-index:100';document.body.append(cover)})
+    snapshot=await surface.snapshot()
+    await expect(surface.act({action:'input',keys:['w'],pointer:{ref,x:.5,y:.5,button:'left'},milliseconds:100,observation:snapshot.id})).rejects.toThrow('被遮挡')
+    state=JSON.parse(await page.locator('output').innerText());expect(state.held).toEqual([]);expect(state.mouse).toBe(false)
+  }finally{await browser.close()}
+})
+
+it('refuses system shortcuts, invalid pointer targets and unbounded holds before sending input',()=>{
+  const app=userActionContract({hasApp:true})
+  for(const raw of [
+    {action:'input',keys:['Control','w'],milliseconds:100},
+    {action:'input',keys:['Meta'],milliseconds:100},
+    {action:'input',keys:['w','w'],milliseconds:100},
+    {action:'input',keys:[],milliseconds:100},
+    {action:'input',keys:['w'],milliseconds:3001},
+    {action:'input',pointer:{ref:0,x:2,y:.1},milliseconds:100},
+    {action:'input',pointer:{ref:0,x:.2,y:.1,script:'run()'},milliseconds:100}
+  ])expect(()=>app.parse(raw)).toThrow(UserInteractionError)
+  expect(app.parse({action:'input',keys:['w','ArrowLeft'],milliseconds:1000})).toMatchObject({action:'input'})
+  expect(app.parse({action:'input',keys:['W','ArrowLeft'],milliseconds:1000}).keys).toEqual(['w','ArrowLeft'])
+  expect(()=>userActionContract({question:{choices:[]}}).parse({action:'input',keys:['w'],milliseconds:1000})).toThrow('当前可用动作')
+})

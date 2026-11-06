@@ -13,6 +13,7 @@ import {startSoftwareProcess,stopSoftwareProcess} from '../main/software/process
 import {runSecurityScan} from '../main/verification/security-scan'
 import type {UserTestFile} from './user-test-files'
 import type {UserAction,UserView} from './simulated-user'
+import {performUserInput} from './user-input'
 import {bindUserControl} from './user-control-binding'
 import {UserInteractionError,validateUserAction} from './user-action'
 
@@ -25,7 +26,7 @@ function describeControl(el:Node){
   if(e instanceof HTMLInputElement&&e.type==='file')actions.push('upload')
   else if(e instanceof HTMLTextAreaElement||e.isContentEditable||e instanceof HTMLInputElement&&!['button','submit','reset','checkbox','radio','range','color','hidden'].includes(e.type))actions.push('fill')
   if(e instanceof HTMLSelectElement)actions.push('select')
-  if(e instanceof HTMLCanvasElement)actions.push('draw')
+  if(e instanceof HTMLCanvasElement)actions.push('draw','input')
   return{context:(e.closest('tr,[role="row"],li,[role="listitem"]') as HTMLElement|null)?.innerText.trim().slice(0,500),tag:e.tagName.toLowerCase(),role:e.getAttribute('role')??(e instanceof HTMLInputElement?e.type:undefined),label:label.trim().slice(0,160),actions,
     value:input&&!(e instanceof HTMLInputElement&&e.type==='password')?e.value.slice(0,300):undefined,
     checked:e instanceof HTMLInputElement?e.checked:e.hasAttribute('aria-checked')?e.getAttribute('aria-checked')==='true':undefined,
@@ -102,21 +103,39 @@ export class UserPage {
   assertObservation(action:UserAction){
     if(action.observation!==this.observation)throw new UserInteractionError('action','SIMULATED_USER_STALE_OBSERVATION: 画面已变化，请重新观察。')
   }
-  async act(action:UserAction){
-    validateUserAction(action);this.assertObservation(action)
-    let dispatched=false
-    try{
-      if(action.action==='wait'){await this.page.waitForTimeout(action.milliseconds!);return}
-      const binding=this.bindings[action.ref!],descriptor=this.descriptors[action.ref!]
+  private async control(ref:number,operation:string){
+      const binding=this.bindings[ref],descriptor=this.descriptors[ref]
       if(binding?.target&&await binding.target.count()!==1)throw new UserInteractionError('action','控件身份已消失或不再唯一，请重新观察。')
-      const original=this.controls[action.ref!],element=binding?.target??original
+      const original=this.controls[ref],element=binding?.target??original
       const evaluate=<R>(fn:(node:Node)=>R)=>binding?.target?binding.target.evaluate(fn):original.evaluate(fn)
       if(!element||!descriptor)throw new UserInteractionError('action','当前画面没有这个控件，请选择新画面中的编号。')
-      if(!descriptor.actions?.includes(action.action))throw new UserInteractionError('action','该控件不支持这个操作，请按画面中列出的操作使用。')
+      if(!descriptor.actions?.includes(operation))throw new UserInteractionError('action','该控件不支持这个操作，请按画面中列出的操作使用。')
       const identity=await evaluate(describeControl)
       if(identity.tag!==descriptor.tag||identity.role!==descriptor.role||identity.label!==descriptor.label)throw new UserInteractionError('action','控件含义已变化，请重新观察再选择。')
       const current=await evaluate(el=>({connected:el.isConnected,disabled:(el as Element).matches(':disabled')||(el as Element).getAttribute('aria-disabled')==='true'}))
       if(!current.connected||current.disabled)throw new UserInteractionError('action','控件已消失或不可用，请查看新画面。')
+      return{binding,original,element}
+  }
+  async act(action:UserAction,signal?:AbortSignal){
+    validateUserAction(action);this.assertObservation(action);signal?.throwIfAborted()
+    let dispatched=false
+    try{
+      if(action.action==='input'){
+        dispatched=true
+        await performUserInput(this.page,action,async ref=>{
+          const {element,binding,original}=await this.control(ref,'input')
+          await element.scrollIntoViewIfNeeded({timeout:5000})
+          const box=await element.boundingBox();if(!box)return null
+          const point={x:box.x+action.pointer!.x*Math.max(0,box.width-1),y:box.y+action.pointer!.y*Math.max(0,box.height-1)}
+          const hit=(e:Node,p:{x:number;y:number})=>{const target=document.elementFromPoint(p.x,p.y);return target!==null&&(target===e||e.contains(target))}
+          const clear=binding?.target?await binding.target.evaluate(hit,point):await original.evaluate(hit,point)
+          if(!clear)throw new UserInteractionError('action','画布目标被遮挡或不在可见区域，请重新观察。')
+          return box
+        },signal)
+        return
+      }
+      if(action.action==='wait'){await this.page.waitForTimeout(action.milliseconds!);return}
+      const {binding,original,element}=await this.control(action.ref!,action.action)
       if(action.action==='upload'){
         const paths=action.files!.map(id=>{
           const file=this.files.find(f=>f.id===id)
@@ -230,13 +249,13 @@ export class SimulatedUserSurface {
     if(this.surface?.kind!=='app'||!this.release)throw Error('SIMULATED_USER_APP_REQUIRED')
     await verifyReleaseSource(this.release)
   }
-  async act(action:UserAction){
+  async act(action:UserAction,signal?:AbortSignal){
     validateUserAction(action)
     if(action.action==='reopen'){
       this.surface?.assertObservation(action)
       if(this.surface?.kind!=='app')throw Error('SIMULATED_USER_REOPEN_REQUIRES_APP')
       try{await this.openApp(true)}catch(error){interactionFailure(error,'unknown')}
-    }else if(this.surface)await this.surface.act(action)
+    }else if(this.surface)await this.surface.act(action,signal)
     else throw Error('SIMULATED_USER_VIEW_REQUIRED')
   }
 }

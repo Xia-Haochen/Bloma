@@ -47,7 +47,7 @@ export async function simulateUserSession(input:{goal:string;signal:AbortSignal;
   turn:(reply?:{text:string;selected?:string})=>Promise<{card?:AgentEvent;failed?:string}>;
   view:(card?:AgentEvent)=>Promise<UserView|undefined>;
   decide:(state:{goal:string;card?:ReturnType<typeof publicUserCard>;view?:UserView;history:unknown[]})=>Promise<UserAction>;
-  act:(action:UserAction)=>Promise<void>;record:(row:unknown)=>void}){
+  act:(action:UserAction,signal?:AbortSignal)=>Promise<void>;record:(row:unknown)=>void}){
   const history:unknown[]=[],attempts=new Map<string,number>();let state=await input.turn(),interactions=0,failures=0,previousText:string|undefined
   const limit=input.maxRecoveryFailures??3
   if(!Number.isSafeInteger(limit)||limit<1)throw Error('SIMULATED_USER_RECOVERY_LIMIT_INVALID')
@@ -84,7 +84,7 @@ export async function simulateUserSession(input:{goal:string;signal:AbortSignal;
         const stateKey=view.stateKey??JSON.stringify({kind:view.kind,text:view.text,controls:view.controls,downloads:view.downloads})
         const key=JSON.stringify({stateKey,action:{...action,observation:undefined}})
         if(action.action!=='wait'&&(attempts.get(key)??0)>=3)throw new UserInteractionError('action','重复相同操作后没有观察到新的结果。请换一种操作、等待异步结果，或stop说明无法验证；不要继续重复提交。')
-        await input.act(action)
+        await input.act(action,input.signal)
         if(action.action!=='wait')attempts.set(key,(attempts.get(key)??0)+1)
         if(!['wait','reopen'].includes(action.action)&&view.kind==='app')interactions++
       }
