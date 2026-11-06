@@ -31,6 +31,12 @@ function describeControl(el:Node){
     disabled:e.matches(':disabled')||e.getAttribute('aria-disabled')==='true',options:e instanceof HTMLSelectElement?[...e.options].map(o=>o.label):undefined}
 }
 
+function describeMedia(el:Node){
+  const e=el as HTMLMediaElement
+  return{kind:e.tagName.toLowerCase(),label:e.getAttribute('aria-label')??e.getAttribute('title')??'',duration:Number.isFinite(e.duration)?e.duration:null,
+    currentTime:e.currentTime,paused:e.paused,ended:e.ended,muted:e.muted,volume:e.volume,readyState:e.readyState,error:e.error?.code??null}
+}
+
 function interactionFailure(error:unknown,effect:'none'|'unknown'):never{
   if(error instanceof UserInteractionError)throw error
   if(error instanceof Error&&(error.name==='TimeoutError'||/not attached|not connected|not visible|not enabled|not editable|not an? (?:input|select)|Target .*closed|Execution context was destroyed|Frame was detached/i.test(error.message)))
@@ -63,10 +69,31 @@ export class UserPage {
     }
     if(this.chooser){controls.push({ref:this.controls.length,...await this.chooser.evaluate(describeControl)});this.controls.push(this.chooser);this.chooser=undefined}
     this.descriptors=controls;this.observation=randomUUID();mkdirSync(this.folder,{recursive:true})
-    const bytes=await this.page.screenshot({fullPage:false});writeFileSync(join(this.folder,this.observation+'.png'),bytes)
-    const view:UserView={id:this.observation,kind:this.kind,text:(await this.page.locator('body').innerText()).slice(0,16000),controls,
-      files:(this.kind==='app'?this.files:[]).map(({id,name,description})=>({id,name,description})),downloads:this.downloads.map(row=>({...row})),image:[savePastedImage(this.session,bytes.toString('base64'),'png')],audio:{status:'not_measured',limit:'截图和DOM不能证明实际音频，请勿声称已听到声音'}}
-    writeFileSync(join(this.folder,this.observation+'.json'),JSON.stringify(view));return view
+    // Temporal media observations are sampled by the host, not invented by the model.
+    const media:NonNullable<UserView['media']>=[],handles=await this.page.locator('video,audio').elementHandles()
+    const initial:ReturnType<typeof describeMedia>[]=[]
+    const visible:ElementHandle[]=[]
+    try{
+      for(const handle of handles)if(await handle.isVisible()){visible.push(handle);initial.push(await handle.evaluate(describeMedia))}
+      const images:NonNullable<UserView['image']>=[]
+      const first=await this.page.screenshot({fullPage:false})
+      const active=initial.some(m=>!m.paused&&!m.ended&&m.readyState>=2)
+      let bytes=first
+      if(active){
+        writeFileSync(join(this.folder,this.observation+'-start.png'),first)
+        images.push(savePastedImage(this.session,first.toString('base64'),'png'))
+        const at=Date.now();await this.page.waitForTimeout(1000)
+        for(let i=0;i<visible.length;i++){const after=await visible[i].evaluate(describeMedia);media.push({...after,progress:{from:initial[i].currentTime,to:after.currentTime,elapsed_ms:Date.now()-at}})}
+        bytes=await this.page.screenshot({fullPage:false})
+      }else media.push(...initial)
+      writeFileSync(join(this.folder,this.observation+'.png'),bytes);images.push(savePastedImage(this.session,bytes.toString('base64'),'png'))
+      const view:UserView={id:this.observation,kind:this.kind,text:(await this.page.locator('body').innerText()).slice(0,16000),controls,media,
+        files:(this.kind==='app'?this.files:[]).map(({id,name,description})=>({id,name,description})),downloads:this.downloads.map(row=>({...row})),image:images,
+        audio:{status:'not_measured',limit:'媒体时间/音量状态不证明扬声器实际声音；没有音频测量，不得声称听到声音'}}
+      const state={kind:view.kind,text:view.text,controls:view.controls,downloads:view.downloads,media:media.map(m=>({...m,currentTime:Math.floor(m.currentTime),progress:m.progress?{from:Math.floor(m.progress.from),to:Math.floor(m.progress.to)}:undefined})),visual:media.length?undefined:createHash('sha256').update(bytes).digest('hex')}
+      view.stateKey=createHash('sha256').update(JSON.stringify(state)).digest('hex')
+      writeFileSync(join(this.folder,this.observation+'.json'),JSON.stringify(view));return view
+    }finally{for(const handle of handles)await handle.dispose()}
   }
   assertObservation(action:UserAction){
     if(action.observation!==this.observation)throw new UserInteractionError('action','SIMULATED_USER_STALE_OBSERVATION: 画面已变化，请重新观察。')

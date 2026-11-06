@@ -100,3 +100,51 @@ it('accepts only the isolated structured intent and never interprets assistant n
   const multiple:SDKQuery=async function*(){yield{type:'assistant',message:{role:'assistant',content:[{type:'tool_use',id:'a',name:'perform_user_action',input:{action:'click',ref:0}},{type:'tool_use',id:'b',name:'perform_user_action',input:{action:'click',ref:1}}]}}}
   await expect(decideAsUser(multiple,options(),{goal:'保存',view,history:[]})).rejects.toBeInstanceOf(UserInteractionError)
 })
+
+it('samples real advancing media and chronological images without claiming audible sound',async()=>{
+  const browser=await chromium.launch({headless:true,...(existsSync(chromium.executablePath())?{}:{channel:process.platform==='win32'?'msedge':'chrome'})})
+  try{
+    const page=await browser.newPage()
+    await page.setContent('<canvas width="120" height="80"></canvas><video muted autoplay controls></video><script>const c=document.querySelector("canvas"),ctx=c.getContext("2d"),v=document.querySelector("video");let t=0;setInterval(()=>{ctx.fillStyle=++t%2?"blue":"green";ctx.fillRect(0,0,120,80)},100);v.srcObject=c.captureStream(20);v.play()</script>')
+    await page.waitForFunction(()=>{const v=document.querySelector('video')!;return !v.paused&&v.currentTime>0.1})
+    const surface=new UserPage(page,'app',home,'temporal'),snapshot=await surface.snapshot()
+    expect(snapshot.media?.[0].progress!.to! - snapshot.media?.[0].progress!.from!).toBeGreaterThan(.5)
+    expect(snapshot.image).toHaveLength(2);expect(snapshot.audio).toMatchObject({status:'not_measured'})
+    expect(snapshot.stateKey).toMatch(/^[a-f0-9]{64}$/)
+    const query:SDKQuery=async function*(prompt){expect(prompt).not.toContain(snapshot.stateKey!);yield* intent({action:'stop',text:'已观察播放推进，未判断声音'})(prompt,options())}
+    await decideAsUser(query,options(),{goal:'播放',view:snapshot,history:[]})
+  }finally{await browser.close()}
+})
+
+it('stops dispatching identical actions on unchanged observations and returns control to user judgment',async()=>{
+  let decisions=0,acts=0
+  const result=await simulateUserSession({goal:'提交',signal:options().signal,turn:async()=>({}),view:async()=>view,
+    decide:async state=>{
+      if(++decisions<=4)return{action:'click',ref:0,observation:'v'}
+      expect(JSON.stringify(state.history)).toContain('没有观察到新的结果')
+      return{action:'stop',text:'反复点击没有变化，无法验证'}
+    },act:async()=>{acts++},record:()=>{}})
+  expect(acts).toBe(3);expect(result.status).toBe('user_unverified')
+})
+
+it('allows repeated actions with observed progress and does not block legitimate asynchronous waiting',async()=>{
+  let steps=0,acts=0
+  const result=await simulateUserSession({goal:'分页查看',signal:options().signal,turn:async()=>({}),view:async()=>({...view,text:String(acts)}),
+    decide:async()=>++steps<=5?{action:'click',ref:0,observation:'v'}:{action:'finish',text:'看完五页',observation:'v'},act:async()=>{acts++},record:()=>{}})
+  expect(acts).toBe(5);expect(result.status).toBe('user_assessed')
+  const waiting=await simulateUserSession({goal:'等完成',maxSteps:5,signal:options().signal,turn:async()=>({}),view:async()=>view,
+    decide:async()=>({action:'wait',milliseconds:3000,observation:'v'}),act:async()=>{},record:()=>{}})
+  expect(waiting.status).toBe('user_step_limit')
+})
+
+it('carries actual observed outcomes across later screens rather than only successful dispatch claims',async()=>{
+  let step=0
+  const result=await simulateUserSession({goal:'保存后重开',signal:options().signal,turn:async()=>({}),
+    view:async()=>({...view,text:['初始','已保存Alice','重开后Alice'][step]}),
+    decide:async state=>{
+      const action=step===0?{action:'click',ref:0}:step===1?{action:'reopen'}:{action:'finish',text:'保存后重开仍有Alice'}
+      const query:SDKQuery=async function*(prompt,opts){if(step===2){expect(prompt).toContain('已保存Alice');expect(prompt).toContain('重开后Alice')}yield* intent(action)(prompt,opts)}
+      return decideAsUser(query,options(),state)
+    },act:async()=>{step++},record:()=>{}})
+  expect(result.status).toBe('user_assessed')
+})
