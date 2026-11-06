@@ -47,12 +47,12 @@ it('rejects a made-up successful trial and stops at a bounded number of actions'
   expect((await simulateUserSession({...deps,decide:async()=>({action:'finish',observation:'v',text:'都好了'})}))).toMatchObject({status:'user_recovery_exhausted',steps:3})
   expect((await simulateUserSession({...deps,maxSteps:2,decide:async()=>({action:'wait',observation:'v',milliseconds:1})})).status).toBe('user_step_limit')
 })
-it('returns a UI timeout to user observation without leaking engine errors or forcing the click',async()=>{
+it('returns unavailable question actions to the model before dispatch and accepts a corrected reply',async()=>{
   let turns=0,decisions=0;const rows:unknown[]=[]
   const result=await simulateUserSession({goal:'保存',signal:new AbortController().signal,
     turn:async reply=>{turns++;return reply?{failed:'producer stopped'}:{card:card('ux_confirm')}},
     view:async()=>({id:'v',kind:'preview',text:'保存',controls:[]}),
-    decide:async state=>{if(++decisions===1)return{action:'click',observation:'v',ref:0};expect(JSON.stringify(state.history)).not.toContain('private-engine-path');expect(JSON.stringify(state.history)).toContain('没有成功');return{action:'reply',observation:'v',text:'按钮被遮挡了，请调整布局。'}},
+    decide:async state=>{if(++decisions===1)return{action:'click',observation:'v',ref:0};expect(JSON.stringify(state.history)).not.toContain('private-engine-path');expect(JSON.stringify(state.history)).toContain('用reply回答');return{action:'reply',observation:'v',text:'按钮被遮挡了，请调整布局。'}},
     act:async()=>{throw new UserInteractionError('surface','刚才的操作没有成功确认，请重新观察。','unknown',{cause:new Error('private-engine-path')})},record:row=>rows.push(row)})
   expect(result.status).toBe('product_stopped');expect(turns).toBe(2);expect(rows.some(row=>(row as any).type==='interaction_failed')).toBe(true)
 })

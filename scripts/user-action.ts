@@ -7,21 +7,46 @@ export class UserInteractionError extends Error {
 }
 export type UserAction={action:'reply'|'click'|'fill'|'select'|'upload'|'draw'|'wait'|'reopen'|'finish'|'stop';text?:string;choice?:number;observation?:string;ref?:number;value?:string;files?:string[];points?:Array<{x:number;y:number;delay?:number}>;milliseconds?:number}
 const fields:Record<UserAction['action'],string[]>={reply:['text','choice'],click:['ref'],fill:['ref','value'],select:['ref','value'],upload:['ref','files'],draw:['ref','points'],wait:['milliseconds'],reopen:[],finish:['text'],stop:['text']}
-/** An intent channel, not an executable tool registry. Only the UI host can dispatch it. */
-export const userActionTool={name:'perform_user_action',description:'根据当前公开界面选择下一步用户操作；每次只调用一次，等待宿主实际执行并提供新观察。reply回复/反馈；click点击；fill输入；select按显示文字选择；upload选择files中的文件ID；draw画线；wait等待；reopen重开；finish给出试用评价；stop说明无法验证。',input_schema:{
-  type:'object',additionalProperties:false,required:['action'],properties:{
-    action:{type:'string',enum:Object.keys(fields)},ref:{type:'integer',minimum:0},text:{type:'string',maxLength:2000},choice:{type:'integer',minimum:0},
-    value:{type:'string',maxLength:2000},files:{type:'array',minItems:1,uniqueItems:true,items:{type:'string'}},milliseconds:{type:'integer',minimum:0,maximum:3000},
-    points:{type:'array',minItems:2,maxItems:50,items:{type:'object',additionalProperties:false,required:['x','y'],properties:{x:{type:'number',minimum:0,maximum:1},y:{type:'number',minimum:0,maximum:1},delay:{type:'integer',minimum:0,maximum:500}}}}
+const properties:Record<string,unknown>={
+  ref:{type:'integer',minimum:0},text:{type:'string',minLength:1,maxLength:2000},choice:{type:'integer',minimum:0},
+  value:{type:'string',maxLength:2000},files:{type:'array',minItems:1,uniqueItems:true,items:{type:'string'}},milliseconds:{type:'integer',minimum:0,maximum:3000},
+  points:{type:'array',minItems:2,maxItems:50,items:{type:'object',additionalProperties:false,required:['x','y'],properties:{x:{type:'number',minimum:0,maximum:1},y:{type:'number',minimum:0,maximum:1},delay:{type:'integer',minimum:0,maximum:500}}}}
+}
+export interface UserActionContext {question?:{choices:Array<{index:number;label:string}>};hasApp?:boolean}
+/** The same contract advertises and validates the operations available now. */
+export function userActionContract(context:UserActionContext){
+  const question=context.question
+  const actions:UserAction['action'][]=question?['reply','stop']:context.hasApp?Object.keys(fields) as UserAction['action'][]:['stop']
+  const allowedFields=(action:UserAction['action'])=>fields[action].filter(k=>k!=='choice'||Boolean(question?.choices.length))
+  const hint=question?'当前是问题卡片：用reply回答；choice选择卡片列出的编号，text可补充说明；用stop结束未验证。':'请根据当前画面选择操作。'
+  const tool={name:'perform_user_action',description:`${hint} 每次只提交一个动作，等待真实执行及新观察。${question?'':'应用操作：click点击；fill输入；select按显示文字选择下拉选项；upload选择可用文件；draw画线；wait等待；reopen重开；reply反馈体验；finish结束评价。'}`,input_schema:{
+    type:'object',additionalProperties:false,properties:{action:{type:'string',enum:actions},...Object.fromEntries([...new Set(actions.flatMap(allowedFields))].map(k=>[k,k==='choice'?{type:'integer',enum:question!.choices.map(c=>c.index)}:properties[k]]))},required:['action'],
+    oneOf:actions.map(action=>({type:'object',additionalProperties:false,properties:{action:{const:action},...Object.fromEntries(allowedFields(action).map(k=>[k,k==='choice'?{type:'integer',enum:question!.choices.map(c=>c.index)}:properties[k]]))},required:['action',...allowedFields(action).filter(k=>!(question&&action==='reply')&&k!=='choice')],
+      ...(question&&action==='reply'?{anyOf:question.choices.length?[{required:['choice']},{required:['text']}]:[{required:['text']}]}:{})}))
+  }}
+  const parse=(raw:unknown):UserAction=>{
+    if(!raw||typeof raw!=='object'||Array.isArray(raw))throw new UserInteractionError('action',hint)
+    const action={...raw} as UserAction
+    if(!actions.includes(action.action))throw new UserInteractionError('action',`${hint} 当前可用动作：${actions.join('、')}。`)
+    const extra=Object.keys(action).filter(k=>!['action','observation',...allowedFields(action.action)].includes(k))
+    if(extra.length)throw new UserInteractionError('action',`${hint} ${action.action}不接受字段${extra.join('、')}；可用字段：${allowedFields(action.action).join('、')}。`)
+    if(question&&action.action==='reply'&&action.choice!==undefined){
+      const choice=question.choices.find(c=>c.index===action.choice)
+      if(!choice)throw new UserInteractionError('action','请选择当前卡片实际列出的选项编号，或用text直接回答。')
+      if(action.text===undefined)action.text=choice.label
+    }
+    return validateUserAction(action)
   }
-}}
+  return{tool,parse}
+}
 const fail=(message:string):never=>{throw new UserInteractionError('action',message)}
 /** Validate the complete intent before any side effect. IDs always come from the host. */
 export function validateUserAction(raw:unknown):UserAction{
   if(!raw||typeof raw!=='object'||Array.isArray(raw))return fail('请只提交一个动作对象；每次操作后先查看新画面，再决定下一步。')
   const a=raw as UserAction
   if(!Object.hasOwn(fields,a.action))return fail('动作不受支持，请使用当前可用的用户操作。')
-  if(Object.keys(a).some(k=>!['action','observation',...fields[a.action]].includes(k)))return fail('动作包含不适用的字段，请只提供该动作所需的信息。')
+  const extra=Object.keys(a).filter(k=>!['action','observation',...fields[a.action]].includes(k))
+  if(extra.length)return fail(`${a.action}不接受字段${extra.join('、')}；可用字段：${fields[a.action].join('、')}。`)
   if(['reply','finish','stop'].includes(a.action)&&(typeof a.text!=='string'||!a.text.trim()||a.text.length>2000))return fail('请用不超过2000字说明回复或试用结论。')
   if(a.choice!==undefined&&(!Number.isSafeInteger(a.choice)||a.choice<0))return fail('请选择卡片中显示的选项。')
   if(fields[a.action].includes('ref')&&(!Number.isSafeInteger(a.ref)||a.ref!<0))return fail('请使用当前画面中的控件编号。')

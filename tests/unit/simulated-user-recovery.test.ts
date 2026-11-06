@@ -3,8 +3,9 @@ import {mkdtempSync,rmSync,existsSync} from 'node:fs'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {chromium} from 'playwright'
-import {decideAsUser,simulateUserSession,type UserView} from '../../scripts/simulated-user'
-import {UserInteractionError,validateUserAction} from '../../scripts/user-action'
+import {decideAsUser,simulateUserSession,publicUserCard,userReply,type UserView} from '../../scripts/simulated-user'
+import {UserInteractionError,validateUserAction,userActionContract} from '../../scripts/user-action'
+import type {AgentEvent} from '../../shared/types'
 import {UserPage} from '../../scripts/simulated-user-surface'
 import type {SDKQuery} from '../../main/orchestration/stages/orchestration-contracts'
 let home:string,old:string|undefined
@@ -147,4 +148,57 @@ it('carries actual observed outcomes across later screens rather than only succe
       return decideAsUser(query,options(),state)
     },act:async()=>{step++},record:()=>{}})
   expect(result.status).toBe('user_assessed')
+})
+
+const question=(kind='lean_scope')=>({event_id:'question',session_id:'session',created_at:'now',type:'user_decision_required',payload:{kind,title:'确认范围',summary:'练习任务',questions:[{id:'private-confirm',label:'按这份做'},{id:'private-adjust',label:'补充或修改'}]}} as AgentEvent)
+it.each([{action:'click',ref:0,choice:0,text:'按这份做'},{action:'select',choice:0},{action:'select',choice:0}])('replays a recorded failed intent with actionable current-contract feedback: %j',async raw=>{
+  const card=publicUserCard(question()),contract=userActionContract({question:card})
+  expect(contract.tool.input_schema.properties.action.enum).toEqual(['reply','stop'])
+  expect(contract.tool.input_schema.properties).not.toHaveProperty('ref')
+  expect(JSON.stringify(contract.tool)).not.toContain('private-confirm')
+  expect(()=>contract.parse(raw)).toThrow('用reply回答')
+  const query:SDKQuery=async function*(prompt,options){
+    expect(options.tools?.[0].input_schema).toEqual(contract.tool.input_schema)
+    expect(prompt).not.toContain('private-confirm')
+    yield* intent({action:'reply',choice:0})(prompt,options)
+  }
+  const action=await decideAsUser(query,options(),{goal:'练习',card,history:[]})
+  expect(userReply(action,question(),undefined)).toEqual({text:'按这份做',selected:'private-confirm'})
+})
+
+it('handles selection, free answers, UX evidence and app feedback without ambiguous global fields',async()=>{
+  const card=publicUserCard(question())!,contract=userActionContract({question:card})
+  expect(contract.parse({action:'reply',choice:1,text:'请保留现有数据'})).toMatchObject({choice:1,text:'请保留现有数据'})
+  expect(()=>contract.parse({action:'reply',choice:9})).toThrow('实际列出')
+  expect(()=>contract.parse({action:'reply',choice:0,ref:0})).toThrow('不接受字段ref')
+  const free=userActionContract({question:{choices:[]}})
+  expect(free.tool.input_schema.properties).not.toHaveProperty('choice')
+  expect(free.parse({action:'reply',text:'希望在本机使用'}).text).toBe('希望在本机使用')
+  const ux=await decideAsUser(intent({action:'reply',choice:0}),options(),{goal:'练习',card:publicUserCard(question('ux_confirm')),history:[]})
+  expect(()=>userReply(ux,question('ux_confirm'),undefined)).toThrow('观察')
+  const app=userActionContract({hasApp:true})
+  expect(app.tool.input_schema.properties).not.toHaveProperty('choice')
+  expect(()=>app.parse({action:'select',choice:0})).toThrow('不接受字段choice')
+  expect(app.parse({action:'select',ref:0,value:'欧元'})).toMatchObject({action:'select',value:'欧元'})
+  expect(app.parse({action:'reply',text:'我点击保存后没有看到记录'}).action).toBe('reply')
+})
+
+it('drives a question, visual confirmation, real UI action and assessment through one state-derived contract',async()=>{
+  const browser=await chromium.launch({headless:true,...(existsSync(chromium.executablePath())?{}:{channel:process.platform==='win32'?'msedge':'chrome'})})
+  try{
+    const page=await browser.newPage();await page.setContent('<button onclick="document.querySelector(\'output\').textContent=\'已保存\'">保存</button><output></output>')
+    const surface=new UserPage(page,'app',home,'question-flow'),submitted:string[]=[],rows:any[]=[]
+    let phase=0,decisions=0
+    const result=await simulateUserSession({goal:'保存',signal:options().signal,
+      turn:async reply=>{if(reply){submitted.push(reply.selected!);phase++}return phase===0?{card:question()}:phase===1?{card:question('ux_confirm')}:{}},
+      view:async card=>phase===0?undefined:{...await surface.snapshot(),kind:card?'preview':'app'},
+      decide:async state=>{
+        decisions++
+        const action=state.card?{action:'reply',choice:0}:decisions===3?{action:'click',ref:state.view!.controls[0].ref}:{action:'finish',text:'已看到保存结果'}
+        if(decisions===4)expect(state.view!.text).toContain('已保存')
+        return decideAsUser(intent(action),options(),state)
+      },act:action=>surface.act(action),record:row=>rows.push(row)})
+    expect(result.status).toBe('user_assessed');expect(submitted).toEqual(['private-confirm','private-confirm'])
+    expect(rows.filter(r=>r.type==='interaction_failed')).toHaveLength(0)
+  }finally{await browser.close()}
 })

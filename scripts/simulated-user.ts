@@ -1,4 +1,4 @@
-import {UserInteractionError,validateUserAction,userActionTool,type UserAction} from './user-action'
+import {UserInteractionError,validateUserAction,userActionContract,type UserAction} from './user-action'
 export type {UserAction} from './user-action'
 import type {SDKQuery,SDKQueryOptions} from '../main/orchestration/stages/orchestration-contracts'
 import type {AgentEvent} from '../shared/types'
@@ -20,13 +20,14 @@ export async function decideAsUser(query:SDKQuery,options:SDKQueryOptions,input:
   if(!Number.isSafeInteger(options.maxTokens)||options.maxTokens!<1)throw Error('SIMULATED_USER_TOKEN_BUDGET_REQUIRED')
   const history=input.history.map((raw:any)=>({step:raw.step,card:raw.card,action:raw.action?{...raw.action,observation:undefined}:undefined,target:raw.target,observed:raw.observed,result:raw.result}))
   const prompt=JSON.stringify({...input,history,view:input.view?view:undefined})
+  const contract=userActionContract({question:input.card,hasApp:input.view?.kind==='app'})
   const intents:Array<{name?:string;input?:unknown}>=[]
-  for await(const event of query(prompt,{...options,tools:[userActionTool],history:[{role:'system',content:system}],messages:undefined,images:image,maxTokens:options.maxTokens})){
+  for await(const event of query(prompt,{...options,tools:[contract.tool],history:[{role:'system',content:system}],messages:undefined,images:image,maxTokens:options.maxTokens})){
     if(event.type==='assistant'&&event.message)for(const block of event.message.content)if(block.type==='tool_use')intents.push({name:block.name,input:block.input})
   }
-  if(intents.length!==1||intents[0].name!==userActionTool.name)
+  if(intents.length!==1||intents[0].name!==contract.tool.name)
     throw new UserInteractionError('response','动作未执行：请只调用一次perform_user_action提交下一步操作，再等待真实观察。正文中的动作或观察不会被执行。')
-  const action=validateUserAction(intents[0].input)
+  const action=contract.parse(intents[0].input)
   if(input.view)action.observation=input.view.id;else delete action.observation
   return action
 }
@@ -61,7 +62,8 @@ export async function simulateUserSession(input:{goal:string;signal:AbortSignal;
         if(observed.text!==undefined||observed.media?.length){const row={step,type:'observation',observation:view.id,observed};input.record(row);history.push(row)}
         previousText=view.text
       }
-      action=validateUserAction(await input.decide({goal:input.goal,card:publicUserCard(state.card),view,history}))
+      const publicCard=publicUserCard(state.card)
+      action=userActionContract({question:publicCard,hasApp:view?.kind==='app'}).parse(await input.decide({goal:input.goal,card:publicCard,view,history}))
       input.signal.throwIfAborted()
       const row={step,card:publicUserCard(state.card),observation:view?.id,action,target:view?.controls.find(c=>c.ref===action!.ref)}
       input.record({...row,type:'action_requested'})
