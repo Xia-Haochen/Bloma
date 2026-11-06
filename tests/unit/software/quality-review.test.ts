@@ -86,6 +86,22 @@ it('actual Pi C submits host-bound findings; a real injected CLI defect fails, i
   expect(await quality.gate()).toContain('FINDINGS_OPEN')
   await expect(check.execute({ finding_id: initial.id, case_name: 'sum' }, ctx())).rejects.toThrow('CONTRACT_CHANGED')
 }, 120000)
+it('host verification settles a bound defect after repair without another model tool, and source regression reopens it', async () => {
+  await review()
+  const id = readQualityLedger(project.project_id).findings[0].id
+  await quality.parentTools.find(t => t.name === 'check_quality_finding')!.execute({ finding_id: id, case_name: 'sum' }, ctx())
+  writeFileSync(join(project.root_path, 'app.cjs'), 'console.log(5)')
+  await verifySoftwareCandidate(project.project_id, 'host-repair', ctx().signal)
+  let f = readQualityLedger(project.project_id).findings[0]
+  expect(f.disposition).toBe('closed')
+  expect(f.checks.map(c => c.outcome)).toEqual(['failed','passed'])
+  expect(await quality.gate()).toContain('REVIEW_REQUIRED')
+  writeFileSync(join(project.root_path, 'app.cjs'), 'console.log(999)')
+  await verifySoftwareCandidate(project.project_id, 'host-regression', ctx().signal)
+  f = readQualityLedger(project.project_id).findings[0]
+  expect(f.disposition).toBe('confirmed')
+  expect(f.checks.map(c => c.outcome)).toEqual(['failed','passed','failed'])
+}, 120000)
 it('parent cannot forge a C submission; no-source opinions remain disputed/suggestions and cannot be reproduced as defects', async () => {
   await expect(quality.childProtocol[1].execute({ findings: [] }, ctx())).rejects.toThrow('DENIED')
   await review([{ ...finding, requirement_id: finding.requirement, expected_source: '应当自动增加备份功能' }, { ...finding, requirement: 'unscoped', kind: 'suggestion' }])

@@ -32,12 +32,9 @@ import { independentDesignVersion, readIndependentDesign, readIndependentPolicy 
 import { challengeIndependentCase, currentIndependentSemantics } from './independent-quality'
 import { selectQualityCollaboration } from './collaboration-selection'
 
-import { qualityHash as hash, sameIdentity as same, qualityIdentity as identity, readQualityLedger, saveQualityLedger, type Identity, type Review, type ReviewKind, type Ledger, type QualityFinding } from './quality-ledger'
+import { qualityRulesVersion as rulesVersion, qualityHash as hash, sameIdentity as same, qualityIdentity as identity, readQualityLedger, saveQualityLedger, type Identity, type Review, type ReviewKind, type Ledger, type QualityFinding } from './quality-ledger'
 export { qualityLedgerPath, readQualityLedger } from './quality-ledger'
 export type { QualityFinding } from './quality-ledger'
-function rulesVersion(projectId: string) {
-  return hash([guiSuitePath(projectId), cliSuitePath(projectId)].map(path => existsSync(path) ? readFileSync(path).toString('base64') : null))
-}
 
 /** The model supplies observations only. Candidate IDs, execution results and
  * state transitions belong to the host; the durable ledger lives outside source. */
@@ -203,6 +200,13 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       const result = await verifySoftwareCandidate(projectId, ctx.requestId, ctx.signal)
       const after = await identity(projectId, ctx.signal)
       if (!same(before, after) || rules !== rulesVersion(projectId)) throw Error('QUALITY_CHECK_INPUT_CHANGED')
+      const settled = readQualityLedger(projectId).findings.find(f => f.id === finding.id)
+      const last = settled?.checks.at(-1)
+      if (last && last.candidate === result.candidate?.id && last.case_name === input.case_name
+        && last.rules === rules && same(last.identity, before)) {
+        return { output: JSON.stringify({ finding: settled, status: result.status, summary: result.summary }),
+          isError: !['closed','not_reproduced'].includes(settled!.disposition) }
+      }
       const outcome = observedQualityFinding(result, finding, input.case_name)
       finding.checks.push({ at: new Date().toISOString(), identity: before, case_name: input.case_name, rules, outcome, report: result.report_path, candidate: result.candidate?.id,
         observation: redactSoftwareOutput(JSON.stringify({ status: result.status, summary: result.summary, original_review_source: finding.identity.source, current_candidate_only: !baseline && !same(finding.identity,before),

@@ -1,3 +1,5 @@
+import { guiSuitePath } from '../desktop/gui-acceptance'
+import { cliSuitePath } from '../desktop/lean-cli-check'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -53,3 +55,7 @@ export async function qualityIdentity(projectId: string, signal?: AbortSignal): 
     environment: qualityHash([runtimeBindingVersion(projectId), capabilityBindingVersion(projectId), process.platform, process.arch, process.versions.node]) }
 }
 export const saveQualityLedger = (projectId: string, ledger: Ledger) => writeTextFileAtomic(qualityLedgerPath(projectId), JSON.stringify(ledger, null, 2))
+
+export function qualityRulesVersion(projectId: string) {
+  return qualityHash([guiSuitePath(projectId), cliSuitePath(projectId)].map(path => existsSync(path) ? readFileSync(path).toString('base64') : null))
+}

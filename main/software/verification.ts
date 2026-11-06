@@ -29,6 +29,7 @@ import { independentAdapterVersion, verifyIndependentDesign } from './independen
 import { recordEvaluationEvent } from './harness-evaluation'
 import { capabilityBindingVersion } from './capability-bindings'
 import { recordIndependentFindings, independentChallengeVersion } from './independent-quality'
+import { settleObservedQuality } from './quality-settlement'
 
 export interface SoftwareVerification { status: 'passed' | 'failed' | 'unverified' | 'environment_blocked'; summary: string; candidate?: SoftwareRelease;
   completed_at?:number
@@ -163,6 +164,13 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
       } catch (error) { result.status = 'unverified'; result.summary = String(error) }
     }
     result.failure ??= verificationFailure(result)
+    if (result.candidate && !signal?.aborted && ['passed','failed'].includes(result.status)) {
+      try {
+        await verifyReleaseSource(result.candidate, signal)
+        if (!version || (await inputs(projectId, requestId, signal)).key !== version.key) throw Error('QUALITY_SETTLEMENT_INPUT_CHANGED')
+        await settleObservedQuality(projectId, result, signal)
+      } catch (error) { result.status = 'unverified'; result.summary = String(error); result.failure = verificationFailure(result, error) }
+    }
     // Even cancellation/write failure invalidates an older PASS. No result may
     // outlive changed rule, fixture, environment, binary or source inputs.
     result.completed_at=Date.now()
