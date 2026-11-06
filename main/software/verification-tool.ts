@@ -1,3 +1,4 @@
+import {applyApprovedNativeCorrections} from './native-gui-registration'
 import type { AgentLoopTool } from '../agent/loop/agent-loop'
 import type { createSoftwareCollaborationPolicy } from './collaboration-policy'
 import { closeDebugSessions } from './debug-sessions'
@@ -26,6 +27,7 @@ export function buildSoftwareVerifyTool(projectId: string, policy: ReturnType<ty
         if(input.script===undefined&&input.restart!==undefined)throw Error('SOFTWARE_VERIFY_INPUT_INVALID: restart与script一起提供')
         const launch = requireLaunchDeclaration(findProject(projectId).root_path,'SOFTWARE_VERIFY_CONFIRMED_ENTRY_REQUIRED')
         assertSoftwareDelivery(readPrdBackplane(projectId), launch)
+        applyApprovedNativeCorrections(projectId,ctx.signal)
         if(input.script!==undefined){if(typeof input.script!=='string'||input.restart!==undefined&&typeof input.restart!=='boolean')throw Error('GUI_NATIVE_INPUT_INVALID');registerNativeGuiTests(projectId,input.script,input.restart===true)}
         await closeDebugSessions(projectId, ctx.sessionId); await stopSoftwareSession(projectId, ctx.sessionId); previewChanged?.()
         attempted=true

@@ -22,9 +22,8 @@ it('carries important suspicions across edits and gives current evidence priorit
   const f=finding(),changed={...identity,source:'edited'}
   const facts=ledger([f,...Array.from({length:100},(_,i)=>finding({id:'idea'+i,disposition:'suggestion',evidence:'historical prose'.repeat(100)}))])
   const queue=qualityWorkQueue(facts,changed,{code:'code_review',message:'QUALITY_REVIEW_REQUIRED'},'rules')
-  expect(queue.closeout.next_tool).toBe('start_quality_review')
-  expect(queue.closeout.required_investigation).toEqual(['f'])
-  expect(queue.findings).toEqual([f]);expect(queue.history.findings).toBe(101)
+  expect(queue).not.toHaveProperty('closeout')
+  expect(queue.problems).toEqual([expect.objectContaining({id:'f',expected:f.expected_source,trigger:f.trigger,observation:f.evidence,missing:f.reproduction})]);expect(queue.history.findings).toBe(101)
   expect(JSON.stringify(queue).length).toBeLessThan(JSON.stringify(facts).length/10)
   expect(qualityCloseout(facts,{...changed,target:'different goal'},undefined,'rules').required_investigation).toEqual(['f']) // callers filter retired requirements, not arbitrary identity changes
 })
@@ -73,4 +72,17 @@ it('routes by typed qualification rather than message text and applies approved 
  expect(qualityCloseout(ledger([]),identity,{code:'code_review',message:'任意可读说明'},'rules').next_tool).toBe('start_quality_review')
  const f=finding({disposition:'confirmed',checks:[{at:'',identity,case_name:'case',rules:'rules',grounded:true,outcome:'failed',observation:'failure'}]})
  expect(qualityCloseout(ledger([f]),identity,{code:'apply_correction',message:'先应用批准的纠正'},'rules').next_tool).toBe('apply_test_correction')
+})
+
+it('schedules independent review for new host observations but not the same observation again',()=>{
+ const facts=ledger([finding()]);facts.reviews.push({id:'review',kind:'code',identity,status:'complete',at:'',observation:{digest:'observed',ui:{},steps:[],logs:[]}})
+ const block={code:'investigation' as const,message:'需要具体观察'}
+ expect(qualityCloseout(facts,identity,block,'rules',undefined,'observed').next_tool).toBe('inspect_app')
+ expect(qualityCloseout(facts,identity,block,'rules',undefined,'new-observation').next_tool).toBe('start_quality_review')
+ expect(facts.findings[0].disposition).toBe('suspected')
+})
+
+it('a later interrupted review prevents an older completion from directing the maker back into inspection',()=>{
+ const facts=ledger([finding()]);facts.reviews.push({id:'old',kind:'code',identity,status:'complete',at:''},{id:'stopped',kind:'code',identity,status:'interrupted',at:''})
+ expect(qualityCloseout(facts,identity,{code:'investigation',message:'仍需审阅'},'rules').next_tool).toBe('start_quality_review')
 })

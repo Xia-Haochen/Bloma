@@ -1,3 +1,4 @@
+import {applyApprovedNativeCorrections} from './native-gui-registration'
 import {qualityIdentityForInputs} from './quality-ledger'
 import { verifyComponentUsage } from './component-usage'
 import {testCorrectionVersion} from './test-corrections'
@@ -122,6 +123,7 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
   const result: SoftwareVerification = { status: 'unverified', summary: '当前版本尚未通过检查。', report_path: file }
   try {
     writeTextFileAtomic(file, JSON.stringify({ version: 1, state: 'running', key: '', at: Date.now() } satisfies Receipt))
+    applyApprovedNativeCorrections(projectId,signal)
     version = await verificationInputs(projectId, requestId, signal)
     result.input_identity=version.input_identity
     if (existsSync(guiSuitePath(projectId))) {

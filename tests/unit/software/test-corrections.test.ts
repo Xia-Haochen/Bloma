@@ -1,3 +1,7 @@
+import {applyApprovedNativeCorrections} from '../../../main/software/native-gui-registration'
+import {guiSuitePath} from '../../../main/desktop/gui-acceptance'
+import {buildSoftwareVerifyTool} from '../../../main/software/verification-tool'
+import {applyApprovedTestCorrections} from '../../../main/software/test-corrections'
 import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync} from 'node:fs'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
@@ -147,12 +151,38 @@ it('real browser: failed frozen expectation is retained, independently corrected
   const failed=await verifyProjectStage(id,'first','acceptance.mjs',new AbortController().signal)
   expect(failed.status).toBe('failed');expect(failed.feedback.scope).toBe('partial_cumulative_gui')
   const oldAttempt=readProjectStages(id).attempts[0],serverBefore=readFileSync(join(project.root_path,'server.cjs'),'utf8')
+  registerNativeGuiTests(id,'acceptance.mjs')
   const a=proposeTestCorrection(id,{contract_digest:oldAttempt.native.digest,file:'acceptance.mjs',old_text:"toHaveText('current')",new_text:"toHaveText('created')",feature_ids:['F-001'],reason:'确认预期为created，失败证据实际也是created，current不符来源'})
   decideTestCorrection(id,a.id,{verdict:'approve',reviewer:'independent_operator',reason:'独立核对确认来源与实际断言记录',expected_sources:{'F-001':'载入后显示created'},evidence:[{path:oldAttempt.report!,sha256:sha(readFileSync(oldAttempt.report!))}]})
-  applyTestCorrection(id,a.id)
+  await buildSoftwareVerifyTool(id,createSoftwareCollaborationPolicy(id,project.root_path,'s')).execute({},{projectId:id,sessionId:'s',requestId:'approved-recovery',signal:AbortSignal.timeout(60000),state:createToolState()})
+  expect(readFileSync(join(project.root_path,'acceptance.mjs'),'utf8')).toContain("toHaveText('created')")
   expect(readProjectStages(id).attempts[0].status).toBe('failed')
   expect((await verifyProjectStage(id,'first','acceptance.mjs',new AbortController().signal)).status).toBe('passed')
   expect(readProjectStages(id).attempts.map(a=>a.status)).toEqual(['failed','passed'])
   expect(readFileSync(join(project.root_path,'server.cjs'),'utf8')).toBe(serverBefore)
   expect(registerNativeGuiTests(id,'acceptance.mjs').covers).toEqual(['F-001'])
 },90000)
+
+it('host applies approved corrections once, while pending decisions and working conflicts remain blocked',()=>{
+ const a=proposal();expect(()=>applyApprovedTestCorrections(p.project_id)).toThrow('REVIEW_REQUIRED')
+ expect(readFileSync(join(p.root_path,'acceptance.mjs'),'utf8')).toBe(original)
+ decideTestCorrection(p.project_id,a.id,decision(a.id))
+ writeFileSync(join(p.root_path,'acceptance.mjs'),original+'\n// conflicting edit')
+ expect(()=>applyApprovedTestCorrections(p.project_id)).toThrow('WORKING_BYTES_CHANGED')
+ writeFileSync(join(p.root_path,'acceptance.mjs'),original)
+ expect(applyApprovedTestCorrections(p.project_id)).toBe(1)
+ expect(applyApprovedTestCorrections(p.project_id)).toBe(0)
+ expect(readFileSync(join(p.root_path,'acceptance.mjs'),'utf8')).toContain("toHaveText('created')")
+ expect(readTestContractFile(p.project_id,before.digest,'acceptance.mjs').text).toBe(original)
+})
+
+it('host resumes a correction applied before formal binding refresh without repeating application',()=>{
+ const scope=prdScopeFingerprint(readPrdBackplane(p.project_id));updateProject(p.project_id,{ux_confirmation:{prd_fingerprint:scope,design_hash:scope,html_hash:null}})
+ const oldSuite=registerNativeGuiTests(p.project_id,'acceptance.mjs')
+ const a=proposal();decideTestCorrection(p.project_id,a.id,decision(a.id));applyTestCorrection(p.project_id,a.id)
+ expect(JSON.parse(readFileSync(guiSuitePath(p.project_id),'utf8')).native_tests.digest).toBe(oldSuite.native_tests!.digest)
+ expect(applyApprovedNativeCorrections(p.project_id)).toBe(true)
+ expect(JSON.parse(readFileSync(guiSuitePath(p.project_id),'utf8')).native_tests.digest).not.toBe(oldSuite.native_tests!.digest)
+ expect(applyApprovedNativeCorrections(p.project_id)).toBe(false)
+ expect(readTestContractFile(p.project_id,before.digest,'acceptance.mjs').text).toBe(original)
+})

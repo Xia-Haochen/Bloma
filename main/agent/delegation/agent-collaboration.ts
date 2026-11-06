@@ -439,6 +439,12 @@ function refreshDelegationHandoff(record: DelegationRecord): void {
   record.taskHandoff = refreshHandoffEvidence(record, tools)
 }
 
+/** Host recovery checks liveness without exposing another session's records. */
+export function isProjectDelegationRunning(projectId:string,delegationId:string){
+  const record=delegations.get(delegationId)
+  return record?.projectId===projectId&&record.status==='running'
+}
+
 export function findDelegation(parentSessionId: string, delegationId: string): DelegationRecord | undefined {
   const record = delegations.get(delegationId)
   if (!record || record.parentSessionId !== parentSessionId) return undefined

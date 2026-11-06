@@ -17,6 +17,7 @@ import type { CollaborationSelection } from './collaboration-selection'
 export type Identity = { source: string; target: string; environment: string }
 export type ReviewKind = 'code' | 'visual'
 export interface Review { id: string; kind?: ReviewKind; identity: Identity; status: 'pending' | 'submitted' | 'complete' | 'interrupted'; child?: string; delegation?: string; at: string
+  observation?: {digest:string;image_hash?:string;ui:unknown;steps:unknown[];logs:unknown[]}
   resolutions?: Array<{finding_id:string;evidence:string;case_name?:string}>
   run_id?: string; failure_code?: string
   source_manifest?: import('./quality-review-context').ReviewSourceManifest
@@ -57,7 +58,7 @@ export async function qualityIdentity(projectId: string, signal?: AbortSignal): 
 /** Derive quality identity from already validated execution dependencies. */
 export function qualityIdentityForInputs(projectId:string,inputs:{source:string;environment:string;rules:string}):Identity {
   const project=findProject(projectId),brief=readPrdBackplane(projectId)
-  return {source:inputs.source,target:qualityHash([prdScopeFingerprint(brief),brief.user_confirmed_at,project.ux_confirmation]),environment:qualityHash([inputs.environment,inputs.rules,project.lean_operation_id])}
+  return {source:inputs.source,target:qualityHash([prdScopeFingerprint(brief),brief.user_confirmed_at,project.ux_confirmation]),environment:qualityHash([inputs.environment,inputs.rules])}
 }
 export const saveQualityLedger = (projectId: string, ledger: Ledger) => writeTextFileAtomic(qualityLedgerPath(projectId), JSON.stringify(ledger, null, 2))
 
@@ -79,4 +80,9 @@ export function applicableQualityLedger(projectId: string): Ledger {
 /** Raw execution failures are not automatically proof of a reviewer's trigger. */
 export function qualityFailureBaseline(finding: QualityFinding) {
   return finding.checks.filter(c=>c.outcome==='failed'&&(finding.independent||c.grounded===true)).at(-1)
+}
+
+export function completedQualityReview(ledger:Ledger,kind:ReviewKind,current:Identity){
+  const latest=ledger.reviews.filter(r=>(r.kind??'code')===kind).at(-1)
+  return latest?.status==='complete'&&sameIdentity(latest.identity,current)?latest:undefined
 }

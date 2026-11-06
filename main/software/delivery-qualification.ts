@@ -3,7 +3,7 @@ const blocked=(code:DeliveryBlock['code'],message:string):DeliveryBlock=>({code,
 import { testCorrectionGate } from './test-corrections'
 import { readIndependentPolicy, readIndependentDesign, independentDesignVersion } from './independent-design'
 import { currentIndependentSemantics } from './independent-quality'
-import { qualityIdentity as identity, qualityRulesVersion as rulesVersion, applicableQualityLedger, sameIdentity as same } from './quality-ledger'
+import { qualityIdentity as identity, qualityRulesVersion as rulesVersion, applicableQualityLedger, completedQualityReview, sameIdentity as same } from './quality-ledger'
 import { selectQualityCollaboration } from './collaboration-selection'
 import { importantFinding, findingNeedsInvestigation, findingNeedsClosure } from './quality-closeout'
 import { validateVisualGrant } from './visual-review-material'
@@ -19,8 +19,8 @@ export async function deliveryQualityBlock(projectId: string, signal?: AbortSign
     if (investigations.length) return blocked('investigation', 'QUALITY_FINDING_REPRODUCTION_REQUIRED: 重要疑点尚无当前候选的实际案例结果。' + JSON.stringify(investigations.map(f => f.id)))
     const open = ledger.findings.filter(f => findingNeedsClosure(f,current,rulesVersion(projectId),independentDesignVersion(projectId)))
     if (open.length) return blocked('defects', 'QUALITY_FINDINGS_OPEN: 先复测已确认缺陷，再重新审阅。' + JSON.stringify(open.map(f => f.id)))
-    const latest = ledger.reviews.filter(r => (r.kind ?? 'code') === 'code').at(-1)
-    if (selection.required.includes('code') && (!latest || latest.status !== 'complete' || !same(latest.identity, current))) return blocked('code_review', 'QUALITY_REVIEW_REQUIRED: 当前候选尚无所需的有效结构化C审阅；用start_quality_review，等待并处理台账。')
+    const latest = completedQualityReview(ledger,'code',current)
+    if (selection.required.includes('code') && !latest) return blocked('code_review', 'QUALITY_REVIEW_REQUIRED: 当前候选尚无所需的有效结构化C审阅；用start_quality_review，等待并处理台账。')
     const unresolvedIntent = (['code', 'visual'] as const).flatMap(kind => { const r = ledger.reviews.filter(r => (r.kind ?? 'code') === kind).at(-1); return r && same(r.identity, current) && r.status === 'complete' ? [r] : [] }).flatMap(r => r.intent_observations ?? []).filter(o => o.status === 'unverified' || o.status === 'concern' && (!o.finding_ids?.length || o.finding_ids.some(id => { const f = ledger.findings.find(f => f.id === id); return !f || !['closed','not_reproduced'].includes(f.disposition) || f.checks.at(-1)?.outcome !== 'passed' || !same(f.checks.at(-1)!.identity, current) || f.checks.at(-1)!.rules !== (f.independent ? independentDesignVersion(projectId) : rulesVersion(projectId)) })))
     if (unresolvedIntent.length) return blocked('intent', 'QUALITY_INTENT_UNRESOLVED: 核心体验仍有未验证或未闭合观察，先核对实际旅程和对应finding，不以通用界面替代：' + JSON.stringify(unresolvedIntent))
     if (selection.required.includes('visual')) {

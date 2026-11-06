@@ -146,3 +146,12 @@ export function filterApprovedTestChanges(id:string,before:NativeGuiTests,after:
     return after.cases.some(c=>c.name===old.name&&c.feature===old.feature&&c.signature===signature)
   }))
 }
+
+/** Host recovery: apply only exact approved revisions; never infer approval. */
+export function applyApprovedTestCorrections(id:string,signal?:AbortSignal){
+  signal?.throwIfAborted()
+  if(pendingTestCorrection(id))throw Error('TEST_CORRECTION_REVIEW_REQUIRED')
+  const pending=approved(id).filter(p=>!p.applied_at)
+  for(const proposal of pending){signal?.throwIfAborted();applyTestCorrection(id,proposal.id)}
+  return pending.length
+}

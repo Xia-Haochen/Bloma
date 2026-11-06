@@ -14,7 +14,7 @@ import { createQualityReview, readQualityLedger, qualityLedgerPath } from '../..
 import { verifySoftwareCandidate } from '../../../main/software/verification'
 import { buildSoftwareAgentTools } from '../../../main/software/agent-tools'
 import { buildLeanCliTool, cliSuitePath } from '../../../main/desktop/lean-cli-check'
-import { registerParentLoopContext, disposeParentDelegationState, settleParentDelegationRuns, findDelegation } from '../../../main/agent/delegation/agent-collaboration'
+import { startDelegation, registerParentLoopContext, disposeParentDelegationState, settleParentDelegationRuns, findDelegation } from '../../../main/agent/delegation/agent-collaboration'
 import { createToolState, type ToolContext } from '../../../main/agent/loop/agent-loop'
 import type { SDKQuery } from '../../../main/orchestration/stages/orchestration-contracts'
 
@@ -109,9 +109,9 @@ it('parent cannot forge a C submission; no-source opinions remain disputed/sugge
   const ledger = readQualityLedger(project.project_id)
   expect(ledger.findings.map(f => f.disposition)).toEqual(['disputed', 'suggestion'])
   const read = quality.parentTools.find(t => t.name === 'read_quality_findings')!
-  const closeout = JSON.parse((await read.execute({}, ctx())).output).closeout
+  const closeout = JSON.parse((await read.execute({}, ctx())).output)
   expect(closeout.deferred).toEqual(ledger.findings.map(f => f.id))
-  expect(closeout.next_tool).toBe('verify_app')
+  expect(closeout.status).toBe('ready');expect(closeout).not.toHaveProperty('next_tool')
   await expect(quality.parentTools.find(t => t.name === 'check_quality_finding')!.execute({ finding_id: ledger.findings[0].id, case_name: 'sum' }, ctx())).rejects.toThrow('UNGROUNDED')
 })
 it('projects current observed evidence into a finding without repeating verification, but reexecutes after source changes', async () => {
@@ -217,6 +217,8 @@ it('waits for an active quality child before buying another parent request',asyn
   const ready=new Promise<void>(done=>{release=done})
   register(async function*(){await ready;yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:'no protocol in this controlled wait test'}]}};yield{type:'result',subtype:'success'}})
   const child=await quality.begin(ctx());let calls=0
+  createQualityReview(project.project_id,parent,policy)
+  expect(readQualityLedger(project.project_id).reviews.at(-1)?.status).toBe('pending')
   const query=quality.wrapQuery(async function*(){calls++;yield{type:'result',subtype:'success'}})
   const waiting=(async()=>{for await(const _ of query('',{env:{},signal:AbortSignal.timeout(10000),sessionId:parent,accounting:{projectId:project.project_id,runId:'r'}})){} })()
   await new Promise(done=>setTimeout(done,20));expect(calls).toBe(0)
@@ -259,7 +261,7 @@ it('complete production runs C, reproduces and repairs a finding, reruns C on th
   expect(ledger.reviews.filter(r => r.status === 'complete')).toHaveLength(2)
 }, 120000)
 
-it('a manually requested C enters host closeout without another discretionary implementation turn',async()=>{
+it('verification hands off to host review and publication without another maker turn',async()=>{
   const {enterDesktopLine}=await import('../../../main/desktop/desktop-route'),{findProject}=await import('../../../main/project/project-service')
   const source='console.log(Number(process.argv[2]||2)+Number(process.argv[3]||3))';writeFileSync(join(project.root_path,'app.cjs'),source)
   let parentCalls=0,unexpected='';const children=new Set<string>()
@@ -269,7 +271,7 @@ it('a manually requested C enters host closeout without another discretionary im
     if(JSON.stringify(options.messages?.filter(m=>m.role==='system')).includes('独立只读代码/数据审阅C')){
       if(!children.has(options.sessionId)){children.add(options.sessionId);content=[use('read_quality_review',{}),use('read_file',{path:'app.cjs'}),use('submit_quality_findings',{findings:[]})]}
       else content=[{type:'text' as const,text:'结构化审阅已提交。'}]
-    }else{parentCalls++;if(parentCalls>1){unexpected=JSON.stringify(options.messages).slice(-5000);throw Error('TEST_UNEXPECTED_IMPLEMENTATION_TURN')}content=[use('start_quality_review',{})]}
+    }else{parentCalls++;if(parentCalls>1){unexpected=JSON.stringify(options.messages).slice(-5000);throw Error('TEST_UNEXPECTED_IMPLEMENTATION_TURN')}content=[use('verify_app',{})]}
     yield{type:'assistant',message:{role:'assistant',content}};yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
   }
   await enterDesktopLine({projectId:project.project_id,sessionId:parent,requestId:'manual-review',content:'完成当前稳定候选',maxTokens:2048,signal:AbortSignal.timeout(60000)},query,{},
@@ -278,7 +280,7 @@ it('a manually requested C enters host closeout without another discretionary im
   expect(findProject(project.project_id).status).toBe('completed')
 },90000)
 
-it('stops repeated failed full checks after manual C instead of treating successful review-tool calls as progress',async()=>{
+it('stops repeated failed checks without buying a review or teaching the maker review protocol',async()=>{
   const {enterDesktopLine}=await import('../../../main/desktop/desktop-route'),{findProject}=await import('../../../main/project/project-service')
   let parentCalls=0;const children=new Set<string>()
   const use=(name:string,input:Record<string,unknown>)=>({type:'tool_use' as const,id:`repeat-${parentCalls}-${name}`,name,input})
@@ -287,12 +289,12 @@ it('stops repeated failed full checks after manual C instead of treating success
     if(JSON.stringify(options.messages?.filter(m=>m.role==='system')).includes('独立只读代码/数据审阅C')){
       if(!children.has(options.sessionId)){children.add(options.sessionId);content=[use('read_quality_review',{}),use('read_file',{path:'app.cjs'}),use('submit_quality_findings',{findings:[]})]}
       else content=[{type:'text' as const,text:'结构化审阅已提交，不代表业务通过。'}]
-    }else{if(++parentCalls>5)throw Error('REPEATED_HOST_FAILURE_NOT_STOPPED');content=[use('start_quality_review',{})]}
+    }else{if(++parentCalls>5)throw Error('REPEATED_HOST_FAILURE_NOT_STOPPED');content=[use('verify_app',{})]}
     yield{type:'assistant',message:{role:'assistant',content}};yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
   }
   await enterDesktopLine({projectId:project.project_id,sessionId:parent,requestId:'repeat-review',content:'核对失败检查',maxTokens:2048,signal:AbortSignal.timeout(60000)},query,{},
     {publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
-  expect(parentCalls).toBe(3);expect(children.size).toBe(1)
+  expect(parentCalls).toBe(3);expect(children.size).toBe(0)
   expect(findProject(project.project_id).status).not.toBe('completed');expect(findProject(project.project_id).desktop_blocked?.note).toContain('no_progress')
 },90000)
 
@@ -335,3 +337,51 @@ it('retires a removed business expectation from the current gate without deletin
  expect(readQualityLedger(project.project_id).findings.find(f=>f.id===id)?.disposition).toBe('confirmed')
  expect(await quality.gate()).toContain('REVIEW_REQUIRED')
 },120000)
+
+it('host review interruption stops the run without another maker request',async()=>{
+ const {enterDesktopLine}=await import('../../../main/desktop/desktop-route'),{findProject}=await import('../../../main/project/project-service')
+ writeFileSync(join(project.root_path,'app.cjs'),'console.log(5)')
+ let parentCalls=0,reviewCalls=0
+ const query:SDKQuery=async function*(_prompt,options){
+  const review=JSON.stringify(options.messages?.filter(m=>m.role==='system')).includes('独立只读代码/数据审阅C')
+  if(review)reviewCalls++;else parentCalls++
+  yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:review?'未完成审阅提交。':'当前实现已完成，请验证。'}]}}
+  yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
+ }
+ await enterDesktopLine({projectId:project.project_id,sessionId:parent,requestId:'interrupted-review',content:'完成原任务',maxTokens:2048,signal:AbortSignal.timeout(90000)},query,{},
+ {publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
+ expect(parentCalls).toBe(1);expect(reviewCalls).toBe(1)
+ expect(findProject(project.project_id).status).not.toBe('completed')
+ expect(findProject(project.project_id).desktop_blocked?.note).toContain('QUALITY_REVIEW_INTERRUPTED')
+},120000)
+
+it('recovers orphaned review records without accepting incomplete findings',async()=>{
+ await review([])
+ const ledger=readQualityLedger(project.project_id),last=ledger.reviews.at(-1)!
+ last.status='submitted';last.delegation='missing-runtime';last.child='old-child'
+ writeFileSync(qualityLedgerPath(project.project_id),JSON.stringify(ledger))
+ const recovered=createQualityReview(project.project_id,parent,policy)
+ expect(readQualityLedger(project.project_id).reviews.at(-1)?.status).toBe('interrupted')
+ expect((await recovered.completionAction(ctx().signal)).next_tool).toBe('start_quality_review')
+})
+
+it('resumes an unchanged verified candidate through host review without waking the maker',async()=>{
+ const {enterDesktopLine}=await import('../../../main/desktop/desktop-route'),{findProject}=await import('../../../main/project/project-service')
+ writeFileSync(join(project.root_path,'app.cjs'),'console.log(5)')
+ expect((await verifySoftwareCandidate(project.project_id,'prior-request',ctx().signal)).status).toBe('passed')
+ let makerCalls=0,reviewCalls=0
+ const query:SDKQuery=async function*(_prompt,options){
+  if(!JSON.stringify(options.messages?.filter(m=>m.role==='system')).includes('独立只读代码/数据审阅C')){makerCalls++;throw Error('UNNECESSARY_MAKER_REQUEST')}
+  const content=reviewCalls++===0?[{type:'tool_use' as const,id:'materials',name:'read_quality_review',input:{}},{type:'tool_use' as const,id:'source',name:'read_file',input:{path:'app.cjs'}},{type:'tool_use' as const,id:'submit',name:'submit_quality_findings',input:{findings:[]}}]:[{type:'text' as const,text:'审阅已提交。'}]
+  yield{type:'assistant',message:{role:'assistant',content}};yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
+ }
+ await enterDesktopLine({projectId:project.project_id,sessionId:parent,requestId:'resume-host',content:'继续',maxTokens:2048,signal:AbortSignal.timeout(90000)},query,{},
+ {publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
+ expect(makerCalls).toBe(0);expect(reviewCalls).toBe(2);expect(findProject(project.project_id).status).toBe('completed')
+},120000)
+
+it('refuses maker-selected review delegation before buying a child request',()=>{
+ let calls=0;register(async function*(){calls++;yield{type:'result',subtype:'success'}})
+ expect(()=>startDelegation(ctx(),{task:'自行启动交付审阅',role:'review',readOnly:true})).toThrow('QUALITY_REVIEW_HOST_ONLY')
+ expect(calls).toBe(0)
+})

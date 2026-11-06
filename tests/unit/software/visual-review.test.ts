@@ -44,7 +44,7 @@ const model = createServer(async (request, response) => {
       { area: 'scope', region: '页面', observed: '仅当前数量页初始状态；未覆盖其他窗口尺寸' },
       { area: 'content', region: '总数右侧', observed: reportFinding ? '数字3旁仍显示00件，存在静态零残留' : '总数数字旁只显示件，无静态零残留' }
     ].map(row => ({ ...row, image_sha256: visual.visual!.image_hash })),
-    findings: reportFinding ? [{ requirement: 'F-001', expected_source: expected, category: 'visual', severity: 'medium', location: '#total右侧单位', trigger: '点击增加', evidence: '图片中数值旁显示静态00件', reproduction: '点击增加并核对整个total文本', unknowns: '', kind: 'suspected' }] : []
+    findings: reportFinding ? [{ case_name:'total',requirement: 'F-001', expected_source: expected, category: 'visual', severity: 'medium', location: '#total右侧单位', trigger: '点击增加', evidence: '图片中数值旁显示静态00件', reproduction: '点击增加并核对整个total文本', unknowns: '', kind: 'suspected' }] : []
   })])
   else send(response, [{ type: 'text', text: '具体可见观察与疑点已提交，未声称业务通过。' }])
 })
@@ -174,33 +174,33 @@ it('wire validation rejects OCR/name-only substitutes and changed images in eith
   expect(assertVisualRequest(JSON.stringify({ messages: [{ content: [{ type: 'image_url', image_url: { url: `data:image/png;base64,${data.toString('base64')}` } }] }] }), hash)).toMatch(/^[a-f0-9]{64}$/)
   expect(() => assertVisualRequest(JSON.stringify({ messages: [{ content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: Buffer.from('different').toString('base64') } }] }] }), hash)).toThrow('CHANGED')
 })
-it('normal production automatically runs C/V, repairs a V finding and reviews the repaired GUI candidate before delivery', async () => {
+it('normal production repairs local failures before buying C/V and publishes the stable GUI candidate', async () => {
   const { enterDesktopLine } = await import('../../../main/desktop/desktop-route')
   const { findProject } = await import('../../../main/project/project-service')
   const { route, env } = register()
   let step = 0
+  const verificationStatuses:string[]=[]
   const use = (name: string, input: Record<string, unknown>) => ({ type: 'tool_use' as const, id: `a-${step}-${name}`, name, input })
   const query: SDKQuery = async function* (prompt, options) {
     if (options.sessionId !== parent) { yield* route(prompt, options); return }
-    const finding = readQualityLedger(project.project_id).findings.find(f => f.review_kind === 'visual')
     let content
     switch (step++) {
-      case 2: content = [use('check_quality_finding', { finding_id: finding!.id, case_name: 'total' })]; break
-      case 3: reportFinding = false; content = [use('read_file', { path: 'index.html' }), use('write_file', { path: 'index.html', content: html(false) })]; break
-      case 4: content = [use('check_quality_finding', { finding_id: finding!.id, case_name: 'total' })]; break
+      case 0: content = [use('verify_app', {})]; break
+      case 1: reportFinding = false; content = [use('read_file', { path: 'index.html' }), use('write_file', { path: 'index.html', content: html(false) })]; break
+      case 2: content = [use('verify_app', {})]; break
       default: content = [{ type: 'text' as const, text: '当前候选已保留，请按当前图像和台账核对。' }]
     }
     yield { type: 'assistant', message: { role: 'assistant', content } }
     yield { type: 'result', subtype: 'success', usage: { input_tokens: 10, output_tokens: 10 } }
   }
   await enterDesktopLine({ projectId: project.project_id, sessionId: parent, requestId: 'visual-r', content: '完成已确认器材件数界面', maxTokens: 4096, signal: AbortSignal.timeout(150000) }, query, env,
-    { publish: () => {}, persistAssistant: () => {}, persistSystem: () => {}, complete: () => {} })
+    { publish: (_target,type,payload) => {if(type==='tool_call_completed'&&payload.tool==='verify_app'&&(payload.feedback as any)?.verification)verificationStatuses.push((payload.feedback as any).verification)}, persistAssistant: () => {}, persistSystem: () => {}, complete: () => {} })
   const ledger = readQualityLedger(project.project_id)
   expect(findProject(project.project_id).desktop_blocked, JSON.stringify({ step, ledger })).toBeUndefined()
   expect(findProject(project.project_id).status).toBe('completed')
-  expect(ledger.reviews.filter(r => r.status === 'complete').map(r => r.kind)).toEqual(['code', 'visual', 'code', 'visual'])
-  expect(ledger.findings[0].checks.map(c => c.outcome)).toEqual(['failed', 'passed'])
-  expect(leanBudget(project.project_id, 'desktop-implement').snapshot().requests).toBe(step + wireBodies.length + 4)
+  expect(ledger.reviews.filter(r => r.status === 'complete').map(r => r.kind)).toEqual(['code', 'visual'])
+  expect(verificationStatuses).toEqual(['failed','passed'])
+  expect(leanBudget(project.project_id, 'desktop-implement').snapshot().requests).toBe(step + wireBodies.length + 2)
   const artifacts = join(process.cwd(), 'run-artifacts', 'q2-visual'); mkdirSync(artifacts, { recursive: true })
   writeFileSync(join(artifacts, 'production-ledger.json'), JSON.stringify(ledger, null, 2))
   // A real verified baseline, not selector fixture metadata: only cosmetic CSS
@@ -211,7 +211,7 @@ it('normal production automatically runs C/V, repairs a V finding and reviews th
     if(options.sessionId!==parent){yield*route(prompt,options);return}
     const call=styleCalls++
     const content=call===0?[use('read_file',{path:'theme.css'}),use('write_file',{path:'theme.css',content:'p { color: #236; padding: 8px; }'})]
-      :call===1?[use('check_quality_finding',{finding_id:ledger.findings[0].id,case_name:'total'})]:[{type:'text' as const,text:'样式已调整，旧缺陷已由宿主复测，请按当前候选选择协作。'}]
+      :call===1?[use('verify_app',{})]:[{type:'text' as const,text:'样式已调整，旧缺陷已由宿主复测，请按当前候选选择协作。'}]
     yield{type:'assistant',message:{role:'assistant',content}};yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
   }
   await enterDesktopLine({projectId:project.project_id,sessionId:parent,requestId:'style',content:'只调整现有颜色和间距',maxTokens:4096,signal:AbortSignal.timeout(120000)},styleQuery,env,{publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
@@ -234,7 +234,7 @@ it('normal production automatically runs C/V, repairs a V finding and reviews th
 it('production stops on the first actual image rejection without retrying V or changing route', async () => {
   const { enterDesktopLine } = await import('../../../main/desktop/desktop-route')
   const { findProject } = await import('../../../main/project/project-service')
-  rejectImages = true
+  rejectImages = true;reportFinding=false;writeFileSync(join(project.root_path,'index.html'),html(false))
   const { route, env } = register(); let parentCalls = 0
   const query: SDKQuery = async function* (prompt, options) {
     if (options.sessionId !== parent) { yield* route(prompt, options); return }
@@ -244,12 +244,16 @@ it('production stops on the first actual image rejection without retrying V or c
   }
   await enterDesktopLine({ projectId: project.project_id, sessionId: parent, requestId: 'visual-r', content: '核对已确认界面', maxTokens: 4096, signal: AbortSignal.timeout(60000) }, query, env,
     { publish: () => {}, persistAssistant: () => {}, persistSystem: () => {}, complete: () => {} })
-  expect(parentCalls).toBe(2)
+  expect(parentCalls).toBe(1)
   expect(wireBodies).toHaveLength(2)
-  expect(leanBudget(project.project_id, 'desktop-implement').snapshot().requests).toBe(6)
+  expect(leanBudget(project.project_id, 'desktop-implement').snapshot().requests).toBe(5)
   expect(readQualityLedger(project.project_id).reviews.filter(r => r.kind === 'visual')).toHaveLength(1)
   expect(findProject(project.project_id).desktop_blocked?.note).toContain('QUALITY_VISUAL_MODEL_UNSUPPORTED')
   expect(findProject(project.project_id).status).toBe('active')
+  await enterDesktopLine({projectId:project.project_id,sessionId:parent,requestId:'resume-unsupported',content:'继续',maxTokens:4096,signal:AbortSignal.timeout(60000)},query,env,
+    {publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
+  expect(parentCalls).toBe(1);expect(wireBodies).toHaveLength(2)
+  expect(findProject(project.project_id).desktop_blocked?.note).toContain('QUALITY_VISUAL_MODEL_UNSUPPORTED')
 }, 90000)
 
 it('does not force a single-image V reviewer to claim verification of the entire personal experience', async () => {
