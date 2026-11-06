@@ -20,8 +20,8 @@ export function buildLeanScopeTool(projectId: string, source: string, emit: Para
       requirements: { type: 'array', items: { type: 'object', required: ['description', 'expected'], properties: {
         id: { type: 'string' }, description: { type: 'string' }, expected: { type: 'string' } } } },
       constraints: { type: 'array', items: { type: 'string' } }, out_of_scope: { type: 'array', items: { type: 'string' } },
-      intent_assessment: { type: 'object', required: ['mode','reason','source_ids'], properties: { mode: { type:'string', enum:['direct','structured'] }, reason:{type:'string'}, source_ids:{type:'array',items:{type:'string',enum:sourceList.map(s=>s.id)}} }, description:'与初次整理一致：特殊交互、规则版本、例外等用structured，并提交完整requirements_model和experience。' },
-      requirements_model: { type: 'object', description: '沿用features上下文的完整需求模型并按用户改意更新；已有模型不能省略。来源由宿主回填。' },
+      work_items:{type:'array',items:{type:'string'},description:'建议工作步骤，可随调查调整；不作为验收或开工门禁。'},
+      requirements_model: { type: 'object', description: '仅修改已有详细契约时提供；省略则由宿主保留已有模型，来源由宿主回填。' },
       design_assets: { type: 'array', items: { type: 'object' } },
       assumptions: { type: 'array', items: { type: 'string' } },
     } }, execute: async (input, ctx) => {
@@ -29,7 +29,7 @@ export function buildLeanScopeTool(projectId: string, source: string, emit: Para
       if (listDelegations(ctx.sessionId).some(row => row.status === 'running')) return { output: '请先等待或停止正在执行的子任务，再更新范围。', isError: true }
       const previous = readPrdBackplane(projectId)
       let issues: string[] = []
-      const parsed = parseLeanBrief(JSON.stringify({ ...input, action: 'brief' }), { projectId, sessionId: ctx.sessionId, source, previous, assets: sessionMaterials(projectId, ctx.sessionId).attachments, software: isSoftwareProject(projectId), requireIntentAssessment: isSoftwareProject(projectId), onIssues: rows => { issues = rows } })
+      const parsed = parseLeanBrief(JSON.stringify({ ...input, action: 'brief' }), { projectId, sessionId: ctx.sessionId, source, previous, assets: sessionMaterials(projectId, ctx.sessionId).attachments, software: isSoftwareProject(projectId), onIssues: rows => { issues = rows } })
       if (!parsed || parsed.action !== 'brief') return { output: JSON.stringify({ error:'SCOPE_INVALID_BRIEF', issues, sources:sourceList }), isError: true }
       if (prdScopeFingerprint(previous) === prdScopeFingerprint(parsed.brief)) return { output: '范围未变化，直接处理本次局部修改。' }
       if (authorizesSkipPreview(source)) parsed.brief.lean_brief!.preview = 'skip'

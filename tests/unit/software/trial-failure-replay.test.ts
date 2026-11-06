@@ -30,12 +30,12 @@ it('extracts one complete real HTML artifact without trusting surrounding prose 
   expect(parseSketchHtml(raw.replace('</body>','<script>alert(1)</script></body>'))).toBeUndefined()
   expect(parseSketchHtml(raw.replace('</body>','<button onclick="alert(1)">click</button></body>'))).toBeUndefined()
 })
-it('replays the real omitted-model response and rejects missing or inconsistent structure decisions',()=>{
+it('accepts the recorded business task without forcing a structure declaration while retaining explicit legacy contracts',()=>{
   const raw=readFileSync(base+'doodle-brief-missing-model.json','utf8'),issues:string[]=[]
-  const context={projectId:'fixture',sessionId:'s',source:'绘画速度和颜色控制声音，旧画可选规则版本',previous,software:true,requireIntentAssessment:true,onIssues:(rows:string[])=>issues.push(...rows)}
-  expect(parseLeanBrief(raw,context)).toBeUndefined();expect(issues.join()).toContain('ASSESSMENT_REQUIRED')
+  const context={projectId:'fixture',sessionId:'s',source:'绘画速度和颜色控制声音，旧画可选规则版本',previous,software:true,onIssues:(rows:string[])=>issues.push(...rows)}
+  expect(parseLeanBrief(raw,context)?.action).toBe('brief');expect(issues).toEqual([])
   const data=JSON.parse(raw);data.intent_assessment={mode:'structured',reason:'存在自定义映射与规则版本',source_ids:['S-001']}
-  expect(parseLeanBrief(JSON.stringify(data),context)).toBeUndefined();expect(issues.join()).toContain('STRUCTURE_REQUIRED')
+  expect(parseLeanBrief(JSON.stringify(data),context)?.action).toBe('brief')
   const model=organizedPrd(data.requirements,'用户来源').requirements_model
   model.experience={summary:'绘画成为乐器',commitments:[{id:'EXP-001',statement:'图形驱动声音',feature_ids:['F-001'],source_ids:['S-001'],scenario_ids:['AC-001'],unacceptable_substitute:'静态图画'}]}
   data.requirements_model=model

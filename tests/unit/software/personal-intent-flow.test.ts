@@ -34,14 +34,12 @@ function fixture() {
 function parse(data = fixture(), previous = readPrdBackplane(project.project_id), assets?: Parameters<typeof parseLeanBrief>[1]['assets']) {
   return parseLeanBrief(JSON.stringify(data), { projectId: project.project_id, sessionId: 'intent', source, previous, software: true, assets })
 }
-it('requires the same intent contract for production-side scope changes and preserves the prior scope on refusal',async()=>{
-  const before=readPrdBackplane(project.project_id);let paused=false
+it('accepts explicit detailed contracts without a mandatory routing declaration and keeps scope confirmation',async()=>{
+  let paused=false
   const tool=buildLeanScopeTool(project.project_id,source,()=>{},()=>{paused=true})
   const ctx={projectId:project.project_id,sessionId:'intent',requestId:'change',signal:AbortSignal.timeout(5000),state:createToolState()}
   const data=fixture()
-  const refused=await tool.execute(data,ctx);expect(refused.isError).toBe(true);expect(refused.output).toContain('INTENT_ASSESSMENT_REQUIRED')
-  expect(paused).toBe(false);expect(prdScopeFingerprint(readPrdBackplane(project.project_id))).toBe(prdScopeFingerprint(before))
-  const accepted=await tool.execute({...data,intent_assessment:{mode:'structured',reason:'有私人例外和特殊互动',source_ids:['S-001']}},ctx)
+  const accepted=await tool.execute(data,ctx)
   expect(accepted.isError).not.toBe(true);expect(paused).toBe(true)
   expect(readPrdBackplane(project.project_id).requirements_model?.experience?.commitments[0].unacceptable_substitute).toBe('只列清单并加聊天框')
 })
@@ -58,12 +56,14 @@ it('retains core experience and exceptions through persistence, confirmation, pr
   saved.requirements_model!.experience!.commitments[0].unacceptable_substitute = '仅改标题也不行'
   expect(prdScopeFingerprint(saved)).not.toBe(before)
 })
-it('host supplies source text; forged references and missing prior model cannot pass', () => {
+it('host supplies source text and retains omitted prior contracts while rejecting forged references', () => {
   const data = fixture(); data.requirements_model.sources[0].text = '模型伪造的用户授权'
   const result = parse(data); if (result?.action !== 'brief') throw Error('fixture')
   expect(result.brief.requirements_model!.sources[0].text).toBe(source)
   const missing = { ...data }; delete (missing as { requirements_model?: unknown }).requirements_model
-  expect(parse(missing, result.brief)).toBeUndefined()
+  const retained=parse(missing,result.brief)
+  expect(retained?.action).toBe('brief')
+  if(retained?.action==='brief')expect(retained.brief.requirements_model).toEqual(result.brief.requirements_model)
   data.requirements_model.experience!.commitments[0].source_ids = ['S-999']
   expect(parse(data)).toBeUndefined()
   expect(intentSources(source + '\n\n只在今天温柔说话', result.brief.requirements_model!.sources).map(s => s.id)).toEqual(['S-001', 'S-002'])

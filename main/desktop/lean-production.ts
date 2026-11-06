@@ -243,6 +243,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     brief.lean_brief.ui === 'required' ? buildLeanGuiTool(input.projectId) : buildLeanCliTool(input.projectId)])
   const system = [
     SOFTWARE_ENGINEERING_INSTRUCTIONS,
+    ...(brief.lean_brief?.work_items?.length ? ['建议工作清单：'+JSON.stringify(brief.lean_brief.work_items)+'。随调查和实验调整，不按勾选状态判断交付；业务范围与完成标准仍须遵守。'] : []),
     ...(brief.project_plan ? ['已确认阶段计划：'+JSON.stringify(brief.project_plan)+'。按计划实现，局部检查反馈不代表完整交付。'] : []),
     '稳定候选交给verify_app，宿主统一执行、结算已绑定问题、安排必要的C/V并发布。模型负责实现与修复，不维护通过凭据或重复记账。read_quality_findings可查看实际阻塞；疑点与案例的对应关系由独立审阅确认，普通案例通过不能自行排除疑点。',
     '验证失败时沿实际反馈修复；建议与争议不自动扩大需求。修复集中完成后复验，稳定候选不再作无关修改。审阅期间不写入、不运行命令；确认的缺陷仍须实际复测。',
@@ -252,7 +253,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     ...(project.imported_source ? [JSON.stringify(importedProjectContext(input.projectId))] : []),
     ux?.html_path ? `已确认外观：${ux.html_path}，先读后沿用；用户后续修改仅改相关部分。` : brief.lean_brief.ui === 'required' ? '用户明确授权直接制作界面，无需先画草图。' : '本任务无需额外外观设计。',
     '局部外观和缺陷直接修改。用户新增、删除业务能力或改变业务预期时，先用propose_scope_change保留原功能及新增预期并等待确认，不能在旧任务单下宣称新增功能已验收。',
-    JSON.stringify({ goal: brief.positioning, requirements: brief.requirements.map(row => ({ id: row.id, description: row.description,
+    JSON.stringify({ goal: brief.positioning, source_statements:brief.lean_brief?.intent_sources??brief.requirements_model?.sources, requirements: brief.requirements.map(row => ({ id: row.id, description: row.description,
       expected: brief.acceptance[row.id], requirement_hash: requirementEvidenceHash(brief, row) })), constraints: brief.constraints,
       intent: brief.requirements_model && { experience: brief.requirements_model.experience, rules: brief.requirements_model.rules, workflows: brief.requirements_model.workflows }, out_of_scope: brief.out_of_scope, assumptions: brief.assumptions, design_policy: productDesignPolicy(brief), delivery: brief.lean_brief.delivery, distribution: brief.lean_brief.distribution ?? 'local' }),
     '保留真实用户数据与配置；测试使用隔离数据目录。预期依据已确认目标，不能改预期掩盖失败。特殊能力登记与执行细节可通过read_production_context按需读取。',

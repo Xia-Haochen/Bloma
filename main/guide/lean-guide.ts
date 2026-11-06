@@ -129,9 +129,9 @@ export async function handleLeanGuide(input: AgentSendMessageInput, publish: (ev
     query: (text, options) => query(text, { ...options, images, accounting: { projectId: input.project_id, runId: input.request_id, role: 'brief', scope: 'prepare' } }),
     env: model.env, signal, sessionId: input.session_id, maxTokens: model.maxTokens, temperature: .1, attempts: 2,
     retryFeedback: () => JSON.stringify({ conversation: source, sources: intentSources(source, brief.requirements_model?.sources ?? brief.lean_brief?.intent_sources), previous: brief.lean_brief ? brief : undefined, materials, latest: input.content, errors: briefIssues, instruction: '按具体错误重新给出完整JSON，不删除原始要求以规避校验。' }),
-    parse: text => parseLeanBrief(text, { projectId: input.project_id, sessionId: input.session_id, source, previous: brief, software, assets: model.materials?.attachments, requireIntentAssessment: software, onIssues: issues => { briefIssues = issues } }) }))
+    parse: text => parseLeanBrief(text, { projectId: input.project_id, sessionId: input.session_id, source, previous: brief, software, assets: model.materials?.attachments, onIssues: issues => { briefIssues = issues } }) }))
   model.signal.throwIfAborted()
-  if (!result) { say('任务整理未完成，原始需求已保留；可重试，不会自动开工。'); emit('message_completed', { subtype: 'incomplete' }); return }
+  if (!result) { say('任务单暂未就绪：'+(briefIssues.length?briefIssues.join('；'):'返回内容不完整或缺少可观察的完成标准。')+' 原始需求已保留，尚未开工。'); emit('message_completed', { subtype: 'incomplete' }); return }
   if (result.action === 'clarify') {
     say(result.question)
     if (result.options.length) emit('user_decision_required', { kind: 'clarification', title: result.question,

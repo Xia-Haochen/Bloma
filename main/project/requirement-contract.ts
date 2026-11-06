@@ -53,7 +53,8 @@ export function requirementVerificationContext(backplane: PrdBackplane): unknown
 /** Business/design scope, independent of confirmation timestamps and implementation status. */
 export function prdScopeFingerprint(backplane: PrdBackplane): string {
   return digest([backplane.project_id, backplane.positioning, requirementVerificationContext(backplane),
-    backplane.pages ?? [], backplane.personas ?? [], backplane.glossary ?? [], backplane.data_model ?? null, backplane.interface_spec ?? [], ...(backplane.project_plan ? [backplane.project_plan] : [])])
+    backplane.pages ?? [], backplane.personas ?? [], backplane.glossary ?? [], backplane.data_model ?? null, backplane.interface_spec ?? [], ...(backplane.project_plan ? [backplane.project_plan] : []),
+    ...(!backplane.lean_brief?.intent_assessment && backplane.lean_brief?.intent_sources ? [{intent_sources:backplane.lean_brief.intent_sources}] : [])])
 }
 
 /** Revisions must not inherit acceptance text from a different meaning under the same id. */
