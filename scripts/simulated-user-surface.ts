@@ -5,7 +5,7 @@ import {randomUUID,createHash} from 'node:crypto'
 import {resolvePreviewFile} from '../main/delivery/preview-file'
 import {savePastedImage} from '../main/platform/shell/pasted-images'
 import {findProject} from '../main/project/project-service'
-import {prepareSoftwareRelease,verifyReleaseSource} from '../main/software/release-store'
+import {prepareSoftwareRelease,verifyReleaseSource,activeSoftwareRelease} from '../main/software/release-store'
 import {softwareEnvironment} from '../main/software/command-runtime'
 import {electronEntry} from '../main/software/electron-entry'
 import {isolatedBrowserLaunch} from '../main/software/isolated-launch'
@@ -13,11 +13,35 @@ import {startSoftwareProcess,stopSoftwareProcess} from '../main/software/process
 import {runSecurityScan} from '../main/verification/security-scan'
 import type {UserTestFile} from './user-test-files'
 import type {UserAction,UserView} from './simulated-user'
+import {UserInteractionError,validateUserAction} from './user-action'
 
+function describeControl(el:Node){
+  const e=el as HTMLElement,input=e instanceof HTMLInputElement||e instanceof HTMLTextAreaElement||e instanceof HTMLSelectElement
+  const labels='labels' in e?(e as HTMLInputElement).labels:null
+  const labelled=e.getAttribute('aria-labelledby')?.split(/\s+/).map(id=>document.getElementById(id)?.textContent??'').join(' ')
+  const label=e.getAttribute('aria-label')||labelled||labels?.[0]?.innerText||e.innerText||e.getAttribute('placeholder')||e.getAttribute('title')||''
+  const actions=['click']
+  if(e instanceof HTMLInputElement&&e.type==='file')actions.push('upload')
+  else if(e instanceof HTMLTextAreaElement||e.isContentEditable||e instanceof HTMLInputElement&&!['button','submit','reset','checkbox','radio','range','color','hidden'].includes(e.type))actions.push('fill')
+  if(e instanceof HTMLSelectElement)actions.push('select')
+  if(e instanceof HTMLCanvasElement)actions.push('draw')
+  return{tag:e.tagName.toLowerCase(),role:e.getAttribute('role')??(e instanceof HTMLInputElement?e.type:undefined),label:label.trim().slice(0,160),actions,
+    value:input&&!(e instanceof HTMLInputElement&&e.type==='password')?e.value.slice(0,300):undefined,
+    checked:e instanceof HTMLInputElement?e.checked:e.hasAttribute('aria-checked')?e.getAttribute('aria-checked')==='true':undefined,
+    disabled:e.matches(':disabled')||e.getAttribute('aria-disabled')==='true',options:e instanceof HTMLSelectElement?[...e.options].map(o=>o.label):undefined}
+}
+
+function interactionFailure(error:unknown,effect:'none'|'unknown'):never{
+  if(error instanceof UserInteractionError)throw error
+  if(error instanceof Error&&(error.name==='TimeoutError'||/not attached|not connected|not visible|not enabled|not editable|not an? (?:input|select)|Target .*closed|Execution context was destroyed|Frame was detached/i.test(error.message)))
+    throw new UserInteractionError('surface','刚才的界面操作没有成功确认。请查看新画面再决定下一步；不要假装成功，也不要盲目重复提交。',effect,{cause:error})
+  throw error
+}
 /** Public UI only: no selector, eval, file, request or shell tool is exposed. */
 export class UserPage {
   private controls:ElementHandle[]=[]
   private observation=''
+  private descriptors:UserView['controls']=[]
   private chooser?:ElementHandle
   private downloads:NonNullable<UserView['downloads']>=[]
   constructor(readonly page:Page,readonly kind:'preview'|'app',readonly folder:string,readonly session:string,readonly files:UserTestFile[]=[]){
@@ -29,49 +53,59 @@ export class UserPage {
     })
   }
   async snapshot():Promise<UserView>{
-    for(const control of this.controls)await control.dispose();this.controls=[]
+    this.observation=''
+    for(const control of this.controls)await control.dispose();this.controls=[];this.descriptors=[]
     const controls:UserView['controls']=[]
-    for(const element of await this.page.locator('button,input,textarea,select,canvas,a,[role="button"],[role="checkbox"],[role="switch"]').elementHandles()){
-      if(!await element.isVisible()||this.controls.length>=100){await element.dispose();continue}
-      const item=await element.evaluate(el=>{
-        const e=el as HTMLElement,input=e instanceof HTMLInputElement||e instanceof HTMLTextAreaElement||e instanceof HTMLSelectElement
-        return{tag:e.tagName.toLowerCase(),label:(e.getAttribute('aria-label')??(e instanceof HTMLInputElement?e.labels?.[0]?.innerText:null)??e.innerText??'').trim().slice(0,160),
-          value:input&&!(e instanceof HTMLInputElement&&e.type==='password')?e.value.slice(0,300):undefined,
-          checked:e instanceof HTMLInputElement?e.checked:e.hasAttribute('aria-checked')?e.getAttribute('aria-checked')==='true':undefined,
-          disabled:input||e instanceof HTMLButtonElement?e.disabled:undefined,options:e instanceof HTMLSelectElement?[...e.options].map(o=>o.label):undefined}
-      })
+    for(const element of await this.page.locator('button,input,textarea,select,canvas,a,summary,[contenteditable="true"],[role="button"],[role="checkbox"],[role="switch"],[role="radio"],[role="tab"],[role="menuitem"],[role="option"],[role="textbox"],[role="combobox"],[role="link"]').elementHandles()){
+      if(!await element.isVisible()&&!await element.evaluate(el=>el instanceof HTMLInputElement&&[...el.labels??[]].some(l=>!!(l.offsetWidth||l.offsetHeight||l.getClientRects().length)))||this.controls.length>=100){await element.dispose();continue}
+      const item=await element.evaluate(describeControl)
       controls.push({ref:this.controls.length,...item});this.controls.push(element)
     }
-    if(this.chooser){controls.push({ref:this.controls.length,label:'文件选择对话框',tag:'input'});this.controls.push(this.chooser);this.chooser=undefined}
-    this.observation=randomUUID();mkdirSync(this.folder,{recursive:true})
+    if(this.chooser){controls.push({ref:this.controls.length,...await this.chooser.evaluate(describeControl)});this.controls.push(this.chooser);this.chooser=undefined}
+    this.descriptors=controls;this.observation=randomUUID();mkdirSync(this.folder,{recursive:true})
     const bytes=await this.page.screenshot({fullPage:false});writeFileSync(join(this.folder,this.observation+'.png'),bytes)
     const view:UserView={id:this.observation,kind:this.kind,text:(await this.page.locator('body').innerText()).slice(0,16000),controls,
       files:(this.kind==='app'?this.files:[]).map(({id,name,description})=>({id,name,description})),downloads:this.downloads.map(row=>({...row})),image:[savePastedImage(this.session,bytes.toString('base64'),'png')],audio:{status:'not_measured',limit:'截图和DOM不能证明实际音频，请勿声称已听到声音'}}
     writeFileSync(join(this.folder,this.observation+'.json'),JSON.stringify(view));return view
   }
+  assertObservation(action:UserAction){
+    if(action.observation!==this.observation)throw new UserInteractionError('action','SIMULATED_USER_STALE_OBSERVATION: 画面已变化，请重新观察。')
+  }
   async act(action:UserAction){
-    if(action.observation!==this.observation)throw Error('SIMULATED_USER_STALE_OBSERVATION')
-    if(action.action==='wait'){
-      if(!Number.isInteger(action.milliseconds)||action.milliseconds!<0||action.milliseconds!>3000)throw Error('SIMULATED_USER_WAIT_INVALID')
-      await this.page.waitForTimeout(action.milliseconds!);return
-    }
-    const element=Number.isInteger(action.ref)?this.controls[action.ref!]:undefined
-    if(!element||action.action!=='upload'&&!await element.isVisible())throw Error('SIMULATED_USER_CONTROL_MISSING')
-    if(action.action==='upload'){
-      if(!action.files?.length||action.files.length>this.files.length)throw Error('USER_TEST_FILES_INVALID')
-      const paths=action.files.map(id=>{const file=this.files.find(f=>f.id===id);if(!file||createHash('sha256').update(readFileSync(file.path)).digest('hex')!==file.sha256)throw Error('USER_TEST_FILE_CHANGED_OR_OUTSIDE');return file.path})
-      await element.setInputFiles(paths,{timeout:5000})
-    }else if(action.action==='click')await element.click({timeout:5000})
-    else if(action.action==='fill'||action.action==='select'){
-      if(typeof action.value!=='string'||action.value.length>2000)throw Error('SIMULATED_USER_VALUE_INVALID')
-      if(action.action==='fill')await element.fill(action.value,{timeout:5000});else await element.selectOption({label:action.value},{timeout:5000})
-    }else if(action.action==='draw'){
-      const points=action.points,box=await element.boundingBox()
-      if(await element.evaluate(el=>(el as Element).tagName)!=='CANVAS'||!box||!points||points.length<2||points.length>50
-        ||points.some(p=>![p.x,p.y].every(n=>Number.isFinite(n)&&n>=0&&n<=1)||p.delay!==undefined&&(!Number.isInteger(p.delay)||p.delay<0||p.delay>500)))throw Error('SIMULATED_USER_DRAW_INVALID')
-      await this.page.mouse.move(box.x+points[0].x*box.width,box.y+points[0].y*box.height);await this.page.mouse.down()
-      try{for(const p of points.slice(1)){if(p.delay)await this.page.waitForTimeout(p.delay);await this.page.mouse.move(box.x+p.x*box.width,box.y+p.y*box.height)}}finally{await this.page.mouse.up()}
-    }else throw Error('SIMULATED_USER_UI_ACTION_REFUSED')
+    validateUserAction(action);this.assertObservation(action)
+    let dispatched=false
+    try{
+      if(action.action==='wait'){await this.page.waitForTimeout(action.milliseconds!);return}
+      const element=this.controls[action.ref!],descriptor=this.descriptors[action.ref!]
+      if(!element||!descriptor)throw new UserInteractionError('action','当前画面没有这个控件，请选择新画面中的编号。')
+      if(!descriptor.actions?.includes(action.action))throw new UserInteractionError('action','该控件不支持这个操作，请按画面中列出的操作使用。')
+      const identity=await element.evaluate(describeControl)
+      if(identity.tag!==descriptor.tag||identity.role!==descriptor.role||identity.label!==descriptor.label)throw new UserInteractionError('action','控件含义已变化，请重新观察再选择。')
+      const current=await element.evaluate(el=>({connected:el.isConnected,disabled:(el as Element).matches(':disabled')||(el as Element).getAttribute('aria-disabled')==='true'}))
+      if(!current.connected||current.disabled)throw new UserInteractionError('action','控件已消失或不可用，请查看新画面。')
+      if(action.action==='upload'){
+        const paths=action.files!.map(id=>{
+          const file=this.files.find(f=>f.id===id)
+          if(!file)throw new UserInteractionError('action','请选择当前可用文件列表中的文件。')
+          if(createHash('sha256').update(readFileSync(file.path)).digest('hex')!==file.sha256)throw Error('USER_TEST_FILE_CHANGED_OR_OUTSIDE')
+          return file.path
+        })
+        dispatched=true;await element.setInputFiles(paths,{timeout:5000})
+      }else if(action.action==='click'){
+        // Native labelled controls are activated through their visible label, with normal hit testing.
+        const handle=await element.evaluateHandle(el=>el instanceof HTMLInputElement&&['radio','checkbox','file'].includes(el.type)?[...el.labels??[]].find(l=>!!(l.offsetWidth||l.offsetHeight||l.getClientRects().length))??el:el)
+        try{dispatched=true;await handle.asElement()!.click({timeout:5000})}finally{await handle.dispose()}
+      }else if(action.action==='fill'||action.action==='select'){
+        dispatched=true
+        if(action.action==='fill')await element.fill(action.value!,{timeout:5000});else await element.selectOption({label:action.value!},{timeout:5000})
+      }else if(action.action==='draw'){
+        const box=await element.boundingBox(),points=action.points!
+        if(!box)throw new UserInteractionError('action','画布不在当前可见画面中。')
+        dispatched=true;await this.page.mouse.move(box.x+points[0].x*box.width,box.y+points[0].y*box.height);await this.page.mouse.down()
+        try{for(const p of points.slice(1)){if(p.delay)await this.page.waitForTimeout(p.delay);await this.page.mouse.move(box.x+p.x*box.width,box.y+p.y*box.height)}}finally{await this.page.mouse.up()}
+      }
+    }catch(error){interactionFailure(error,dispatched?'unknown':'none')}
+    finally{this.observation=''}
   }
 }
 
@@ -93,7 +127,7 @@ export class SimulatedUserSurface {
     if(this.release)await verifyReleaseSource(this.release)
   }
   async openPreview(url:string){
-    if(this.preview===url&&this.surface)return
+    if(this.preview===url&&this.surface&&!this.surface.page.isClosed())return
     const target=new URL(url)
     const native=target.protocol==='bloma-file:'
     if(native){if(resolvePreviewFile(url,this.projectId).status!==200)throw Error('SIMULATED_USER_PREVIEW_DENIED')}
@@ -119,9 +153,18 @@ export class SimulatedUserSurface {
     this.surface=new UserPage(page,'preview',join(this.folder,'observations'),this.session,this.files)
   }
   async openApp(restart=false){
-    if(this.surface?.kind==='app'&&!restart)return
+    try{await this.openAppUnchecked(restart)}catch(error){interactionFailure(error,'none')}
+  }
+  private async openAppUnchecked(restart=false){
+    if(this.surface?.kind==='app'&&!restart&&!this.surface.page.isClosed())return
     await this.close();this.preview=undefined
-    if(!restart||!this.release)this.release=await prepareSoftwareRelease(this.projectId,findProject(this.projectId).root_path)
+    if(!restart||!this.release){
+      const project=findProject(this.projectId)
+      if(project.status==='completed'&&project.desktop_phase==='delivered'){
+        this.release=await activeSoftwareRelease(this.projectId)??undefined
+        if(!this.release)throw Error('SIMULATED_USER_RELEASE_MISSING')
+      }else this.release=await prepareSoftwareRelease(this.projectId,project.root_path)
+    }
     const release=this.release
     if(!runSecurityScan({project_id:this.projectId,root_path:release.root,profile:'local-software'}).passed)throw Error('SIMULATED_USER_LAUNCH_BLOCKED')
     const data=join(this.folder,'data');mkdirSync(data,{recursive:true});let page:Page
@@ -138,7 +181,8 @@ export class SimulatedUserSurface {
     this.surface=new UserPage(page,'app',join(this.folder,'observations'),this.session,this.files)
   }
   async snapshot(){
-    const view=await this.surface?.snapshot()
+    let view:UserView|undefined
+    try{view=await this.surface?.snapshot()}catch(error){interactionFailure(error,'none')}
     if(view)writeFileSync(join(this.folder,'observations',view.id+'.json'),JSON.stringify({...view,host:{candidate:this.release?.id,source:this.release?.source.digest,preview:this.preview}}))
     return view
   }
@@ -147,9 +191,11 @@ export class SimulatedUserSurface {
     await verifyReleaseSource(this.release)
   }
   async act(action:UserAction){
+    validateUserAction(action)
     if(action.action==='reopen'){
+      this.surface?.assertObservation(action)
       if(this.surface?.kind!=='app')throw Error('SIMULATED_USER_REOPEN_REQUIRES_APP')
-      await this.openApp(true)
+      try{await this.openApp(true)}catch(error){interactionFailure(error,'unknown')}
     }else if(this.surface)await this.surface.act(action)
     else throw Error('SIMULATED_USER_VIEW_REQUIRED')
   }

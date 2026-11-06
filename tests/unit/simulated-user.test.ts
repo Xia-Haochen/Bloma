@@ -3,10 +3,12 @@ import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {afterEach,beforeEach,it,expect} from 'vitest'
 import {chromium} from 'playwright'
+import {UserInteractionError} from '../../scripts/user-action'
 import {publicUserCard,userReply,simulateUserSession,decideAsUser} from '../../scripts/simulated-user'
 import {UserPage,SimulatedUserSurface} from '../../scripts/simulated-user-surface'
 import {loadUserTestFiles} from '../../scripts/user-test-files'
-import {assertSimulatedContinuation,observationHash} from '../../scripts/observation-control'
+import {assertSimulatedContinuation,observationHash,claimSimulatedRun} from '../../scripts/observation-control'
+import {continuationBoundary} from '../../scripts/observation-continuation.mjs'
 import {createProject} from '../../main/project/project-service'
 import type {AgentEvent} from '../../shared/types'
 import type {SDKQuery} from '../../main/orchestration/stages/orchestration-contracts'
@@ -18,9 +20,9 @@ it('projects only public text and choices, binds visual feedback and refuses inv
   expect(JSON.stringify(publicUserCard(card()))).not.toMatch(/secret|host-only-id/)
   expect(userReply({action:'reply',choice:0,text:'按这份做'},card(),undefined)).toEqual({text:'按这份做',selected:'host-only-id'})
   const free=card();free.payload.questions=[];expect(userReply({action:'reply',choice:0,text:'具体意见'},free,undefined).selected).toBeUndefined()
-  expect(()=>userReply({action:'reply',choice:3,text:'做'},card(),undefined)).toThrow('CHOICE_INVALID')
-  expect(()=>userReply({action:'reply',choice:0,text:'样式可以'},card('ux_confirm'),undefined)).toThrow('OBSERVATION_REQUIRED')
-  expect(()=>userReply({action:'reply',text:'保存没反应',observation:'old'},undefined,{id:'new',kind:'app',text:'',controls:[]})).toThrow('OBSERVATION_REQUIRED')
+  expect(()=>userReply({action:'reply',choice:3,text:'做'},card(),undefined)).toThrow('选项')
+  expect(()=>userReply({action:'reply',choice:0,text:'样式可以'},card('ux_confirm'),undefined)).toThrow('观察')
+  expect(()=>userReply({action:'reply',text:'保存没反应',observation:'old'},undefined,{id:'new',kind:'app',text:'',controls:[]})).toThrow('观察')
 })
 it('uses a separate tool-free model request with only public observations',async()=>{
   const query:SDKQuery=async function*(prompt,options){
@@ -38,11 +40,11 @@ it('lets the user confirm, try the UI and report observed problems without expos
     view:async c=>c?undefined:{id:'view-'+clicks,kind:'app',text:clicks?'仍没有显示姓名':'保存',controls:[]},
     decide:async state=>++decisions===1?{action:'reply',choice:0,text:'按这份做'}:decisions===2?{action:'click',observation:state.view!.id,ref:0}:{action:'reply',observation:state.view!.id,text:'我点了保存，但没有看到保存的姓名。'},
     act:async()=>{clicks++},record:row=>rows.push(row)})
-  expect(result.status).toBe('product_stopped');expect(clicks).toBe(1);expect(replies).toEqual(['按这份做','我点了保存，但没有看到保存的姓名。']);expect(rows).toHaveLength(3)
+  expect(result.status).toBe('product_stopped');expect(clicks).toBe(1);expect(replies).toEqual(['按这份做','我点了保存，但没有看到保存的姓名。']);expect(rows.filter((row:any)=>row.type==='action_completed')).toHaveLength(3)
 })
 it('rejects a made-up successful trial and stops at a bounded number of actions',async()=>{
   const deps={goal:'保存',signal:new AbortController().signal,turn:async()=>({}),view:async()=>({id:'v',kind:'app' as const,text:'',controls:[]}),act:async()=>{},record:()=>{}}
-  await expect(simulateUserSession({...deps,decide:async()=>({action:'finish',observation:'v',text:'都好了'})})).rejects.toThrow('TRIAL_REQUIRED')
+  expect((await simulateUserSession({...deps,decide:async()=>({action:'finish',observation:'v',text:'都好了'})}))).toMatchObject({status:'user_recovery_exhausted',steps:3})
   expect((await simulateUserSession({...deps,maxSteps:2,decide:async()=>({action:'wait',observation:'v',milliseconds:1})})).status).toBe('user_step_limit')
 })
 it('returns a UI timeout to user observation without leaking engine errors or forcing the click',async()=>{
@@ -51,8 +53,8 @@ it('returns a UI timeout to user observation without leaking engine errors or fo
     turn:async reply=>{turns++;return reply?{failed:'producer stopped'}:{card:card('ux_confirm')}},
     view:async()=>({id:'v',kind:'preview',text:'保存',controls:[]}),
     decide:async state=>{if(++decisions===1)return{action:'click',observation:'v',ref:0};expect(JSON.stringify(state.history)).not.toContain('private-engine-path');expect(JSON.stringify(state.history)).toContain('没有成功');return{action:'reply',observation:'v',text:'按钮被遮挡了，请调整布局。'}},
-    act:async()=>{const error=new Error('private-engine-path');error.name='TimeoutError';throw error},record:row=>rows.push(row)})
-  expect(result.status).toBe('product_stopped');expect(turns).toBe(2);expect(rows.some(row=>(row as any).type==='ui_action_failed')).toBe(true)
+    act:async()=>{throw new UserInteractionError('surface','刚才的操作没有成功确认，请重新观察。','unknown',{cause:new Error('private-engine-path')})},record:row=>rows.push(row)})
+  expect(result.status).toBe('product_stopped');expect(turns).toBe(2);expect(rows.some(row=>(row as any).type==='interaction_failed')).toBe(true)
 })
 it('operates actual visible controls and canvas, captures evidence and rejects stale or arbitrary actions',async()=>{
   const browser=await chromium.launch({headless:true,...(existsSync(chromium.executablePath())?{}:{channel:process.platform==='win32'?'msedge':'chrome'})})
@@ -61,7 +63,7 @@ it('operates actual visible controls and canvas, captures evidence and rejects s
     const surface=new UserPage(page,'app',join(home,'evidence'),'sim-user'),view=await surface.snapshot()
     expect(view.text).not.toContain('NOT_PUBLIC');expect(view.image).toHaveLength(1)
     await surface.act({action:'fill',observation:view.id,ref:view.controls.find(c=>c.tag==='input')!.ref,value:'Alice'})
-    await surface.act({action:'click',observation:view.id,ref:view.controls.find(c=>c.tag==='button')!.ref})
+    const afterFill=await surface.snapshot();await surface.act({action:'click',observation:afterFill.id,ref:afterFill.controls.find(c=>c.tag==='button')!.ref})
     const next=await surface.snapshot();expect(next.text).toContain('Alice')
     await expect(surface.act({action:'click',observation:view.id,ref:0})).rejects.toThrow('STALE')
     await surface.act({action:'draw',observation:next.id,ref:next.controls.find(c=>c.tag==='canvas')!.ref,points:[{x:.1,y:.1},{x:.8,y:.8,delay:10}]})
@@ -77,7 +79,7 @@ it('reopens the real browser app with the same isolated user data without changi
   try{
     await surface.openApp();let view=(await surface.snapshot())!
     await surface.act({action:'fill',observation:view.id,ref:view.controls.find(c=>c.tag==='input')!.ref,value:'Alice'})
-    await surface.act({action:'click',observation:view.id,ref:view.controls.find(c=>c.label==='Save')!.ref})
+    view=(await surface.snapshot())!;await surface.act({action:'click',observation:view.id,ref:view.controls.find(c=>c.label==='Save')!.ref})
     await expect.poll(async()=> (await surface.snapshot())!.text).toContain('saved')
     await surface.openApp(true);view=(await surface.snapshot())!
     await surface.act({action:'click',observation:view.id,ref:view.controls.find(c=>c.label==='Load')!.ref})
@@ -109,11 +111,44 @@ it('uploads only frozen test files through the UI and records actual downloads',
     await page.goto('http://127.0.0.1:12345/')
     const surface=new UserPage(page,'app',join(home,'observations'),'sim-user',files),view=await surface.snapshot()
     expect(JSON.stringify(view.files)).not.toContain(home)
-    await expect(surface.act({action:'upload',observation:view.id,ref:0,files:['arbitrary-file']})).rejects.toThrow('OUTSIDE')
-    await surface.act({action:'upload',observation:view.id,ref:0,files:['clip']})
+    await expect(surface.act({action:'upload',observation:view.id,ref:0,files:['arbitrary-file']})).rejects.toThrow('可用文件')
+    const uploadView=await surface.snapshot();await surface.act({action:'upload',observation:uploadView.id,ref:0,files:['clip']})
     expect((await surface.snapshot()).text).toContain('clip.webm')
     const current=await surface.snapshot();await surface.act({action:'click',observation:current.id,ref:current.controls.find(c=>c.label==='Export')!.ref})
-    await expect.poll(async()=>(await surface.snapshot()).downloads?.[0]?.status).toBe('saved')
+    await expect.poll(async()=>(await surface.snapshot()).downloads?.[0]?.status,{timeout:10000}).toBe('saved')
     writeFileSync(join(home,'clip.webm'),'changed');expect(()=>loadUserTestFiles(home)).toThrow('CHANGED_OR_OUTSIDE')
   }finally{await browser.close()}
+})
+
+it('resumes a finished published-product trial by frozen identity, not an error allowlist',()=>{
+  mkdirSync(join(home,'task'));mkdirSync(join(home,'home'))
+  const project={project_id:'p',status:'completed',current_stage:'completed',desktop_phase:'delivered',software_release_id:'release'}
+  const report={project_id:'p',session_id:'s',status:'failed',error:'an entirely new interaction failure',finished_at:new Date().toISOString()}
+  const files:Record<string,string>={'manifest.json':JSON.stringify({thinking:'low',tasks:{task:{}}}),'monetary-policy.json':'policy','task/project.json':'identity','task/user-run-old.json':JSON.stringify(report),'monetary-policy.json.state.json':JSON.stringify({entries:[{status:'reported',charged_micro_rmb:123}]}),'home/projects.json':JSON.stringify({projects:[project]})}
+  for(const [name,value] of Object.entries(files))writeFileSync(join(home,name),value)
+  const boundary=continuationBoundary(home,report),previous=process.env.BLOMA_OBSERVATION_RETEST
+  process.env.BLOMA_OBSERVATION_RETEST='interaction-v2'
+  try{
+    writeFileSync(join(home,'user-runtime-interaction-v2.json'),JSON.stringify({digest:'runtime',migration:{authorization:'继续用户验收',attempt:'-interaction-v2',boundary,manifest_sha256:observationHash(files['manifest.json']),policy_sha256:observationHash(files['monetary-policy.json']),project_sha256:observationHash(files['task/project.json']),report:'task/user-run-old.json',report_sha256:observationHash(files['task/user-run-old.json'])}}))
+    expect(assertSimulatedContinuation(home,'low','runtime').software_release_id).toBe('release')
+    writeFileSync(join(home,'monetary-policy.json.state.json'),JSON.stringify({entries:[{status:'reported',charged_micro_rmb:124}]}))
+    expect(()=>assertSimulatedContinuation(home,'low','runtime')).toThrow('BOUNDARY_CHANGED')
+    writeFileSync(join(home,'monetary-policy.json.state.json'),files['monetary-policy.json.state.json'])
+    project.software_release_id='changed';writeFileSync(join(home,'home/projects.json'),JSON.stringify({projects:[project]}))
+    expect(()=>assertSimulatedContinuation(home,'low','runtime')).toThrow('BOUNDARY_CHANGED')
+    expect(()=>continuationBoundary(home,{...report,status:'running'})).toThrow('FINISHED')
+    writeFileSync(join(home,'monetary-policy.json.state.json'),JSON.stringify({entries:[{status:'reserved'}]}))
+    expect(()=>continuationBoundary(home,report)).toThrow('UNSETTLED')
+  }finally{if(previous===undefined)delete process.env.BLOMA_OBSERVATION_RETEST;else process.env.BLOMA_OBSERVATION_RETEST=previous}
+})
+
+it('holds one execution owner across attempt names and retains consumed claims',()=>{
+  const previous=process.env.BLOMA_OBSERVATION_RETEST
+  try{
+    process.env.BLOMA_OBSERVATION_RETEST='one';const release=claimSimulatedRun(home,{})
+    process.env.BLOMA_OBSERVATION_RETEST='two';expect(()=>claimSimulatedRun(home,{})).toThrow()
+    release();const second=claimSimulatedRun(home,{});second()
+    expect(()=>claimSimulatedRun(home,{})).toThrow();expect(existsSync(join(home,'user-active.json'))).toBe(false)
+    expect(existsSync(join(home,'user-run-claimed-one.json'))).toBe(true)
+  }finally{if(previous===undefined)delete process.env.BLOMA_OBSERVATION_RETEST;else process.env.BLOMA_OBSERVATION_RETEST=previous}
 })

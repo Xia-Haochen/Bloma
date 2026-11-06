@@ -31,7 +31,7 @@ import type { SDKQuery } from '../main/orchestration/stages/orchestration-contra
 import {simulateUserSession,decideAsUser} from './simulated-user'
 import {enterDesktopLine} from '../main/desktop/desktop-route'
 import {SimulatedUserSurface} from './simulated-user-surface'
-import {observationAttemptSuffix,assertSimulatedContinuation,observationBalance,readObservationQuote,claimObservationRun,requireObservationPhase,assertFrozenObservation,observeOneTurn,observationOutcome} from './observation-control'
+import {claimSimulatedRun,assertSimulatedContinuation,observationBalance,readObservationQuote,claimObservationRun,requireObservationPhase,assertFrozenObservation,observeOneTurn,observationOutcome} from './observation-control'
 const hash = (s: string | Buffer) => createHash('sha256').update(s).digest('hex')
 function trialTasks(): Record<string, { name: string; goal: string; change?: string }> {
   const path = process.env.BLOMA_OBSERVATION_CASES
@@ -127,8 +127,7 @@ export async function main() {
   if(!continuation&&existsSync(policy+'.state.json'))throw Error('OBSERVATION_LEDGER_NOT_FRESH')
   const existingRequests=existsSync(policy+'.state.json')?JSON.parse(readFileSync(policy+'.state.json','utf8')).entries.length:0
   if(existingRequests>=512)throw Error('TRIAL_REQUEST_LIMIT')
-  if(continuation)writeFileSync(join(root,'user-run-claimed'+observationAttemptSuffix()+'.json'),JSON.stringify({at:new Date().toISOString(),runtimeHash,previous_report:continuation.session_id}),{flag:'wx'})
-  else claimObservationRun(root,{runtimeHash,thinking:trialThinking})
+  if(!continuation)claimObservationRun(root,{runtimeHash,thinking:trialThinking})
   const requestLimit=512-existingRequests
   const money = () => {
     if (existsSync(policy + '.state.json')) return readMonetaryBudget(policy)
@@ -184,6 +183,7 @@ export async function main() {
   const model = { query, env: binding.env, signal, sessionId: sid, history: [{role:'user' as const,content:task.goal}], maxTokens: requestMaxTokens,
     persistAssistant: (text: string) => appendSessionMessage(sid, { role: 'assistant', origin: 'agent', content: [{ type: 'text', text }], timestamp: Date.now() }) }
   await withFundedExecutionWindow(()=>({remainingRequests:Math.max(0,requestLimit-control.snapshot().physical_requests),remainingRmb:Math.min(fundedAllowance-(control.snapshot().upper_rmb??0),money()[0]?.remaining_rmb??fundedAllowance),outputRmbPerMillion:policyRate.output_rmb_per_million}),async()=>{
+  const releaseAttempt=continuation?claimSimulatedRun(root,{at:new Date().toISOString(),runtimeHash,previous_report:continuation.session_id},()=>assertSimulatedContinuation(root,thinking,runtimeTree)):undefined
   try {
     save(true)
     if(continuation){
@@ -193,7 +193,7 @@ export async function main() {
       latestCard=pending?{event_id:randomUUID(),session_id:sid,project_id:project.project_id,created_at:new Date().toISOString(),type:'user_decision_required',payload:pending.payload}:undefined
       previewUrl=pending?.preview_url
       report.retest_of=continuation.retest_of
-      if(!latestCard)throw Error('SIMULATED_USER_DECISION_MISSING')
+      if(!latestCard&&!(project.status==='completed'&&project.desktop_phase==='delivered'&&await activeSoftwareRelease(project.project_id)))throw Error('SIMULATED_USER_DECISION_MISSING')
       try{
         report.user_trial=await simulateUserSession({goal:task.goal,signal,
           turn:async reply=>{
@@ -232,7 +232,7 @@ export async function main() {
           },
           decide:input=>decideAsUser(query,{env:binding.env,signal,maxTokens:requestMaxTokens,sessionId:userSid,accounting:{projectId:project.project_id,runId,parentSessionId:sid,role:'simulated-user',scope:'user-experience'}},input),
           act:action=>surface.act(action),
-          record:row=>{appendFileSync(join(taskDir,'simulated-user.jsonl'),safe({at:new Date().toISOString(),actor:'simulated-user',...row as object})+'\n')}
+          record:row=>{appendFileSync(join(taskDir,'simulated-user.jsonl'),safe({at:new Date().toISOString(),actor:'simulated-user',run_id:runId,...row as object})+'\n')}
         })
         report.turn={status:report.user_trial.status==='user_assessed'?'returned':report.user_trial.status}
       }finally{await surface.close()}
@@ -249,10 +249,13 @@ export async function main() {
   } catch (error) { report.status = 'failed'; report.error = String(error) }
   finally {
     trace.finish()
+    const final=findProject(project.project_id)
+    report.project_status=final.status;report.current_stage=final.current_stage;report.desktop_phase=final.desktop_phase
+    report.release=(await activeSoftwareRelease(project.project_id))?.id
     report.finished_at = new Date().toISOString()
     report.balance_after = (await get('user/balance').catch(() => undefined))?.balance_infos?.find((r: any) => r.currency === 'CNY')?.total_balance
     report.old_accounting_unchanged = manifest.old_accounting.every((r: any) => hash(readFileSync(r.path)) === r.sha256)
-    save(true); console.log(safe({ status: report.status, money: money(), report: reportPath }))
+    save(true);releaseAttempt?.(); console.log(safe({ status: report.status, money: money(), report: reportPath }))
   }
   })
 }

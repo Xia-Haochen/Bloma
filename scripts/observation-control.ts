@@ -1,6 +1,7 @@
-import {mkdirSync,readFileSync,writeFileSync,existsSync} from 'node:fs'
+import {continuationBoundary} from './observation-continuation.mjs'
+import {mkdirSync,readFileSync,writeFileSync,existsSync,unlinkSync} from 'node:fs'
 import {join} from 'node:path'
-import {createHash} from 'node:crypto'
+import {createHash,randomUUID} from 'node:crypto'
 import type {AgentEvent} from '../shared/types'
 
 export const observationHash=(value:string|Buffer)=>createHash('sha256').update(value).digest('hex')
@@ -30,6 +31,15 @@ export function claimObservationRun(root:string,identity:unknown){
   mkdirSync(root,{recursive:true})
   writeFileSync(join(root,'run-claimed.json'),JSON.stringify({at:new Date().toISOString(),identity}),{flag:'wx'})
 }
+/** One owner across all explicit continuation attempts; a crash leaves a visible lock. */
+export function claimSimulatedRun(root:string,identity:unknown,validate:()=>void=()=>{}){
+  const path=join(root,'user-active.json'),owner=randomUUID()
+  writeFileSync(path,JSON.stringify({owner,identity}),{flag:'wx'})
+  const release=()=>{if(JSON.parse(readFileSync(path,'utf8')).owner!==owner)throw Error('SIMULATED_USER_OWNER_CHANGED');unlinkSync(path)}
+  try{validate();writeFileSync(join(root,'user-run-claimed'+observationAttemptSuffix()+'.json'),JSON.stringify({owner,identity}),{flag:'wx'})}
+  catch(error){release();throw error}
+  return release
+}
 export function requireObservationPhase(phase:string){
   if(!['preflight','run','simulate'].includes(phase))throw Error('OBSERVATION_PHASE_REFUSED')
 }
@@ -45,7 +55,10 @@ export function assertSimulatedContinuation(root:string,thinking:string,runtimeT
     ||typeof m.report!=='string'||!m.report.startsWith(task+'/')&&!m.report.startsWith(task+'\\')||m.report.includes('..')
     ||m.report_sha256!==observationHash(readFileSync(join(root,m.report))))throw Error('SIMULATED_USER_IDENTITY_CHANGED')
   const report=JSON.parse(readFileSync(join(root,m.report),'utf8'))
-  if((suffix?report.status!=='failed'||!(typeof report.error==='string'&&(report.error==='Error: SIMULATED_USER_PREVIEW_NOT_LOCAL'||report.error==='Error: SIMULATED_USER_OBSERVATION_REQUIRED'||report.error==='Error: SIMULATED_USER_DECISION_MISSING'||report.error==='Error: SIMULATED_USER_CHOICE_INVALID'||report.error==='SyntaxError: Unexpected end of JSON input'||report.error==='Error: SIMULATED_USER_RESPONSE_EMPTY'||report.error.startsWith('SyntaxError: Expected property name')||report.error.startsWith('TimeoutError: elementHandle.')))||m.attempt!==suffix||!m.boundary:report.status!=='awaiting_user')||existsSync(join(root,'user-run-claimed'+suffix+'.json')))throw Error('SIMULATED_USER_BOUNDARY_REQUIRED')
+  if(existsSync(join(root,'user-run-claimed'+suffix+'.json')))throw Error('SIMULATED_USER_BOUNDARY_REQUIRED')
+  if(suffix){
+    if(m.attempt!==suffix||!m.boundary||JSON.stringify(continuationBoundary(root,report))!==JSON.stringify(m.boundary))throw Error('SIMULATED_USER_BOUNDARY_CHANGED')
+  }else if(report.status!=='awaiting_user')throw Error('SIMULATED_USER_BOUNDARY_REQUIRED')
   return suffix?{...report,...m.boundary,status:'awaiting_user',retest_of:m.report}:report
 }
 export function assertFrozenObservation(root:string,runtimeHash:string,thinking:string,runtimeTree:string){

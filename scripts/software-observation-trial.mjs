@@ -1,3 +1,4 @@
+import {continuationBoundary} from './observation-continuation.mjs'
 import {mkdirSync,cpSync,readFileSync,writeFileSync,readdirSync,lstatSync,existsSync} from 'node:fs'
 import {resolve,join,dirname} from 'node:path'
 import {spawn} from 'node:child_process'
@@ -27,14 +28,11 @@ export async function prepareObservation(root,compile,userAuthorization){
     const manifest=JSON.parse(readFileSync(join(root,'manifest.json'),'utf8')),task=Object.keys(manifest.tasks)[0]
     const folder=join(root,task),reports=readdirSync(folder).filter(name=>suffix?/^user-run-.*\.json$/.test(name):/^run-.*\.json$/.test(name)).sort((a,b)=>Date.parse(JSON.parse(readFileSync(join(folder,b),'utf8')).started_at??0)-Date.parse(JSON.parse(readFileSync(join(folder,a),'utf8')).started_at??0))
     if(!reports.length||!suffix&&reports.length!==1||existsSync(join(root,'user-run-claimed'+suffix+'.json')))throw Error('SIMULATED_USER_BOUNDARY_REQUIRED')
+    if(reports.some(name=>JSON.parse(readFileSync(join(folder,name),'utf8')).status==='running'))throw Error('SIMULATED_USER_ATTEMPT_RUNNING')
     const report=JSON.parse(readFileSync(join(folder,reports[0]),'utf8'))
     let boundary
     if(suffix){
-      if(report.status!=='failed'||!report.finished_at||!(typeof report.error==='string'&&(report.error==='Error: SIMULATED_USER_PREVIEW_NOT_LOCAL'||report.error==='Error: SIMULATED_USER_OBSERVATION_REQUIRED'||report.error==='Error: SIMULATED_USER_DECISION_MISSING'||report.error==='Error: SIMULATED_USER_CHOICE_INVALID'||report.error==='SyntaxError: Unexpected end of JSON input'||report.error==='Error: SIMULATED_USER_RESPONSE_EMPTY'||report.error.startsWith('SyntaxError: Expected property name')||report.error.startsWith('TimeoutError: elementHandle.'))))throw Error('RETEST_REQUIRES_RECORDED_PREVIEW_FAILURE')
-      const ledger=JSON.parse(readFileSync(join(root,'monetary-policy.json.state.json'),'utf8'));if(ledger.entries.some(row=>row.status!=='reported'))throw Error('RETEST_UNSETTLED_REQUEST')
-      const project=JSON.parse(readFileSync(join(root,'home/projects.json'),'utf8')).projects.find(p=>p.project_id===report.project_id)
-      if(!project||!['blocked_for_user_decision','clarifying'].includes(project.current_stage))throw Error('RETEST_NOT_AT_USER_BOUNDARY')
-      boundary={project_id:project.project_id,session_id:report.session_id,current_stage:project.current_stage,project_status:project.status}
+      boundary=continuationBoundary(root,report)
     }else if(report.status!=='awaiting_user')throw Error('SIMULATED_USER_BOUNDARY_REQUIRED')
     const sha=file=>createHash('sha256').update(readFileSync(file)).digest('hex')
     migration={authorization:userAuthorization,attempt:suffix,boundary,previous_runtime_digest:manifest.runtime_tree_sha256,
