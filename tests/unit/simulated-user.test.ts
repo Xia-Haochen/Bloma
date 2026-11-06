@@ -24,11 +24,11 @@ it('projects only public text and choices, binds visual feedback and refuses inv
   expect(()=>userReply({action:'reply',choice:0,text:'样式可以'},card('ux_confirm'),undefined)).toThrow('观察')
   expect(()=>userReply({action:'reply',text:'保存没反应',observation:'old'},undefined,{id:'new',kind:'app',text:'',controls:[]})).toThrow('观察')
 })
-it('uses a separate tool-free model request with only public observations',async()=>{
+it('uses a separate UI-intent-only model request with only public observations',async()=>{
   const query:SDKQuery=async function*(prompt,options){
-    expect(options.maxTokens).toBe(262144);expect(prompt).not.toContain('\"id\":\"v\"');expect(options.tools).toBeUndefined();expect(options.images).toEqual([{imageId:'image',media_type:'image/png'}])
+    expect(options.maxTokens).toBe(262144);expect(prompt).not.toContain('\"id\":\"v\"');expect(options.tools?.map(t=>t.name)).toEqual(['perform_user_action']);expect(options.images).toEqual([{imageId:'image',media_type:'image/png'}])
     expect(options.accounting?.role).toBe('simulated-user');expect(prompt).not.toContain('imageId');expect(options.history?.[0].role).toBe('system')
-    yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:'{action:"stop",observation:"old-frame",text:"还没看到程序，无法评价"}'}]}}
+    yield{type:'assistant',message:{role:'assistant',content:[{type:'tool_use',name:'perform_user_action',id:'intent',input:{action:'stop',text:'还没看到程序，无法评价'}}]}}
   }
   const result=await decideAsUser(query,{env:{},maxTokens:262144,sessionId:'user',signal:new AbortController().signal,accounting:{projectId:'p',role:'simulated-user'}},{goal:'保存',view:{id:'v',kind:'app',text:'公开界面',controls:[],image:[{imageId:'image',media_type:'image/png'}]},history:[]})
   expect(result.action).toBe('stop');expect(result.observation).toBe('v')

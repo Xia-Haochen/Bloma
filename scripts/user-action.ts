@@ -7,6 +7,14 @@ export class UserInteractionError extends Error {
 }
 export type UserAction={action:'reply'|'click'|'fill'|'select'|'upload'|'draw'|'wait'|'reopen'|'finish'|'stop';text?:string;choice?:number;observation?:string;ref?:number;value?:string;files?:string[];points?:Array<{x:number;y:number;delay?:number}>;milliseconds?:number}
 const fields:Record<UserAction['action'],string[]>={reply:['text','choice'],click:['ref'],fill:['ref','value'],select:['ref','value'],upload:['ref','files'],draw:['ref','points'],wait:['milliseconds'],reopen:[],finish:['text'],stop:['text']}
+/** An intent channel, not an executable tool registry. Only the UI host can dispatch it. */
+export const userActionTool={name:'perform_user_action',description:'根据当前公开界面选择下一步用户操作；每次只调用一次，等待宿主实际执行并提供新观察。reply回复/反馈；click点击；fill输入；select按显示文字选择；upload选择files中的文件ID；draw画线；wait等待；reopen重开；finish给出试用评价；stop说明无法验证。',input_schema:{
+  type:'object',additionalProperties:false,required:['action'],properties:{
+    action:{type:'string',enum:Object.keys(fields)},ref:{type:'integer',minimum:0},text:{type:'string',maxLength:2000},choice:{type:'integer',minimum:0},
+    value:{type:'string',maxLength:2000},files:{type:'array',minItems:1,uniqueItems:true,items:{type:'string'}},milliseconds:{type:'integer',minimum:0,maximum:3000},
+    points:{type:'array',minItems:2,maxItems:50,items:{type:'object',additionalProperties:false,required:['x','y'],properties:{x:{type:'number',minimum:0,maximum:1},y:{type:'number',minimum:0,maximum:1},delay:{type:'integer',minimum:0,maximum:500}}}}
+  }
+}}
 const fail=(message:string):never=>{throw new UserInteractionError('action',message)}
 /** Validate the complete intent before any side effect. IDs always come from the host. */
 export function validateUserAction(raw:unknown):UserAction{
