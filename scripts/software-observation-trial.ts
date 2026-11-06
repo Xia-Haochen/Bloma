@@ -31,7 +31,7 @@ import type { SDKQuery } from '../main/orchestration/stages/orchestration-contra
 import {simulateUserSession,decideAsUser} from './simulated-user'
 import {enterDesktopLine} from '../main/desktop/desktop-route'
 import {SimulatedUserSurface} from './simulated-user-surface'
-import {claimSimulatedRun,assertSimulatedContinuation,observationBalance,readObservationQuote,claimObservationRun,requireObservationPhase,assertFrozenObservation,observeOneTurn,observationOutcome} from './observation-control'
+import {userTrialBoundary,claimSimulatedRun,assertSimulatedContinuation,observationBalance,readObservationQuote,claimObservationRun,requireObservationPhase,assertFrozenObservation,observeOneTurn,observationOutcome} from './observation-control'
 const hash = (s: string | Buffer) => createHash('sha256').update(s).digest('hex')
 function trialTasks(): Record<string, { name: string; goal: string; change?: string }> {
   const path = process.env.BLOMA_OBSERVATION_CASES
@@ -216,9 +216,11 @@ export async function main() {
               },event,signal)
               model.history.push({role:'user',content:reply.text})
               if(outcome.error||outcome.status==='stopped')return{failed:outcome.error??outcome.status}
-              if(!latestCard&&['clarifying','blocked_for_user_decision'].includes(findProject(project.project_id).current_stage)&&publicReplyText.trim()){
-                latestCard={event_id:randomUUID(),session_id:sid,project_id:project.project_id,created_at:new Date().toISOString(),type:'user_decision_required',payload:{kind:reply.selected?.startsWith('ux_')?'ux_feedback':'conversation',title:'平台回复',summary:publicReplyText,questions:[]}}
-              }
+              const boundary=userTrialBoundary({project:findProject(project.project_id),sessionId:sid,emitted:latestCard,
+                pending:readPendingDecision(project.project_id,sid),publicText:publicReplyText,feedbackKind:reply.selected?.startsWith('ux_')?'ux_feedback':'conversation'})
+              latestCard=boundary.card
+              if(boundary.previewUrl)previewUrl=boundary.previewUrl
+              if(boundary.failed)return{failed:boundary.failed}
             }
             return{card:latestCard}
           },

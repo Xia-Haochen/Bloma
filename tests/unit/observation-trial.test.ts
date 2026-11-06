@@ -2,7 +2,7 @@ import {mkdtempSync,rmSync,writeFileSync,readFileSync,existsSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {afterEach,beforeEach,expect,it,vi} from 'vitest'
-import {claimObservationRun,assertFrozenObservation,observeOneTurn,observationOutcome,requireObservationPhase,readObservationQuote,observationHash,observationBalance} from '../../scripts/observation-control'
+import {userTrialBoundary,claimObservationRun,assertFrozenObservation,observeOneTurn,observationOutcome,requireObservationPhase,readObservationQuote,observationHash,observationBalance} from '../../scripts/observation-control'
 import {createProject,findProject} from '../../main/project/project-service'
 import {readPrdBackplane} from '../../main/project/prd-store'
 import {handleGuideMessage} from '../../main/guide/stages/guide-pipeline'
@@ -11,6 +11,16 @@ import type {AgentEvent} from '../../shared/types'
 let home:string,old:string|undefined
 beforeEach(()=>{old=process.env.PROMA_HOME;home=mkdtempSync(join(tmpdir(),'observation-trial-'));process.env.PROMA_HOME=home})
 afterEach(()=>{if(old===undefined)delete process.env.PROMA_HOME;else process.env.PROMA_HOME=old;rmSync(home,{recursive:true,force:true})})
+
+it('rehydrates an unanswered decision after a silent return instead of trying to launch nonexistent software',()=>{
+  const project={project_id:'p',status:'active',current_stage:'blocked_for_user_decision'}
+  const pending={payload:{kind:'ux_confirm',summary:'当前草图',questions:[{id:'choice',label:'开始制作'}]},preview_url:'bloma-file://p/00_UX/ux-sketch.html'}
+  expect(userTrialBoundary({project,sessionId:'s',pending})).toMatchObject({card:{payload:pending.payload},previewUrl:pending.preview_url})
+  expect(userTrialBoundary({project,sessionId:'s'}).failed).toContain('尚未到达')
+  expect(userTrialBoundary({project:{...project,current_stage:'generating_mvp',desktop_phase:'desktop-implement'},sessionId:'s'}).failed).toBeTruthy()
+  expect(userTrialBoundary({project:{...project,status:'completed',current_stage:'completed',desktop_phase:'delivered',software_release_id:'release'},sessionId:'s'})).toEqual({})
+  expect(userTrialBoundary({project,sessionId:'s',publicText:'请补充用途'}).card?.payload).toMatchObject({kind:'conversation',summary:'请补充用途'})
+})
 
 it('real guide stores the generated scope and returns to the user without a confirmation or second request',async()=>{
   const project=createProject({request_id:'new',mode:'quick'},{workflowVersion:'software-v1'})

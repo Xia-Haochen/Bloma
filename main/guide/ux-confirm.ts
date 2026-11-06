@@ -378,10 +378,16 @@ export function resolveUxConfirmCardAnswer(input: AgentSendMessageInput): 'confi
 
 /** 用户确认（含让渡）：ack + 清预览 + 进桌面线。 */
 export async function resumeUxConfirmConfirmed(input: AgentSendMessageInput): Promise<boolean> {
+  // A bound card choice is the decision; accompanying prose is feedback, not a second router.
+  const explicitChoice = resolveUxConfirmCardAnswer(input) === 'confirm'
   const pending = takePendingUxConfirm(input.project_id)
   if (!pending) return false
   if (pending.signal?.aborted) return true
-  if (isNegativeUxIntent(input.content ?? '')) { pendingUxConfirms.set(input.project_id, pending); return true }
+  if (!explicitChoice && isNegativeUxIntent(input.content ?? '')) {
+    pendingUxConfirms.set(input.project_id, pending)
+    publishUxCard(pending)
+    return true
+  }
   try {
     const current = readPrdBackplane(input.project_id)
     if (!current.user_confirmed_at || prdStructureIssues(current).length || pending.prdFingerprint !== prdScopeFingerprint(current)) throw new Error('UX_PRD_VERSION_CHANGED: 当前需求尚未确认或版本已变化，请重新生成设计')

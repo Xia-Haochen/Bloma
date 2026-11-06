@@ -86,3 +86,15 @@ export function observationOutcome(turn:{status:string},project:{status:string;c
   return release&&project.status==='completed'&&project.current_stage==='completed'&&project.desktop_phase==='delivered'
     ?'released_pending_independent_acceptance':'incomplete'
 }
+
+/** A returned producer call is not proof of an application. Consume current authority. */
+export function userTrialBoundary(input:{project:{project_id:string;status:string;current_stage:string;desktop_phase?:string;software_release_id?:string};sessionId:string;
+  emitted?:AgentEvent;pending?:{payload:Record<string,unknown>;preview_url?:string};publicText?:string;feedbackKind?:string}){
+  const {project,pending}=input
+  const card=(payload:Record<string,unknown>):AgentEvent=>({event_id:randomUUID(),project_id:project.project_id,session_id:input.sessionId,created_at:new Date().toISOString(),type:'user_decision_required',payload})
+  if(pending)return{card:card({...pending.payload,summary:[pending.payload.summary,input.publicText].filter(Boolean).join('\n')}),previewUrl:pending.preview_url}
+  if(input.emitted)return{card:input.emitted}
+  if(project.status==='completed'&&project.current_stage==='completed'&&project.desktop_phase==='delivered'&&project.software_release_id)return{}
+  if(['clarifying','blocked_for_user_decision'].includes(project.current_stage)&&input.publicText?.trim())return{card:card({kind:input.feedbackKind??'conversation',title:'平台回复',summary:input.publicText,questions:[]})}
+  return{failed:`制作尚未到达可试用交付，也没有当前可回答的问题（${project.current_stage}）。`}
+}
