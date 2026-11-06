@@ -55,7 +55,7 @@ export function qualityWorkQueue(ledger: Ledger, current: Identity, block: Deliv
   const closeout = qualityCloseout(ledger, current, block, rules, independentRules)
   const ids = new Set([...closeout.must_fix, ...closeout.required_investigation])
   return { status: block || ids.size ? 'needs_work' : 'ready',
-    summary: closeout.must_fix.length ? '实际检查仍有未解决的问题，请按具体观察修复。' : closeout.required_investigation.length ? '以下行为仍缺少足以判断的证据，请核对实际表现。' : block?.code==='intent' ? block.message : block ? '还有宿主验收条件尚未满足，现有产物和证据保留。' : '当前质量条件已齐备，由宿主继续交付。',
+    summary: closeout.must_fix.length ? '实际检查仍有未解决的问题，请按具体观察修复。' : closeout.required_investigation.length ? '以下行为仍缺少足以判断的证据，请核对实际表现。' : ['intent','engineering'].includes(block?.code ?? '') ? block!.message : block ? '还有宿主验收条件尚未满足，现有产物和证据保留。' : '当前质量条件已齐备，由宿主继续交付。',
     problems: ledger.findings.filter(f=>ids.has(f.id)).map(f=>({id:f.id,requirement:f.requirement,expected:f.expected_source,trigger:f.trigger,location:f.location,
       observation:f.checks.at(-1)?.observation??f.evidence,observation_version:sameIdentity(f.checks.at(-1)?.identity??f.identity,current)?'current':'previous',missing:f.unknowns||f.reproduction,
       task:closeout.must_fix.includes(f.id)?'修正当前行为，保留原预期。':'提供针对该触发条件的实际观察；普通案例通过不足以排除疑点。'})),

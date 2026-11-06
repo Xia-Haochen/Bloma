@@ -1,4 +1,6 @@
 import {createToolState} from '../agent/loop/agent-loop'
+import { checkpointProjectHistory } from '../coding/project-git'
+import { locallyVerifiedSoftware } from '../software/verification'
 import {ModelRequestRefusal} from '../platform/llm/model-request-refusal'
 import {applyApprovedNativeCorrections} from '../software/native-gui-registration'
 import {currentFundedExecutionWindow,fundedExecutionLimits,configureSoftwareExecutionLimits} from '../software/execution-limits'
@@ -138,6 +140,9 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     if (isSoftwareProject(input.projectId)) saveSoftwareRunState({ projectId: input.projectId, sessionId: input.sessionId, runId: randomUUID(), status: 'cancelled', error: input.content.slice(0, 200) })
     deps.publish(input, 'message_delta', { text: '已停止，已有文件和修改意见已保留。' }); deps.complete(input.sessionId, input.projectId, 'incomplete'); return
   }
+  const historyBase = await checkpointProjectHistory(project.root_path, { kind: 'production_base', summary: '制作前的实际工程基线' }, signal)
+  signal.throwIfAborted()
+  recordEvaluationEvent(input.projectId, 'project_history', { ...historyBase, boundary: 'before_implementation' })
   const recoveredTests=applyApprovedNativeCorrections(input.projectId,signal)
   const brief = readPrdBackplane(input.projectId), scope = prdScopeFingerprint(brief)
   if(!isSoftwareProject(input.projectId))throw Error('SOFTWARE_WORKFLOW_REQUIRED')
@@ -243,6 +248,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     brief.lean_brief.ui === 'required' ? buildLeanGuiTool(input.projectId) : buildLeanCliTool(input.projectId)])
   const system = [
     SOFTWARE_ENGINEERING_INSTRUCTIONS,
+    `宿主恢复检查点：${JSON.stringify(historyBase)}。这是版本恢复事实，不是工程提交或通过判定；由你检查产品仓库、处理可恢复问题并管理有意义的提交。`,
     ...(brief.lean_brief?.work_items?.length ? ['建议工作清单：'+JSON.stringify(brief.lean_brief.work_items)+'。随调查和实验调整，不按勾选状态判断交付；业务范围与完成标准仍须遵守。'] : []),
     ...(brief.project_plan ? ['已确认阶段计划：'+JSON.stringify(brief.project_plan)+'。按计划实现，局部检查反馈不代表完整交付。'] : []),
     '稳定候选交给verify_app，宿主统一执行、结算已绑定问题、安排必要的C/V并发布。模型负责实现与修复，不维护通过凭据或重复记账。read_quality_findings可查看实际阻塞；疑点与案例的对应关系由独立审阅确认，普通案例通过不能自行排除疑点。',
@@ -286,7 +292,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
         } }
       },
       childSystemBuilder: (_role: import('../../shared/delegation-run-context').DelegationRunRole, child: string) =>
-        quality.system(child) ?? (collaboration.experiments.has(child) ? `你负责独立实验。先核对输入和关键未知，查必要资料，再运行最小可判定探针；失败先定位类别再调整，不原样重试。${collaboration.experiments.describe(child)}。可写文件和执行命令仅用于实验，不修改正式项目、不递归委派。用record_experiment_result交接方法、结论及真实产物；supports/refutes是解释，不是产品PASS。` : `完成主负责人交付的具体子任务，先读相关文件，沿用现有接口。项目根：${project.root_path}。文件权限：${collaboration.describe(child)}。仅在归属范围内修改；不运行命令、不再委派、不修改目标/验收输入。需要跨边界修改时回报主负责人。简短交接实际修改、检查和未验证项，不自报产品通过。全局约束：${JSON.stringify(brief.constraints)}`) })),
+        quality.system(child) ?? (collaboration.experiments.has(child) ? `你负责独立实验。先核对输入和关键未知，查必要资料，再运行最小可判定探针；失败先定位类别再调整，不原样重试。${collaboration.experiments.describe(child)}。可写文件和执行命令仅用于实验，不修改正式项目、不递归委派。用record_experiment_result交接方法、结论及真实产物；supports/refutes是解释，不是产品PASS。` : `完成主负责人交付的具体子任务，先读负责人指出的当前设计和相关文件，沿用已确定职责与接口；发现设计不成立时回报依据，由负责人更新设计。项目根：${project.root_path}。文件权限：${collaboration.describe(child)}。仅在归属范围内修改；不运行命令、不再委派、不修改目标/验收输入。需要跨边界修改时回报主负责人。简短交接实际修改、检查和未验证项，不自报产品通过。全局约束：${JSON.stringify(brief.constraints)}`) })),
     childToolsBuilder: (id, role, _format, child) => {
       const childTools = buildSoftwareAgentTools(id, role, collaboration,undefined,undefined,undefined,child)
       return role === 'review' ? quality.reviewTools(childTools, child) : childTools
@@ -296,9 +302,12 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   let task = input.observedSoftwareVersion ? trialFeedbackText(input.projectId, input.observedSoftwareVersion, input.content) : input.content
   let initial = true
   const waitForProductionChildren=(ctx:import('../agent/loop/agent-loop').ToolContext)=>guardDispatcherCompletion(ctx,undefined,undefined,quality.acceptedHandoff)
-  const advanceCloseout = async (ctx: import('../agent/loop/agent-loop').ToolContext) => {
+  const advanceCloseout = async (ctx: import('../agent/loop/agent-loop').ToolContext, locallyChecked = false) => {
     const waiting = await waitForProductionChildren(ctx)
     if (waiting) return waiting
+    // A maker stopping is not evidence of a stable candidate. Let the common
+    // verifier/repair loop observe failures before purchasing any review.
+    if (!locallyChecked && !await recentSoftwareVerification(input.projectId, input.requestId, ctx.signal)) return
     const attemptedReviews=new Set<string>()
     for (;;) {
       const action = await quality.completionAction(ctx.signal), gap = action.gate
@@ -314,7 +323,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
       if(completedReview?.status!=='complete'){const interrupted=await quality.completionAction(ctx.signal);throw new ModelRequestRefusal(interrupted.halt?interrupted.gate!:'QUALITY_REVIEW_INTERRUPTED: 宿主审阅未完成，已保留现场，未追加制作请求。'+(summary??''))}
       // Reconcile new review bindings against the same candidate evidence before routing again.
       const checked=await verifySoftwareCandidate(input.projectId,input.requestId,ctx.signal)
-      if(checked.status!=='passed')return 'QUALITY_CLOSEOUT_CHECK_REQUIRED: '+JSON.stringify(verificationResponse(input.projectId,checked))
+      if(!locallyVerifiedSoftware(checked))return 'QUALITY_CLOSEOUT_CHECK_REQUIRED: '+JSON.stringify(verificationResponse(input.projectId,checked))
       const after = await quality.completionAction(ctx.signal)
       if (after.next_tool===action.next_tool && after.gate) {
         return after.feedback
@@ -383,7 +392,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
       const version = versionOf()
       if (!version || prdScopeFingerprint(readPrdBackplane(input.projectId)) !== scope) { blocked('验证前目标或文件版本发生变化，请沿当前版本继续。'); return }
       let candidate: Awaited<ReturnType<typeof prepareSoftwareRelease>> | undefined
-      let core: CoreVerificationResult, failure: string | undefined, cleanEnvironmentPending = false, failureCategory = 'unknown'
+      let core: CoreVerificationResult, failure: string | undefined, cleanEnvironmentPending = false, failureCategory = 'unknown', failureFingerprint: string | undefined
       if ((!deps.coreVerification) && !deps.securityScan && !deps.launchSmoke) {
         // The agent tool and final delivery share one verifier. Every fresh
         // attempt invalidates earlier receipts, including failures at closure.
@@ -391,6 +400,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
         const checked = await verifySoftwareCandidate(input.projectId, input.requestId, runSignal)
         if(checked.status==='unverified'&&checked.independent?.semantics?.ready===false){blocked(`独立案例的业务预期或覆盖声明尚待澄清，未将其记为产品失败，也未改动目标或冻结断言：\n${checked.summary}`,true);return}
         failureCategory=checked.failure?.category??'unknown'
+        failureFingerprint=verificationToolFeedback(checked).fingerprint
         candidate = checked.candidate
         core = checked.core ?? { status: 'unverified', checked_at: new Date().toISOString(), summary: checked.summary, missing: [checked.summary], evidence: [] }
         cleanEnvironmentPending = checked.status === 'environment_blocked' && core.local_status === 'passed'
@@ -433,11 +443,16 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
         }
       }
       runSignal.throwIfAborted()
+      if (!failure && !modelBudgetStop) {
+        failure = await advanceCloseout({ projectId: input.projectId, sessionId: input.sessionId, requestId: input.requestId,
+          signal: runSignal, state: createToolState() }, true)
+        if (failure) { failureCategory = 'quality'; failureFingerprint = undefined }
+      }
       if (failure) {
         if (modelBudgetStop) { blocked(`${modelBudgetStop.startsWith('MONETARY_') ? '当前费用预留不足以放行下一次调用' : modelBudgetStop === 'HARNESS_OUTPUT_BUDGET_EXHAUSTED' ? '当前累计输出额度未放行调用' : '当前请求次数额度未放行调用'}，宿主检查未通过，未再调用模型：\n${failure}`); return }
         if (core.status === 'environment_blocked' && !cleanEnvironmentPending) { blocked(failure); return }
         {
-          const progress = recordSoftwareRepair({ projectId: input.projectId, sessionId: input.sessionId, runId, error: failure,category:failureCategory,
+          const progress = recordSoftwareRepair({ projectId: input.projectId, sessionId: input.sessionId, runId, error: failure,category:failureCategory, failureFingerprint,
             source: softwareVerificationFingerprint(project.root_path), candidateId: candidate?.id,
             observations: { gui: core.host_gui?.steps, cli: core.host_cli?.cases } })
           if (!progress.allowed) { blocked(`连续${progress.repeats}次验证得到相同失败观察，尚无可见改善，已停止自动重试并保留现场：\n${failure}`); return }

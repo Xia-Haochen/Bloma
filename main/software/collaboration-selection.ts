@@ -1,3 +1,4 @@
+import { blockingEngineeringReview } from './engineering-design'
 import { visualCoverageComplete } from './visual-review-checklist'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -40,7 +41,8 @@ export async function selectQualityCollaboration(projectId: string, current: Ide
   const full: ReviewKind[] = gui ? ['code','visual'] : ['code']
   let baseline: string | undefined, changed: string[] = [], risk: CollaborationSelection['risk'] = 'full', required = full, reasons: string[] = []
   const ledger = readQualityLedger(projectId)
-  const unresolved = ledger.findings.some(f => f.disposition !== 'superseded' && (['high','critical'].includes(f.severity) || f.review_kind === 'visual' && f.severity === 'medium') && f.checks.some(c => c.outcome === 'failed')
+  const engineering = ledger.reviews.filter(r => (r.kind ?? 'code') === 'code' && r.status === 'complete' && r.engineering).at(-1)?.engineering
+  const unresolved = blockingEngineeringReview(engineering) || ledger.findings.some(f => f.disposition !== 'superseded' && (['high','critical'].includes(f.severity) || f.review_kind === 'visual' && f.severity === 'medium') && f.checks.some(c => c.outcome === 'failed')
     && !(f.disposition === 'closed' && f.checks.at(-1) && sameIdentity(f.checks.at(-1)!.identity, current)))
   try {
     const release = await activeSoftwareRelease(projectId, signal)

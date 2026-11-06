@@ -17,6 +17,7 @@ import type { CollaborationSelection } from './collaboration-selection'
 export type Identity = { source: string; target: string; environment: string }
 export type ReviewKind = 'code' | 'visual'
 export interface Review { id: string; kind?: ReviewKind; identity: Identity; status: 'pending' | 'submitted' | 'complete' | 'interrupted'; child?: string; delegation?: string; at: string
+  engineering?: import('./engineering-design').EngineeringReview
   observation?: {digest:string;image_hash?:string;ui:unknown;steps:unknown[];logs:unknown[]}
   resolutions?: Array<{finding_id:string;evidence:string;case_name?:string}>
   run_id?: string; failure_code?: string

@@ -1,4 +1,5 @@
 import { closeSync, existsSync, openSync, readSync, statSync } from 'node:fs'
+import { readEngineeringDesign } from './engineering-design'
 import { join } from 'node:path'
 import { getPromaHome } from '../../storage/config-paths'
 import { findProject } from '../project/project-service'
@@ -58,6 +59,7 @@ export function softwareWorkingContext(projectId: string, busy = true) {
     }
   }catch(error){verification.reason=String(error).match(/VERIFICATION_REPORT_[A-Z_]+/)?.[0]??'VERIFICATION_REPORT_READ_ERROR'}
   return { project_id: projectId, operation_id: project.lean_operation_id, session_id: current?.sessionId ?? project.last_session_id,
+    engineering: { design: 'ARCHITECTURE.md', available: Boolean(readEngineeringDesign(project.root_path)), history: 'bloma-history', note: '这是常用设计入口，不限定文件名；由负责人管理工程决定和Git提交，bloma-history仅是恢复检查点。' },
     project_state_topic: 'project-state', goal_excerpt: brief.positioning.slice(0, 600), confirmed: Boolean(brief.user_confirmed_at), scope_hash: prdScopeFingerprint(brief), feature_ids: brief.requirements.slice(0, 128).map(r => r.id), feature_count: brief.requirements.length,
     intent: brief.requirements_model && { experience: brief.requirements_model.experience, rules: brief.requirements_model.rules }, status: softwareStatusView(projectId, busy), current_source: source, current_source_protocol:'desktop_verification_fingerprint',checkpoint_source: current?.source,
     source_changed_since_checkpoint: source && current?.source ? source !== current.source : undefined,

@@ -17,7 +17,7 @@ export function withEmptyQualityReview(query: SDKQuery): SDKQuery {
     yield { type: 'assistant', message: { role: 'assistant', content: first
       ? [{ type: 'tool_use', id: 'controlled-c-materials', name: 'read_quality_review', input: {} },
         { type: 'tool_use', id: 'controlled-c-source', name: 'read_file', input: { path: 'app.cjs' } },
-        { type: 'tool_use', id: 'controlled-c-submit', name: 'submit_quality_findings', input: { findings: [] } }]
+        { type: 'tool_use', id: 'controlled-c-submit', name: 'submit_quality_findings', input: { findings: [], engineering: {status:'supported',evidence:'Controlled fixture: the read entry implements the documented input/output boundary. This is scripted test data, not a real-model architecture assessment.',limitations:'Controlled C response for unrelated regressions.'} } }]
       : [{ type: 'text', text: '受控C材料已提交；不声明软件质量。' }] } }
     yield { type: 'result', subtype: 'success', usage: { input_tokens: 10, output_tokens: 10 } }
   }

@@ -35,6 +35,7 @@ beforeEach(async () => {
   if (parsed.action !== 'brief') throw Error('fixture')
   syncDocuments({ request_id: 'sync', project_id: project.project_id, session_id: parent, checkpoint: 'requirement_confirmed' }, parsed.brief); markPrdUserConfirmed(project.project_id)
   writeFileSync(join(project.root_path, 'app.cjs'), 'console.log(999)')
+  writeFileSync(join(project.root_path, 'ARCHITECTURE.md'), 'Single addition CLI. Input is parsed at entry; calculation has no I/O or mutable state. Invalid numbers require explicit failure. Verify normal entry and bad input. No persistent data or background processes.')
   writeFileSync(join(project.root_path, 'LAUNCH.json'), JSON.stringify({ schema_version: 2, mode: 'command', command: ['node', 'app.cjs'] }))
   const registered = await buildLeanCliTool(project.project_id).execute({ expectations: { 'F-001': '2加3得5' }, cases: [{ name: 'sum', covers: ['F-001'], args: ['2', '3'], stdout: '5', exit_code: 0 }] }, ctx())
   expect(registered.isError).not.toBe(true)
@@ -51,13 +52,13 @@ function register(query: SDKQuery) {
     prepareDelegation: quality.prepare, childSystemBuilder: (_role, child) => quality.system(child)!,
     childToolsBuilder: (id, role) => quality.reviewTools(buildSoftwareAgentTools(id, role, policy)), publish: () => {} })
 }
-async function review(findings: Record<string, unknown>[] = [finding], intent?: unknown[], resolutions?: unknown[]) {
+async function review(findings: Record<string, unknown>[] = [finding], intent?: unknown[], resolutions?: unknown[], engineering: import('../../../main/software/engineering-design').EngineeringReview | null = {status:'supported',evidence:'app.cjs owns pure addition; CLI owns parsing/output; no persistence or external resources.',limitations:'CLI fixture only'}) {
   let calls = 0
   register(async function* (_prompt, options) {
     if (calls > 0) expect(JSON.stringify(options.messages)).toContain('只检查已保存记录，不自动保存草稿')
     expect(JSON.stringify(options.messages?.filter(m => m.role === 'system'))).not.toContain('A_SUCCESS_STORY_MUST_NOT_LEAK')
     yield { type: 'assistant', message: { role: 'assistant', content: ++calls === 1
-      ? [{ type: 'tool_use', id: 'materials', name: 'read_quality_review', input: {} }, { type: 'tool_use', id: 'source', name: 'read_file', input: { path: 'app.cjs' } }, { type: 'tool_use', id: 'submit', name: 'submit_quality_findings', input: { findings, ...(resolutions?{resolutions}:{}), ...(intent ? { intent_observations: intent } : {}) } }]
+      ? [{ type: 'tool_use', id: 'materials', name: 'read_quality_review', input: {} }, { type: 'tool_use', id: 'source', name: 'read_file', input: { path: 'app.cjs' } }, { type: 'tool_use', id: 'submit', name: 'submit_quality_findings', input: { findings, ...(engineering?{engineering}:{}), ...(resolutions?{resolutions}:{}), ...(intent ? { intent_observations: intent } : {}) } }]
       : [{ type: 'text', text: '已提交疑点，未验证。' }] } }
     yield { type: 'result', subtype: 'success', usage: { input_tokens: 10, output_tokens: 10 } }
   })
@@ -225,7 +226,8 @@ it('waits for an active quality child before buying another parent request',asyn
   release();await findDelegation(parent,child.delegation_id)!.completion;await waiting
   expect(calls).toBe(1)
 },30000)
-it('complete production runs C, reproduces and repairs a finding, reruns C on the new candidate and delivers through the existing verifier', async () => {
+it('production repairs a previously reviewed defect before buying C for the stable candidate and delivers through the existing verifier', async () => {
+  await review()
   const { enterDesktopLine } = await import('../../../main/desktop/desktop-route')
   const { findProject } = await import('../../../main/project/project-service')
   let parentStep = 0, cReviews = 0
@@ -236,7 +238,8 @@ it('complete production runs C, reproduces and repairs a finding, reruns C on th
     if (JSON.stringify(options.messages?.filter(m => m.role === 'system')).includes('独立只读代码/数据审阅C')) {
       if (!children.has(options.sessionId)) {
         children.add(options.sessionId); cReviews++
-        content = [use('read_quality_review', {}), use('read_file', { path: 'app.cjs' }), use('submit_quality_findings', { findings: cReviews === 1 ? [finding] : [] })]
+        expect(readQualityLedger(project.project_id).findings[0].disposition).toBe('closed')
+        content = [use('read_quality_review', {}), use('read_file', { path: 'app.cjs' }), use('submit_quality_findings', { findings: [], engineering:{status:'supported',evidence:'Read app.cjs: stateless CLI calculation.',limitations:'Fixture'} })]
       } else content = [{ type: 'text' as const, text: '只读意见已提交。' }]
     } else {
       switch (parentStep++) {
@@ -253,7 +256,7 @@ it('complete production runs C, reproduces and repairs a finding, reruns C on th
     { publish: () => {}, persistAssistant: () => {}, persistSystem: () => {}, complete: () => {} })
   expect(findProject(project.project_id).desktop_blocked, JSON.stringify(readQualityLedger(project.project_id))).toBeUndefined()
   expect(findProject(project.project_id).status).toBe('completed')
-  expect(cReviews).toBe(2)
+  expect(cReviews).toBe(1)
   expect(parentStep).toBe(3) // After the actual passing retest, host owns C and publication.
   const ledger = readQualityLedger(project.project_id)
   expect(ledger.findings[0].disposition).toBe('closed')
@@ -269,7 +272,7 @@ it('verification hands off to host review and publication without another maker 
   const query:SDKQuery=async function*(_prompt,options){
     let content
     if(JSON.stringify(options.messages?.filter(m=>m.role==='system')).includes('独立只读代码/数据审阅C')){
-      if(!children.has(options.sessionId)){children.add(options.sessionId);content=[use('read_quality_review',{}),use('read_file',{path:'app.cjs'}),use('submit_quality_findings',{findings:[]})]}
+      if(!children.has(options.sessionId)){children.add(options.sessionId);content=[use('read_quality_review',{}),use('read_file',{path:'app.cjs'}),use('submit_quality_findings',{findings:[],engineering:{status:'supported',evidence:'Read app.cjs: stateless addition and CLI input/output.',limitations:'Fixture'}})]}
       else content=[{type:'text' as const,text:'结构化审阅已提交。'}]
     }else{parentCalls++;if(parentCalls>1){unexpected=JSON.stringify(options.messages).slice(-5000);throw Error('TEST_UNEXPECTED_IMPLEMENTATION_TURN')}content=[use('verify_app',{})]}
     yield{type:'assistant',message:{role:'assistant',content}};yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
@@ -287,7 +290,7 @@ it('stops repeated failed checks without buying a review or teaching the maker r
   const query:SDKQuery=async function*(_prompt,options){
     let content
     if(JSON.stringify(options.messages?.filter(m=>m.role==='system')).includes('独立只读代码/数据审阅C')){
-      if(!children.has(options.sessionId)){children.add(options.sessionId);content=[use('read_quality_review',{}),use('read_file',{path:'app.cjs'}),use('submit_quality_findings',{findings:[]})]}
+      if(!children.has(options.sessionId)){children.add(options.sessionId);content=[use('read_quality_review',{}),use('read_file',{path:'app.cjs'}),use('submit_quality_findings',{findings:[],engineering:{status:'supported',evidence:'Read app.cjs: stateless addition and CLI input/output.',limitations:'Fixture'}})]}
       else content=[{type:'text' as const,text:'结构化审阅已提交，不代表业务通过。'}]
     }else{if(++parentCalls>5)throw Error('REPEATED_HOST_FAILURE_NOT_STOPPED');content=[use('verify_app',{})]}
     yield{type:'assistant',message:{role:'assistant',content}};yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
@@ -372,7 +375,7 @@ it('resumes an unchanged verified candidate through host review without waking t
  let makerCalls=0,reviewCalls=0
  const query:SDKQuery=async function*(_prompt,options){
   if(!JSON.stringify(options.messages?.filter(m=>m.role==='system')).includes('独立只读代码/数据审阅C')){makerCalls++;throw Error('UNNECESSARY_MAKER_REQUEST')}
-  const content=reviewCalls++===0?[{type:'tool_use' as const,id:'materials',name:'read_quality_review',input:{}},{type:'tool_use' as const,id:'source',name:'read_file',input:{path:'app.cjs'}},{type:'tool_use' as const,id:'submit',name:'submit_quality_findings',input:{findings:[]}}]:[{type:'text' as const,text:'审阅已提交。'}]
+  const content=reviewCalls++===0?[{type:'tool_use' as const,id:'materials',name:'read_quality_review',input:{}},{type:'tool_use' as const,id:'source',name:'read_file',input:{path:'app.cjs'}},{type:'tool_use' as const,id:'submit',name:'submit_quality_findings',input:{findings:[],engineering:{status:'supported',evidence:'Read app.cjs: stateless addition and CLI input/output.',limitations:'Fixture'}}}]:[{type:'text' as const,text:'审阅已提交。'}]
   yield{type:'assistant',message:{role:'assistant',content}};yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
  }
  await enterDesktopLine({projectId:project.project_id,sessionId:parent,requestId:'resume-host',content:'继续',maxTokens:2048,signal:AbortSignal.timeout(90000)},query,{},
@@ -384,4 +387,26 @@ it('refuses maker-selected review delegation before buying a child request',()=>
  let calls=0;register(async function*(){calls++;yield{type:'result',subtype:'success'}})
  expect(()=>startDelegation(ctx(),{task:'自行启动交付审阅',role:'review',readOnly:true})).toThrow('QUALITY_REVIEW_HOST_ONLY')
  expect(calls).toBe(0)
+})
+
+it('keeps engineering concerns blocking after business checks pass and requires review of the changed design', async () => {
+  writeFileSync(join(project.root_path, 'app.cjs'), 'console.log(5)')
+  await review([], undefined, undefined, {status:'concern',severity:'high',evidence:'app.cjs ignores CLI input and always returns 5, contradicting the documented calculation boundary.',limitations:'Normal-case execution alone cannot establish input handling.'})
+  expect((await verifySoftwareCandidate(project.project_id, 'r', ctx().signal)).status).toBe('passed')
+  expect(await quality.gate()).toContain('QUALITY_ENGINEERING_UNRESOLVED')
+  const previous = readQualityLedger(project.project_id).reviews.at(-1)!
+  writeFileSync(join(project.root_path, 'app.cjs'), 'console.log(Number(process.argv[2]||2)+Number(process.argv[3]||3))')
+  expect(await quality.gate()).toContain('QUALITY_REVIEW_REQUIRED')
+  await review([])
+  expect(await quality.gate()).toBeUndefined()
+  expect(readQualityLedger(project.project_id).reviews.find(r => r.id === previous.id)?.engineering?.status).toBe('concern')
+  writeFileSync(join(project.root_path, 'ARCHITECTURE.md'), 'Changed contract and ownership')
+  expect(await quality.gate()).toContain('QUALITY_REVIEW_REQUIRED')
+}, 120000)
+
+it('records an omitted engineering assessment as unverified without invalidating an otherwise valid C review', async () => {
+  writeFileSync(join(project.root_path,'app.cjs'),'console.log(5)')
+  await review([],undefined,undefined,null)
+  expect(readQualityLedger(project.project_id).reviews.at(-1)?.engineering?.status).toBe('unverified')
+  expect(await quality.gate()).toBeUndefined()
 })

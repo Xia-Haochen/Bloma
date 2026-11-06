@@ -40,6 +40,12 @@ export interface SoftwareVerification { status: 'passed' | 'failed' | 'unverifie
   independent?:Awaited<ReturnType<typeof verifyIndependentDesign>>
   core?: CoreVerificationResult; security?: SecurityScanResult; launch?: LaunchSmokeResult | null; reused?: boolean; report_path?: string; failure?: VerificationFailure }
 interface Receipt { version: 1; state: 'running' | 'complete'; key: string; at: number; result?: SoftwareVerification; result_hash?: string; reusable?: boolean }
+/** Enough executed evidence to review a local candidate, never permission to
+ * claim portable/clean-machine delivery. The distribution gap remains intact. */
+export function locallyVerifiedSoftware(result: SoftwareVerification): boolean {
+  return result.status === 'passed' || result.status === 'environment_blocked' && result.core?.local_status === 'passed'
+    && result.core.distribution?.status === 'environment_blocked' && result.launch?.passed === true
+}
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const poisoned = new Set<string>()
 function receiptPath(projectId: string) {

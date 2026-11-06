@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { createProject, findProject } from '../../../main/project/project-service'
+import { findProject } from '../../../main/project/project-service'
+import { createEngineeringProject as createProject } from '../../fixtures/engineering-project'
 import { parseLeanBrief } from '../../../main/guide/lean-brief'
 import { readPrdBackplane, markPrdUserConfirmed } from '../../../main/project/prd-store'
 import { syncDocuments } from '../../../main/project/document-sync'
@@ -49,7 +50,7 @@ it('runs real Pi tools beyond both old 96-turn and 160-request cutoffs, then ver
   expect(calls).toBe(164)
   expect(findProject(project.project_id).status).toBe('completed')
   expect(readFileSync(join(project.root_path, 'parts/step-163.txt'), 'utf8')).toBe('completed 163')
-  expect(leanBudget(project.project_id, 'desktop-implement').snapshot()).toMatchObject({ requests: 167, limits: { requests: 256, phaseRequests: 256 } })
+  expect(leanBudget(project.project_id, 'desktop-implement').snapshot()).toMatchObject({ requests: calls + 2, limits: { requests: 256, phaseRequests: 256 } })
   expect(deps.complete).toHaveBeenLastCalledWith('s', project.project_id)
 }, 180000)
 it('rejects an exhausted continuation before a model call, preserves its counters and persists the real incomplete reason', async () => {

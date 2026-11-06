@@ -10,7 +10,8 @@ vi.mock('../../../storage/json-store', async original => {
   return { ...actual, writeTextFileAtomic: vi.fn(actual.writeTextFileAtomic) }
 })
 import { writeTextFileAtomic } from '../../../storage/json-store'
-import { createProject, findProject } from '../../../main/project/project-service'
+import { findProject } from '../../../main/project/project-service'
+import { createEngineeringProject as createProject } from '../../fixtures/engineering-project'
 import { parseLeanBrief } from '../../../main/guide/lean-brief'
 import { readPrdBackplane, markPrdUserConfirmed } from '../../../main/project/prd-store'
 import { syncDocuments } from '../../../main/project/document-sync'

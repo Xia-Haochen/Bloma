@@ -31,7 +31,7 @@ it('honors manual-only skills, review isolation, scoped resources, and changed s
 it('loads shipped production skills without installation and respects overrides and review isolation',async()=>{
   expect((await buildActiveSkills(home)).available).toEqual([])
   const bundled=await buildActiveSkills(home,false,true)
-  expect(bundled.available).toEqual(['software-change','software-verification'])
+  expect(bundled.available).toEqual(['software-change','software-engineering','software-verification'])
   expect(bundled.prompt).not.toContain('省略 `ui`')
   const ctx={projectId:'p',sessionId:'s',requestId:'r',signal:new AbortController().signal,state:createToolState()}
   const read=bundled.tools.find(t=>t.name==='read_skill')!
@@ -41,6 +41,17 @@ it('loads shipped production skills without installation and respects overrides 
   expect((await customized.tools.find(t=>t.name==='read_skill')!.execute({name:'software-change'},ctx)).output).toContain('PRIVATE_SKILL_BODY')
   const dir=join(home,'.bloma','skills','software-change');mkdirSync(dir,{recursive:true})
   writeFileSync(join(dir,'SKILL.md'),'---\nname: software-change\ndescription: Manual project override\ndisable-model-invocation: true\n---\nmanual only')
-  expect((await buildActiveSkills(home,false,true)).available).toEqual(['software-verification'])
+  expect((await buildActiveSkills(home,false,true)).available).toEqual(['software-engineering','software-verification'])
   expect((await buildActiveSkills(home,true,true)).tools).toEqual([])
+})
+
+it('activates the engineering workflow for ordinary maker tasks without contaminating independent review', async () => {
+  const maker=await buildActiveSkills(home,false,true,['software-engineering'])
+  const prepared=await maker.prepareTask('做一个小游戏')
+  expect(prepared.activatedSkills).toEqual(['software-engineering'])
+  expect(prepared.content).toContain('产品 Git 由你管理')
+  expect(prepared.content.endsWith('做一个小游戏')).toBe(true)
+  expect((await maker.prepareTask('继续 /skill:software-engineering')).activatedSkills).toEqual(['software-engineering'])
+  const reviewer=await buildActiveSkills(home,true,true,['software-engineering'])
+  expect((await reviewer.prepareTask('独立审阅')).activatedSkills).toEqual([])
 })

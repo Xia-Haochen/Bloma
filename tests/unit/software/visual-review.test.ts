@@ -94,7 +94,7 @@ function register(override?: SDKQuery) {
     if (JSON.stringify(options.messages?.filter(m => m.role === 'system')).includes('独立视觉/交互审阅V')) { yield* (override ?? anthropicMessagesQueryViaProviders)(prompt, options); return }
     const first = !seen.has(options.sessionId); seen.add(options.sessionId)
     yield { type: 'assistant', message: { role: 'assistant', content: first ? [
-      { type: 'tool_use', id: 'read', name: 'read_quality_review', input: {} }, { type: 'tool_use', id: 'source', name: 'read_file', input: { path: 'index.html' } }, { type: 'tool_use', id: 'submit', name: 'submit_quality_findings', input: { findings: [] } }
+      { type: 'tool_use', id: 'read', name: 'read_quality_review', input: {} }, { type: 'tool_use', id: 'source', name: 'read_file', input: { path: 'index.html' } }, { type: 'tool_use', id: 'submit', name: 'submit_quality_findings', input: { findings: [], engineering: {status:'supported',evidence:'Controlled C fixture reads the current implementation.',limitations:'Not a real-model quality claim.'} } }
     ] : [{ type: 'text', text: '受控C已提交，未评定视觉效果。' }] } }
     yield { type: 'result', subtype: 'success', usage: { input_tokens: 10, output_tokens: 10 } }
   }

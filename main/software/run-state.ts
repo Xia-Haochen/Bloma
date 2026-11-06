@@ -45,11 +45,11 @@ export function saveSoftwareRunState(input: { projectId: string; sessionId: stri
 }
 /** Repeated identical host observations without observable improvement stop a
  * single run; changed results get another attempt within the SAME budget. */
-export function recordSoftwareRepair(input: { projectId: string; sessionId: string; runId: string; source?: string; candidateId?: string; error: string; observations?: unknown; category?:string }) {
+export function recordSoftwareRepair(input: { projectId: string; sessionId: string; runId: string; source?: string; candidateId?: string; error: string; observations?: unknown; category?:string; failureFingerprint?: string }) {
   const previous = readSoftwareRunState(input.projectId), operation = findProject(input.projectId).lean_operation_id
   const normalized = redactSoftwareOutput(JSON.stringify({ error: input.error, observations: input.observations ?? null }))
     .split(input.candidateId ?? '[no-candidate]').join('[candidate]')
-  const signature = createHash('sha256').update(normalized).digest('hex')
+  const signature = createHash('sha256').update(input.failureFingerprint ?? normalized).digest('hex')
   const prior = previous && previous.operationId === operation ? previous.failure : undefined
   const repeats = prior?.runId === input.runId && prior.signature === signature ? prior.repeats + 1 : 1
   const state = saveSoftwareRunState({ ...input, status: 'repairing' })
