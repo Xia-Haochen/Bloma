@@ -3,7 +3,7 @@ export type {UserAction} from './user-action'
 import type {SDKQuery,SDKQueryOptions} from '../main/orchestration/stages/orchestration-contracts'
 import type {AgentEvent} from '../shared/types'
 
-export interface UserView {id:string;stateKey?:string;media?:Array<{kind:string;label:string;duration:number|null;currentTime:number;paused:boolean;ended:boolean;muted:boolean;volume:number;readyState:number;error:number|null;progress?:{from:number;to:number;elapsed_ms:number}}>;kind:'preview'|'app';text:string;controls:Array<{ref:number;label:string;tag:string;value?:string;checked?:boolean;disabled?:boolean;options?:string[];actions?:string[];role?:string}>;image?:SDKQueryOptions['images'];audio?:unknown;files?:Array<{id:string;name:string;description:string}>;downloads?:Array<{id:string;name:string;status:string}>}
+export interface UserView {id:string;stateKey?:string;media?:Array<{kind:string;label:string;duration:number|null;currentTime:number;paused:boolean;ended:boolean;muted:boolean;volume:number;readyState:number;error:number|null;progress?:{from:number;to:number;elapsed_ms:number}}>;kind:'preview'|'app';text:string;controls:Array<{ref:number;context?:string;label:string;tag:string;value?:string;checked?:boolean;disabled?:boolean;options?:string[];actions?:string[];role?:string}>;image?:SDKQueryOptions['images'];audio?:unknown;files?:Array<{id:string;name:string;description:string}>;downloads?:Array<{id:string;name:string;status:string}>}
 
 export function publicUserCard(event?:AgentEvent){
   if(!event)return undefined

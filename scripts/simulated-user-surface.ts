@@ -1,4 +1,4 @@
-import {chromium,_electron,type Page,type BrowserContext,type ElectronApplication,type ElementHandle} from 'playwright'
+import {chromium,_electron,type Page,type BrowserContext,type ElectronApplication,type ElementHandle,type Locator} from 'playwright'
 import {existsSync,mkdirSync,writeFileSync,readFileSync} from 'node:fs'
 import {join,basename,extname} from 'node:path'
 import {randomUUID,createHash} from 'node:crypto'
@@ -13,6 +13,7 @@ import {startSoftwareProcess,stopSoftwareProcess} from '../main/software/process
 import {runSecurityScan} from '../main/verification/security-scan'
 import type {UserTestFile} from './user-test-files'
 import type {UserAction,UserView} from './simulated-user'
+import {bindUserControl} from './user-control-binding'
 import {UserInteractionError,validateUserAction} from './user-action'
 
 function describeControl(el:Node){
@@ -25,7 +26,7 @@ function describeControl(el:Node){
   else if(e instanceof HTMLTextAreaElement||e.isContentEditable||e instanceof HTMLInputElement&&!['button','submit','reset','checkbox','radio','range','color','hidden'].includes(e.type))actions.push('fill')
   if(e instanceof HTMLSelectElement)actions.push('select')
   if(e instanceof HTMLCanvasElement)actions.push('draw')
-  return{tag:e.tagName.toLowerCase(),role:e.getAttribute('role')??(e instanceof HTMLInputElement?e.type:undefined),label:label.trim().slice(0,160),actions,
+  return{context:(e.closest('tr,[role="row"],li,[role="listitem"]') as HTMLElement|null)?.innerText.trim().slice(0,500),tag:e.tagName.toLowerCase(),role:e.getAttribute('role')??(e instanceof HTMLInputElement?e.type:undefined),label:label.trim().slice(0,160),actions,
     value:input&&!(e instanceof HTMLInputElement&&e.type==='password')?e.value.slice(0,300):undefined,
     checked:e instanceof HTMLInputElement?e.checked:e.hasAttribute('aria-checked')?e.getAttribute('aria-checked')==='true':undefined,
     disabled:e.matches(':disabled')||e.getAttribute('aria-disabled')==='true',options:e instanceof HTMLSelectElement?[...e.options].map(o=>o.label):undefined}
@@ -39,13 +40,14 @@ function describeMedia(el:Node){
 
 function interactionFailure(error:unknown,effect:'none'|'unknown'):never{
   if(error instanceof UserInteractionError)throw error
-  if(error instanceof Error&&(error.name==='TimeoutError'||/not attached|not connected|not visible|not enabled|not editable|not an? (?:input|select)|Target .*closed|Execution context was destroyed|Frame was detached/i.test(error.message)))
+  if(error instanceof Error&&(error.name==='TimeoutError'||/strict mode violation|not attached|not connected|not visible|not enabled|not editable|not an? (?:input|select)|Target .*closed|Execution context was destroyed|Frame was detached/i.test(error.message)))
     throw new UserInteractionError('surface','刚才的界面操作没有成功确认。请查看新画面再决定下一步；不要假装成功，也不要盲目重复提交。',effect,{cause:error})
   throw error
 }
 /** Public UI only: no selector, eval, file, request or shell tool is exposed. */
 export class UserPage {
   private controls:ElementHandle[]=[]
+  private bindings:Array<{target?:Locator;click?:Locator}>=[]
   private observation=''
   private descriptors:UserView['controls']=[]
   private chooser?:ElementHandle
@@ -60,12 +62,14 @@ export class UserPage {
   }
   async snapshot():Promise<UserView>{
     this.observation=''
-    for(const control of this.controls)await control.dispose();this.controls=[];this.descriptors=[]
+    for(const control of this.controls)await control.dispose();this.controls=[];this.descriptors=[];this.bindings=[]
     const controls:UserView['controls']=[]
     for(const element of await this.page.locator('button,input,textarea,select,canvas,a,summary,[contenteditable="true"],[role="button"],[role="checkbox"],[role="switch"],[role="radio"],[role="tab"],[role="menuitem"],[role="option"],[role="textbox"],[role="combobox"],[role="link"]').elementHandles()){
       if(!await element.isVisible()&&!await element.evaluate(el=>el instanceof HTMLInputElement&&[...el.labels??[]].some(l=>!!(l.offsetWidth||l.offsetHeight||l.getClientRects().length)))||this.controls.length>=100){await element.dispose();continue}
       const item=await element.evaluate(describeControl)
       controls.push({ref:this.controls.length,...item});this.controls.push(element)
+      const binding=await element.evaluate(bindUserControl)
+      this.bindings.push({target:binding.selector?this.page.locator(binding.selector):undefined,click:binding.clickSelector?this.page.locator(binding.clickSelector):undefined})
     }
     if(this.chooser){controls.push({ref:this.controls.length,...await this.chooser.evaluate(describeControl)});this.controls.push(this.chooser);this.chooser=undefined}
     this.descriptors=controls;this.observation=randomUUID();mkdirSync(this.folder,{recursive:true})
@@ -103,12 +107,15 @@ export class UserPage {
     let dispatched=false
     try{
       if(action.action==='wait'){await this.page.waitForTimeout(action.milliseconds!);return}
-      const element=this.controls[action.ref!],descriptor=this.descriptors[action.ref!]
+      const binding=this.bindings[action.ref!],descriptor=this.descriptors[action.ref!]
+      if(binding?.target&&await binding.target.count()!==1)throw new UserInteractionError('action','控件身份已消失或不再唯一，请重新观察。')
+      const original=this.controls[action.ref!],element=binding?.target??original
+      const evaluate=<R>(fn:(node:Node)=>R)=>binding?.target?binding.target.evaluate(fn):original.evaluate(fn)
       if(!element||!descriptor)throw new UserInteractionError('action','当前画面没有这个控件，请选择新画面中的编号。')
       if(!descriptor.actions?.includes(action.action))throw new UserInteractionError('action','该控件不支持这个操作，请按画面中列出的操作使用。')
-      const identity=await element.evaluate(describeControl)
+      const identity=await evaluate(describeControl)
       if(identity.tag!==descriptor.tag||identity.role!==descriptor.role||identity.label!==descriptor.label)throw new UserInteractionError('action','控件含义已变化，请重新观察再选择。')
-      const current=await element.evaluate(el=>({connected:el.isConnected,disabled:(el as Element).matches(':disabled')||(el as Element).getAttribute('aria-disabled')==='true'}))
+      const current=await evaluate(el=>({connected:el.isConnected,disabled:(el as Element).matches(':disabled')||(el as Element).getAttribute('aria-disabled')==='true'}))
       if(!current.connected||current.disabled)throw new UserInteractionError('action','控件已消失或不可用，请查看新画面。')
       if(action.action==='upload'){
         const paths=action.files!.map(id=>{
@@ -120,8 +127,14 @@ export class UserPage {
         dispatched=true;await element.setInputFiles(paths,{timeout:5000})
       }else if(action.action==='click'){
         // Native labelled controls are activated through their visible label, with normal hit testing.
-        const handle=await element.evaluateHandle(el=>el instanceof HTMLInputElement&&['radio','checkbox','file'].includes(el.type)?[...el.labels??[]].find(l=>!!(l.offsetWidth||l.offsetHeight||l.getClientRects().length))??el:el)
+        if(binding?.click){
+          if(await binding.click.count()!==1)throw new UserInteractionError('action','点击目标不再唯一，请重新观察。')
+          dispatched=true;await binding.click.click({timeout:5000})
+        }else{
+        const labelTarget=(el:Node)=>el instanceof HTMLInputElement&&['radio','checkbox','file'].includes(el.type)?[...el.labels??[]].find(l=>!!(l.offsetWidth||l.offsetHeight||l.getClientRects().length))??el:el
+        const handle=binding?.target?await binding.target.evaluateHandle(labelTarget):await original.evaluateHandle(labelTarget)
         try{dispatched=true;await handle.asElement()!.click({timeout:5000})}finally{await handle.dispose()}
+        }
       }else if(action.action==='fill'||action.action==='select'){
         dispatched=true
         if(action.action==='fill')await element.fill(action.value!,{timeout:5000});else await element.selectOption({label:action.value!},{timeout:5000})

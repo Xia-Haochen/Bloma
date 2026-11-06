@@ -202,3 +202,40 @@ it('drives a question, visual confirmation, real UI action and assessment throug
     expect(rows.filter(r=>r.type==='interaction_failed')).toHaveLength(0)
   }finally{await browser.close()}
 })
+
+it('reacquires a uniquely identified action across continuous rerenders and row reordering',async()=>{
+  const browser=await chromium.launch({headless:true,...(existsSync(chromium.executablePath())?{}:{channel:process.platform==='win32'?'msedge':'chrome'})})
+  try{
+    const page=await browser.newPage();await page.setContent(`<main id="rows"></main><output></output><script>
+      let reverse=false;const render=()=>{const ids=reverse?['b','a']:['a','b'];reverse=!reverse;document.querySelector('main').innerHTML=ids.map(id=>'<div role="row" data-item="'+id+'"><span>'+id+'</span><button>完成</button></div>').join('')};render();setInterval(render,80);
+      document.querySelector('main').onclick=e=>{if(e.target.tagName==='BUTTON')document.querySelector('output').textContent+=e.target.closest('[data-item]').dataset.item};
+    </script>`)
+    const surface=new UserPage(page,'app',home,'dynamic'),snapshot=await surface.snapshot()
+    // Snapshot refs follow that observation only; the row may move many times while a model thinks.
+    const target=snapshot.controls.find(c=>c.context?.startsWith('a'))!
+    expect(target).toBeDefined()
+    await page.waitForTimeout(350)
+    await surface.act({action:'click',ref:target.ref,observation:snapshot.id})
+    expect(await page.locator('output').innerText()).toBe('a')
+  }finally{await browser.close()}
+})
+
+it('never substitutes another matching-label row when an observed identity disappears or becomes ambiguous',async()=>{
+  const browser=await chromium.launch({headless:true,...(existsSync(chromium.executablePath())?{}:{channel:process.platform==='win32'?'msedge':'chrome'})})
+  try{
+    const page=await browser.newPage();const html='<button data-target="a" onclick="document.querySelector(\'output\').textContent=\'a\'">平仓</button><button data-target="b" onclick="document.querySelector(\'output\').textContent=\'b\'">平仓</button><output></output>'
+    await page.setContent(html);const surface=new UserPage(page,'app',home,'identity');let snapshot=await surface.snapshot()
+    await page.locator('[data-target=a]').evaluate(el=>el.remove())
+    await expect(surface.act({action:'click',ref:0,observation:snapshot.id})).rejects.toThrow('身份已消失或不再唯一')
+    expect(await page.locator('output').innerText()).toBe('')
+    await page.setContent(html);snapshot=await surface.snapshot()
+    await page.locator('[data-target=a]').evaluate(el=>el.after(el.cloneNode(true)))
+    await expect(surface.act({action:'click',ref:0,observation:snapshot.id})).rejects.toThrow('身份已消失或不再唯一')
+    expect(await page.locator('output').innerText()).toBe('')
+    await page.setContent('<div role="row" data-item="original"><button id="only-action" type="button">操作</button></div><output></output>')
+    snapshot=await surface.snapshot()
+    await page.locator('[role=row]').evaluate(el=>{(el as HTMLElement).dataset.item='replacement'})
+    // A globally unique button ID must not take priority over the observed row identity.
+    await expect(surface.act({action:'click',ref:0,observation:snapshot.id})).rejects.toThrow('身份已消失或不再唯一')
+  }finally{await browser.close()}
+})
