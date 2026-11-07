@@ -1,4 +1,5 @@
 import {withFundedExecutionWindow} from '../main/software/execution-limits'
+import {createTrialWallet} from './trial-wallet'
 import {readPendingDecision} from '../main/guide/pending-decision'
 import {loadUserTestFiles} from './user-test-files'
 import { trialOutputCap } from './trial-output-cap'
@@ -138,6 +139,9 @@ export async function main() {
     return []
   }
   const control = createRequestBudget(binding.env, { requests: requestLimit, outputTokens: requestMaxTokens, rmb: fundedAllowance })
+  const wallet=createTrialWallet({startBalance:Number(manifest.balance_before),
+    read:async()=> (await get('user/balance')).balance_infos?.find((r:any)=>r.currency==='CNY')?.total_balance,
+    record:value=>appendFileSync(join(root,'wallet-observations.jsonl'),safe(value)+'\n')})
   let latestStage:string|undefined
   const trace=createTrialRequestRecorder(join(root,'trace'),safe,session=>{
     try{const p=findProject(project.project_id);return{project_id:p.project_id,status:p.status,current_stage:latestStage??p.current_stage,persisted_stage:p.current_stage,desktop_phase:p.desktop_phase,source:softwareVerificationFingerprint(p.root_path),review_kind:readQualityLedger(p.project_id).reviews.find(r=>r.child===session)?.kind}}catch{return{phase}}
@@ -188,7 +192,9 @@ export async function main() {
     persistAssistant: (text: string) => appendSessionMessage(sid, { role: 'assistant', origin: 'agent', content: [{ type: 'text', text }], timestamp: Date.now() }) }
   await withFundedExecutionWindow(()=>({remainingRequests:Math.max(0,requestLimit-control.snapshot().physical_requests),remainingRmb:Math.min(fundedAllowance-(control.snapshot().upper_rmb??0),money()[0]?.remaining_rmb??fundedAllowance),outputRmbPerMillion:policyRate.output_rmb_per_million,deadlineAt}),async()=>{
   const releaseAttempt=continuation?claimSimulatedRun(root,{at:new Date().toISOString(),runtimeHash,previous_report:continuation.session_id},()=>assertSimulatedContinuation(root,thinking,runtimeTree)):undefined
+  const walletTimer=setInterval(()=>{void wallet.sample()},30000)
   try {
+    await wallet.sample()
     save(true)
     if(continuation){
       const userSid=`simulated-user-${randomUUID()}`;recordSessionActivity(userSid,project.project_id)
@@ -266,12 +272,15 @@ export async function main() {
     report.status=observationOutcome(report.turn,final,report.release)
   } catch (error) { report.status = 'failed'; report.error = String(error) }
   finally {
+    clearInterval(walletTimer)
     trace.finish()
     const final=findProject(project.project_id)
     report.project_status=final.status;report.current_stage=final.current_stage;report.desktop_phase=final.desktop_phase
     report.release=(await activeSoftwareRelease(project.project_id))?.id
     report.finished_at = new Date().toISOString()
-    report.balance_after = (await get('user/balance').catch(() => undefined))?.balance_infos?.find((r: any) => r.currency === 'CNY')?.total_balance
+    await wallet.sample()
+    report.wallet=wallet.snapshot()
+    report.balance_after=report.wallet?.available?report.wallet.balance_rmb.toFixed(2):undefined
     report.old_accounting_unchanged = manifest.old_accounting.every((r: any) => hash(readFileSync(r.path)) === r.sha256)
     save(true);releaseAttempt?.(); console.log(safe({ status: report.status, money: money(), report: reportPath }))
   }

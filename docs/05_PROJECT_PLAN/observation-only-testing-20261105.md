@@ -1,14 +1,18 @@
 # Agent模拟用户与制作效果测试
 
+当前前置恢复：草图决定由宿主标记 observation_required，未就绪时可执行恢复动作，真实视觉确认仍需当前画面。software-v1 草图使用已有宿主执行与取消窗口，不叠加固定四分钟阶段时限。运行中每30秒读取一次钱包余额并记录时间；余额变化、已报告用量和未知预留分别呈现，不伪造单请求费用、不清未知记录。最终余额读取失败不把旧快照当作结束时余额。
+
+本批恢复验证：84项定向回归通过；完整 `check:offline` 的类型、文档、构建与19文件171项回归通过。额外核对跨进程恢复的无图调整卡；未修改产品或冻结断言。日志：`run-artifacts/preparation-recovery-final-20261107.log`、`preparation-recovery-offline-20261107.log`、`preparation-decision-final-20261107.log`。钱包展示不再把责任预留称作实际消费。
+
 ## 当前方法：允许正常用户交互，禁止外部工程代修
 
-制作中断续跑：已结束的试验、全部结算的旧请求及当前 active/software-v1 制作状态，可在 `prepare-user` 时显式设置 `BLOMA_OBSERVATION_RESUME_PRODUCTION=1`，配合新的 `BLOMA_OBSERVATION_RETEST` 名称和既有用户续跑授权。驱动冻结项目与账本身份，记录一次普通“继续完成原任务”消息，通过原制作入口恢复，再在真实确认卡或已发布产物边界进入用户代理。不清零用量，不改产品或冻结预期，不自动循环续跑，也不恢复用户明确停止、归档或仍在运行的任务。原失败段保留，不能称为原冻结方法一次成功。
+制作中断续跑：已结束的试验、没有活跃预留请求的旧账及当前 active/software-v1 制作状态，可在 `prepare-user` 时显式设置 `BLOMA_OBSERVATION_RESUME_PRODUCTION=1`，配合新的 `BLOMA_OBSERVATION_RETEST` 名称和既有用户续跑授权。驱动冻结项目与账本身份，记录一次普通“继续完成原任务”消息，通过原制作入口恢复，再在真实确认卡或已发布产物边界进入用户代理。不清零用量，不改产品或冻结预期，不自动循环续跑，也不恢复用户明确停止、归档或仍在运行的任务。原失败段保留，不能称为原冻结方法一次成功。
 
 用户已明确，阶段确认和基于实际效果的意见属于测试需要；理想流程由Agent模拟真实用户测试制作效果。当前采用“模拟用户交互、无外部工程协助”的口径，不再把需求确认作为整个试验不可逾越的终点。原只观察段的结果和费用保持不变。
 
 新增 `prepare-user` 与 `simulate` 两个阶段，沿用 `software-observation-trial.mjs`，不恢复已删除的旧驾驶器。先完成原始需求的run段，停在awaiting_user；prepare-user读取这一边界及原manifest/策略/项目哈希，独立生成user-runtime.json，记录新的模拟用户授权和方法变化，不覆盖原运行包、报告或账本。simulate在同一项目、会话、费用策略和epoch中继续，独占user-run-claimed.json，不能重复启动。制作方和用户代理共用金额保护及累计请求上限；用户代理费用以simulated-user角色单列，原费用不清零。
 
-prepare-user需要 `BLOMA_SIMULATED_USER_AUTHORIZATION_TEXT`，内容来自用户对模拟用户测试的明确指令；其余ROOT/CASES/TASK/THINKING仍与原窗口一致。两段运行分别记录平台/驾驶器版本，方法改变后的结果不能伪装成原方法的零交互续跑。初次从awaiting_user原始段接续；显式设置BLOMA_OBSERVATION_RETEST及用户授权后，可从已经结束的模拟用户试验继续，但项目必须处于用户决策边界或已有完整活动发布，且账本全部结算。运行中试验不接管。旧错误字符串白名单已删除，继续资格由实际状态决定。
+prepare-user需要 `BLOMA_SIMULATED_USER_AUTHORIZATION_TEXT`，内容来自用户对模拟用户测试的明确指令；其余ROOT/CASES/TASK/THINKING仍与原窗口一致。两段运行分别记录平台/驾驶器版本，方法改变后的结果不能伪装成原方法的零交互续跑。初次从awaiting_user原始段接续；显式设置BLOMA_OBSERVATION_RETEST及用户授权后，可从已经结束的模拟用户试验继续，但项目必须处于用户决策边界或已有完整活动发布，且账本没有活跃 reserved 请求。已结束但 usage 未知的 unknown 请求保留原预留并进入同一金额准入计算，不因存在 unknown 禁止整轮继续。运行中试验不接管。旧错误字符串白名单已删除，继续资格由实际状态决定。
 
 用户代理只看到原始愿望、公开确认卡、本段用户动作与结果、真实截图、可见文字与控件状态。内部选项ID由宿主映射；只暴露perform_user_action这一结构化用户意图工具，不提供源码、测试、日志、账本、任意文件/命令/网络请求或JavaScript执行工具。页面内容视为不可信资料，不作为系统指令。
 
@@ -135,7 +139,7 @@ FX确认反例后，userActionContract根据当前问题卡片/应用状态同�
 
 此版本将首次需要用户决定作为本段终点，返回原始decision事件，既不代答也不提供续跑命令。尚未实现携带原预算、冻结身份和用户原文的人工回应续段；不能切换到未绑定本轮金额保护的普通实例继续，再算作同一次测试。首次范围确认可能就是新样本终点，不承诺一条命令跨过全部确认完成生产。
 
-配置使用全新的 `BLOMA_OBSERVATION_*` 前缀：ROOT（隔离目录）、CASES（仅一个任务，name/goal必需；兼容旧change字段但不发送）、TASK（任务键）、AUTHORIZED_CAP、AUTHORIZATION_TEXT、THINKING（low/off，冻结后不可改）、QUOTE_FILE。模型固定为既有公开DeepSeek Flash渠道；不继承旧窗口或旧续跑反馈。超时固定45分钟，产品自身的预算与执行守卫保持生效。
+配置使用全新的 `BLOMA_OBSERVATION_*` 前缀：ROOT（隔离目录）、CASES（仅一个任务，name/goal必需；兼容旧change字段但不发送）、TASK（任务键）、AUTHORIZED_CAP、AUTHORIZATION_TEXT、THINKING（off/low/high/max，冻结后不可改）、QUOTE_FILE。模型固定为既有公开DeepSeek Flash渠道；不继承旧窗口或旧续跑反馈。超时固定45分钟，产品自身的预算与执行守卫保持生效。
 
 QUOTE_FILE为人工核对后保存的JSON，包含host、model、context_tokens、input_rmb_per_million、output_rmb_per_million、cache_rmb_per_million、source_url、source_path、source_sha256、reviewed_at。来源为DeepSeek官方价格页，证据字节须匹配，核对时间不得超过24小时；费率必须按对应模型逐项核对，程序校验格式/身份/时效不等于自动认证报价正确。预检保留价格原文与哈希，不再依赖整页包含几个数字来证明对应关系。
 

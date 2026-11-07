@@ -7,7 +7,9 @@ const hash=value=>createHash('sha256').update(value).digest('hex')
 export function continuationBoundary(root,report,{resumeProduction=false}={}){
   if(!report.finished_at||!Number.isFinite(Date.parse(report.finished_at))||!report.status||report.status==='running')throw Error('RETEST_REQUIRES_FINISHED_ATTEMPT')
   const ledger=readFileSync(join(root,'monetary-policy.json.state.json'))
-  if(JSON.parse(ledger).entries.some(row=>row.status!=='reported'))throw Error('RETEST_UNSETTLED_REQUEST')
+  // Unknown usage is a completed request with retained liability, not an active
+  // invocation. The unchanged monetary policy still charges its reservation.
+  if(JSON.parse(ledger).entries.some(row=>!['reported','unknown','reconciled_unauthenticated','reconciled_pre_execution'].includes(row.status)))throw Error('RETEST_UNSETTLED_REQUEST')
   const project=JSON.parse(readFileSync(join(root,'home/projects.json'),'utf8')).projects.find(p=>p.project_id===report.project_id)
   const awaiting=project&&['blocked_for_user_decision','clarifying'].includes(project.current_stage)
   const delivered=project?.status==='completed'&&project.current_stage==='completed'&&project.desktop_phase==='delivered'&&typeof project.software_release_id==='string'&&!!project.software_release_id

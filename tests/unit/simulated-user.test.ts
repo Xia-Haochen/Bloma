@@ -24,6 +24,16 @@ it('projects only public text and choices, binds visual feedback and refuses inv
   expect(()=>userReply({action:'reply',choice:0,text:'样式可以'},card('ux_confirm'),undefined)).toThrow('观察')
   expect(()=>userReply({action:'reply',text:'保存没反应',observation:'old'},undefined,{id:'new',kind:'app',text:'',controls:[]})).toThrow('观察')
 })
+it('executes a host recovery decision without a missing image while retaining visual confirmation checks',async()=>{
+  const recovery=card('ux_confirm');recovery.payload.observation_required=false
+  let submitted=0
+  const result=await simulateUserSession({goal:'继续原需求',signal:new AbortController().signal,
+    turn:async reply=>{if(reply){submitted++;expect(reply.selected).toBe('host-only-id');return{failed:'test boundary'}}return{card:recovery}},
+    view:async()=>undefined,decide:async()=>({action:'reply',choice:0,text:'重新生成'}),act:async()=>{},record:()=>{}})
+  expect(submitted).toBe(1);expect(result.status).toBe('product_stopped')
+  recovery.payload.observation_required=true
+  expect(()=>userReply({action:'reply',choice:0,text:'确认'},recovery,undefined)).toThrow('观察')
+})
 it('uses a separate UI-intent-only model request with only public observations',async()=>{
   const query:SDKQuery=async function*(prompt,options){
     expect(options.maxTokens).toBe(262144);expect(prompt).not.toContain('\"id\":\"v\"');expect(options.tools?.map(t=>t.name)).toEqual(['perform_user_action']);expect(options.images).toEqual([{imageId:'image',media_type:'image/png'}])
@@ -139,6 +149,11 @@ it('resumes a finished published-product trial by frozen identity, not an error 
     expect(()=>continuationBoundary(home,{...report,status:'running'})).toThrow('FINISHED')
     writeFileSync(join(home,'monetary-policy.json.state.json'),JSON.stringify({entries:[{status:'reserved'}]}))
     expect(()=>continuationBoundary(home,report)).toThrow('UNSETTLED')
+    const unknown=JSON.stringify({entries:[{status:'unknown',reserved_micro_rmb:4151688,charged_micro_rmb:4151688}]})
+    writeFileSync(join(home,'monetary-policy.json.state.json'),unknown)
+    expect(continuationBoundary(home,report).project_id).toBe(project.project_id)
+    expect(readFileSync(join(home,'monetary-policy.json.state.json'),'utf8')).toBe(unknown)
+
   }finally{if(previous===undefined)delete process.env.BLOMA_OBSERVATION_RETEST;else process.env.BLOMA_OBSERVATION_RETEST=previous}
 })
 

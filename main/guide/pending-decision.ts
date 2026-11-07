@@ -34,7 +34,8 @@ export function readPendingDecision(projectId: string, sessionId: string):{proje
       const actual = createHash('sha256').update(readFileSync(join(project.root_path, '00_UX/ux-sketch.html'))).digest('hex')
       if (actual !== pending.sketchHash) throw Error('UX_CONFIRMATION_SKETCH_CHANGED')
     }
-    return { project_id: projectId, payload: ux.state==='adjust'?{kind:'ux_feedback',title:'请说明要调整的地方',summary:'此前已选择调整草图，请说明具体意见；当前草图与原需求已保留。',questions:[]}:uxDecisionPayload(pending),
-      ...(pending.sketchHash && !pending.generationFailed ? { preview_url: `bloma-file://${projectId}/00_UX/ux-sketch.html` } : {}) }
+    const preview_url=pending.sketchHash&&!pending.generationFailed?`bloma-file://${projectId}/00_UX/ux-sketch.html`:undefined
+    return { project_id: projectId, payload: ux.state==='adjust'?{kind:'ux_feedback',observation_required:Boolean(preview_url),title:'请说明要调整的地方',summary:'此前已选择调整草图，请说明具体意见；原需求和已有意见已保留。',questions:[]}:uxDecisionPayload(pending),
+      ...(preview_url?{preview_url}:{}) }
   }
 }

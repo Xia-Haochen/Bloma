@@ -37,7 +37,9 @@ export function userReply(action:UserAction,card:AgentEvent|undefined,view:UserV
   if(action.action!=='reply'||!action.text?.trim())throw new UserInteractionError('action','请填写要回复的内容。')
   const questions=card&&Array.isArray(card.payload.questions)?card.payload.questions as Array<{id:string}>:[]
   if(questions.length&&action.choice!==undefined&&(!Number.isInteger(action.choice)||!questions[action.choice]))throw new UserInteractionError('action','请选择当前卡片显示的选项。')
-  const visual=['ux_confirm','ux_feedback'].includes(String(card?.payload.kind))||!card
+  // The host owns whether a decision evaluates a visible artifact. Recovery
+  // without an artifact must not require evidence that cannot exist.
+  const visual=card?.payload.observation_required ?? (['ux_confirm','ux_feedback'].includes(String(card?.payload.kind))||!card)
   if(visual&&(!view||action.observation!==view.id))throw new UserInteractionError('action','请先观察当前界面再给出反馈。')
   if(view&&action.observation!==undefined&&action.observation!==view.id)throw new UserInteractionError('action','画面已变化，请根据新画面重新选择操作。')
   return {text:action.text,selected:questions.length&&action.choice!==undefined?questions[action.choice].id:card?.payload.kind==='ux_confirm'?'ux_adjust':undefined}

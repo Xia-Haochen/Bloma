@@ -237,6 +237,9 @@ export async function generateUxSketch(options: UxSketchOptions): Promise<UxSket
   const referenceText = materials ? renderMaterialContext(materials, options.session_id, true) : ''
   const prompt = buildSketchPrompt(options) + (options.backplane?.lean_brief ? '\n输出约束：直接输出完整静态HTML，不加解释或代码围栏；只精绘主工作区，不重复展开全部表单和历史。' : '') + (referenceText ? '\n用户设计材料（用途以确认策略为准）：' + referenceText : '') + (options.backplane?.lean_brief ? '\n项目视觉策略：' + JSON.stringify(productDesignPolicy(options.backplane)) : '')
   const lean = Boolean(options.backplane?.lean_brief)
+  // Software preparation shares the host execution lease and caller's cancel
+  // signal. Do not cut a funded, still-streaming generation at a stage timer.
+  const timeoutMs = lean && options.signal ? 0 : UX_SKETCH_TIMEOUT_MS
   const structured = Boolean(options.backplane && !lean)
   const resolvedPrompt = loadPromptWithSource('sketch-system', lean ? LEAN_SKETCH_PROMPT : UX_SKETCH_SYSTEM_PROMPT)
   const systemPrompt = resolvedPrompt.content +
@@ -252,7 +255,7 @@ export async function generateUxSketch(options: UxSketchOptions): Promise<UxSket
     user_prompt_sha256: hash(prompt), requested_model: options.env.ANTHROPIC_MODEL,
     requested_channel_id: routing?.channelId, requested_category: routing?.category,
     temperature: categoryTemperature('sketch'), max_tokens: options.maxTokens,
-    max_attempts: options.attempts ?? UX_SKETCH_ATTEMPTS, timeout_ms: UX_SKETCH_TIMEOUT_MS }
+    max_attempts: options.attempts ?? UX_SKETCH_ATTEMPTS, timeout_ms: timeoutMs, deadline_owner: timeoutMs ? 'stage' : 'caller' }
   const diagnostic = (event: Record<string, unknown>, candidate?: string): void => {
     try {
       const project = findProject(options.project_id)
@@ -286,7 +289,7 @@ export async function generateUxSketch(options: UxSketchOptions): Promise<UxSket
         : '没有可复用的安全HTML，必须同时输出完整html。'}原任务：\n${prompt}`
       : `${UX_SKETCH_RETRY_FEEDBACK}${lean ? `\n上次问题：${lastIssues.join('；')}。${LEAN_SKETCH_SIZE_GUIDANCE}请重新生成更精炼的完整文档，不续写残片。` : ''}\n原任务：\n${prompt}` },
     signal: options.signal,
-    timeoutMs: UX_SKETCH_TIMEOUT_MS,
+    timeoutMs,
     onAttemptFailure: failure => {
       const kind = failure.termination ?? failure.kind
       if (failure.termination === 'output_limit') lastIssues = ['OUTPUT_LIMIT: 服务端报告本轮输出耗尽；保持输出额度，减少重复样例、装饰路径和非当前表单，重新生成完整主工作区', ...lastIssues]

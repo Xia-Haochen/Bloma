@@ -295,6 +295,7 @@ export function uxDecisionPayload(pending: PendingUxConfirm): Record<string, unk
   const ready = confirmableSketch(pending)
   return {
     kind: 'ux_confirm',
+    observation_required: ready,
     title: !ready ? '草图尚未就绪，请选择下一步' : pending.unappliedFeedback ? '当前设计仍有未处理意见，请选择下一步' : '请确认界面草图',
     summary: ready ? pending.sketchSummary ?? '' : '已保留确认的需求和已有意见，尚未开始实现。',
     questions: [
