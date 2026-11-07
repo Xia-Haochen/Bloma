@@ -326,6 +326,12 @@ async function runChildLoop(opts: {
   const runAbort = record.abort
   const childRequestId = randomUUID()
   const maxTurns = resolveDelegationTurns(parentCtx, role)
+  let completedTurns=0
+  const liveContext=parentCtx.liveContext?()=>{
+    const facts=parentCtx.liveContext!()
+    return{...(facts&&typeof facts==='object'&&!Array.isArray(facts)?facts:{context:facts}),
+      delegation:{turn_limit:maxTurns,remaining_turns:Math.max(0,maxTurns-completedTurns)}}
+  }:undefined
   // P1-06 收尾：子运行上下文（worktree 隔离）；provider 未注册/开关 off → 零变化
   const runContext = acquireChildRunContext({ projectId: parent.projectId, delegationId: record.delegationId, childSessionId: record.childSessionId, role })
   const isolationNote = runContext?.rootOverride
@@ -350,7 +356,7 @@ async function runChildLoop(opts: {
     ...(role === 'implement' && parentCtx.executionScope ? { workMode: 'implementation' as const } : {}),
     executionScope: parentCtx.executionScope,
 
-    liveContext: parentCtx.liveContext,
+    liveContext,
     afterTools: parentCtx.childAfterTools?.(record.childSessionId),
     runtimeScope: parentCtx.childRuntimeScope?.(record.childSessionId) ?? parentCtx.runtimeScope,
     onRuntimeObservation: parentCtx.onRuntimeObservation,
@@ -363,9 +369,12 @@ async function runChildLoop(opts: {
     publish: (type, payload) => {
       if (CHILD_LOOP_ALLOWED_EVENT_TYPES.has(type)) parentCtx.publish(type, payload)
     },
-    onTurn: parentCtx.onChildTurn
-      ? (info) => parentCtx.onChildTurn!(info, { sessionId: record.childSessionId, requestId: childRequestId, role })
-      : undefined,
+    onTurn:info=>{completedTurns=info.turn;parentCtx.onChildTurn?.(info,{sessionId:record.childSessionId,requestId:childRequestId,role})},
+    onAssistantMessage:parentCtx.onChildMessage?message=>{
+      const limit=parentCtx.delegationSummaryLimit??3000
+      parentCtx.onChildMessage!({...message,text:message.text.slice(0,limit),truncated:message.text.length>limit},
+        {sessionId:record.childSessionId,requestId:childRequestId,role})
+    }:undefined,
     onCompaction: parentCtx.onChildCompaction
       ? (info) => parentCtx.onChildCompaction!(info, { sessionId: record.childSessionId, requestId: childRequestId, role })
       : undefined,

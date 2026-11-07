@@ -79,3 +79,16 @@ it('views its own probe images without acquiring access to product image paths',
   expect((await image.execute({path:join(project.root_path,'outside.png')},ctx())).isError).toBe(true)
   lease.release()
 })
+
+it('gives the peer the shared environment inspector and puts current host facts before the full requirement material',async()=>{
+  const work=createEngineeringWorkspaces(project.project_id,project.root_path,'parent'),lease=work.prepare('child',args)
+  const content=readFileSync(join(work.root('child'),'context.json'),'utf8')
+  expect(content.indexOf('"facts"')).toBeLessThan(content.indexOf('"requirements"'))
+  expect(work.describe('child')).toContain('重要发现先用简短自然语言交接')
+  const inspect=work.tools('child').find(t=>t.name==='inspect_software_environment')!
+  const result=JSON.parse((await inspect.execute({},ctx())).output)
+  expect(result.native_js_observers).toEqual(['browser','electron'])
+  expect(result.declared_entry).toMatchObject({declared:false})
+  expect(lease.facts()).toMatchObject({input_intact:true})
+  lease.release()
+},30000)

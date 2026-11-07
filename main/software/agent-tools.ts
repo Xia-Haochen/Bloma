@@ -1,3 +1,4 @@
+import {buildSoftwareEnvironmentTool} from './environment-tool'
 import { buildComponentUsageTool } from './component-usage'
 import { buildDesignAssetTool } from './design-asset-delivery'
 import { verifyProjectStage } from './project-stages'
@@ -8,14 +9,11 @@ import type { AgentLoopTool } from '../agent/loop/agent-loop'
 import type { DelegationRunRole } from '../../shared/delegation-run-context'
 import { buildProductionContextTool } from '../desktop/production-context'
 import { buildSoftwareExecutionTools } from './execution-tools'
-import { executeSoftwareCommand } from './command-runtime'
 import { findProject } from '../project/project-service'
 import type { createSoftwareCollaborationPolicy } from './collaboration-policy'
 import { buildSoftwareImageTool } from './image-tool'
 import { buildSoftwareInspectTool } from './inspect-tool'
-import { prepareSoftwareRuntime, projectRuntimeRequest } from './runtime-manager'
-import { runtimeBindingVersion } from './runtime-bindings'
-import { inspectProjectDependencies } from './dependency-state'
+import { prepareSoftwareRuntime } from './runtime-manager'
 import { buildRepositoryContextTool } from './repository-context'
 import { buildSoftwareVerifyTool } from './verification-tool'
 import { buildImprovementSuggestionTool } from './improvement-suggestions'
@@ -33,7 +31,7 @@ export function buildSoftwareAgentTools(projectId: string, role: DelegationRunRo
   const files = buildAgentTools({ projectId, role: readonly ? 'research' : 'implement', realFullstackVariant: true, software: true,
     assertFileWrite: policy.assertFileWrite }).filter(tool => FILE_TOOLS.has(tool.name))
   const tools = [...files, buildProductionContextTool(projectId), buildSoftwareImageTool(projectId), buildRepositoryContextTool(projectId),...buildCapabilityTools(projectId,policy,role==='parent')]
-  if (role === 'parent') tools.push(buildComponentUsageTool(projectId, policy), buildDesignAssetTool(projectId, policy),...buildSoftwareExecutionTools(projectId, policy.assertCommand, previewChanged), environmentTool(projectId), prepareEnvironmentTool(projectId, policy), buildSoftwareInspectTool(projectId, policy, previewChanged), buildSoftwareVerifyTool(projectId, policy, previewChanged), buildImprovementSuggestionTool(projectId,suggestionsChanged,policy.assertCommand))
+  if (role === 'parent') tools.push(buildComponentUsageTool(projectId, policy), buildDesignAssetTool(projectId, policy),...buildSoftwareExecutionTools(projectId, policy.assertCommand, previewChanged), buildSoftwareEnvironmentTool(projectId), prepareEnvironmentTool(projectId, policy), buildSoftwareInspectTool(projectId, policy, previewChanged), buildSoftwareVerifyTool(projectId, policy, previewChanged), buildImprovementSuggestionTool(projectId,suggestionsChanged,policy.assertCommand))
   let longterm=false
   try{longterm=isLongtermSoftware(projectId)}catch{/* isolated schema clients may build tools before storing a project */}
   if(role==='parent'&&longterm)tools.push({name:'record_longterm_decision',description:'保存当前长期里程碑的重要接口/数据格式/资源/迁移决定和理由。替代旧决定时传supersedes及project-state的decision_revision作为expected_revision；feature_ids引用确认需求。读取project-state可分页查有效决定和历史。不改范围、不验证、不暂停；不要保存密钥或把待办当成本轮授权。',
@@ -69,32 +67,6 @@ function prepareEnvironmentTool(projectId: string, policy: Policy): AgentLoopToo
     } }
 }
 
-function environmentTool(projectId: string): AgentLoopTool {
-  let known: unknown
-  let version: string | undefined
-  return { name: 'inspect_software_environment', description: '实际检查Node/npm/Python版本及当前可用的交付观察器。默认复用本轮结果；refresh仅在工具环境改变后使用。npm CLI随Bloma提供；实际运行时缺失时如实返回，不让用户选择工程技术细节。',
-    input_schema: { type: 'object', properties: { refresh: { type: 'boolean' } } }, execute: async (input, ctx) => {
-      if (ctx.projectId !== projectId) return { output: 'ENVIRONMENT_PROJECT_MISMATCH', isError: true }
-      const root = findProject(projectId).root_path, constraints = { node: projectRuntimeRequest(root, 'node'), python: projectRuntimeRequest(root, 'python') }
-      const current = JSON.stringify([constraints, runtimeBindingVersion(projectId)])
-      if (!known || input.refresh === true || version !== current) {
-        const probes = await Promise.allSettled(['node', 'npm', 'python'].map(executable => executeSoftwareCommand({ root, projectId,
-          command: [executable, '--version'], timeoutMs: 10000, signal: ctx.signal })))
-        known = { project_constraints: constraints,
-          preparation: '需要缺失/不同版本时使用prepare_software_environment；它准备本项目运行时，不改系统环境。已有版本可用时不必下载。', tools: Object.fromEntries(probes.map((result, i) => [['node', 'npm', 'python'][i], result.status === 'fulfilled'
-          ? { available: result.value.code === 0, output: result.value.stdout.trim(), error: result.value.stderr.trim() }
-          : { available: false, error: String(result.reason) }])),
-          gui_observers: ['Electron正常入口+持续DOM操作+重开', '本机浏览器服务+持续DOM操作+重开', 'Python/pywebview仅正式register_gui_check/verify_app检查，inspect_app不支持'],
-          development_state: 'inspect_app暂停后保留本任务开发数据和浏览器存储，下一次操作自动重开；正式验收另用全新隔离数据。',
-          cli_observer: '正常入口的固定参数/实际stdout/退出码；Node/Python等不要求Python包装器',
-          execution_boundary: '受管理的项目执行环境，不是OS沙箱；上游渠道密钥不传入命令环境' }
-        version = current
-      }
-      // Dependency files change during implementation; do not cache their state
-      // alongside the relatively stable runtime version probes.
-      return { output: JSON.stringify({ ...known as object, dependencies: inspectProjectDependencies(root) }) }
-    } }
-}
 
 export const SOFTWARE_ENGINEERING_INSTRUCTIONS = [
   '优先按需读取components复用成熟模块；AI服务用prepare_software_capability(ai)与ai-service说明，只填公开协议/地址/模型，真实Key由产品设置或自己的密钥存储注入，不写进模板或借平台Key。排障先读diagnostics汇总当前现场，未决命令接续读取；修改前可inspect_repository({mode:"impact",paths:[相关文件]})定位开发期测试候选，正式交付门仍完整执行。',

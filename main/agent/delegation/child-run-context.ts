@@ -86,8 +86,8 @@ export function summarizeChildResult(result: AgentLoopResult, limit: number): st
 // =========================================================================
 
 const ROLE_INSTRUCTIONS: Record<DelegationRunRole, string> = {
-  explore: '职责：探索代码库——梳理文件结构、定位相关实现、报告事实性发现。只读操作，不做修改。',
-  research: '职责：调研——阅读相关代码与文档，形成结论或对比方案。只读操作，不做修改。',
+  explore: '职责：探索代码库——定位相关实现、报告事实性发现。对目标工程只读；宿主提供独立研究工作区时，可在授权范围保存笔记和探针。',
+  research: '职责：调研——针对当前问题形成有依据的判断或对比。对目标工程只读；宿主提供独立研究工作区时，可在授权范围保存笔记和探针。',
   implement: '职责：实现——编写/修改项目文件完成子任务。遵循平台工具护栏（路径沙箱、语法校验、可写范围）。',
   review: '职责：审查——阅读代码指出问题（正确性/可维护性/安全隐患），给出文件定位与建议，不直接修改。',
   custom: '职责：按主 agent 在任务里给出的具体指令工作。',
@@ -101,7 +101,7 @@ export function buildChildSystemPrompt(parentSystem: string, role: DelegationRun
 你是主 agent 委派的一名协作子 agent（role=${role}）。
 ${ROLE_INSTRUCTIONS[role]}
 边界：
-- 只负责完成本任务；完成后用纯文本输出结果摘要，不要输出「我将…」式的过程承诺。
+- 围绕本任务工作，重要阶段判断可以先简述再继续；结束时交接结果和未完成项，不输出「我将…」式的过程承诺。
 - 你不能再委派其他子 agent（深度限制）；需要额外信息时用现有工具自行获取。
 - 不向用户提问；确实受阻时，如实说明阻塞原因并输出当前进展。
 </delegation_context>`

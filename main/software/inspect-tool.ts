@@ -18,7 +18,7 @@ import { GUI_FIXTURE_SCHEMA, materializeGuiFixtures, sealGuiFixtures } from '../
 import { guiVerificationReadiness } from './verification-readiness'
 
 export function buildSoftwareInspectTool(projectId: string, policy: ReturnType<typeof createSoftwareCollaborationPolicy>, previewChanged?: (url?: string) => void): AgentLoopTool {
-  return { name: 'inspect_app', description: '实际操作Electron/浏览器程序。script填写项目内JS模块路径，export default async({page,context,expect,assert,dataDir})使用标准Playwright；脚本在不注入平台密钥的独立工程进程执行，支持交互、等待、上传下载及断言。steps兼容旧动作，与script二选一。默认复用实例并自动重载变化；read显示源码检查点、current_source与差异；restore用checkpoint_id/expected_source/paths还原所选文件并备份旧内容。mode=once仅旧steps单次现场。调试和恢复均不等于验收，通过规则后verify_app。',
+  return { name: 'inspect_app', description: '实际操作Electron/浏览器程序。临时观察优先用script_source正文，宿主保存到隔离诊断目录，不改候选源码；已有工程脚本用script路径。export default async({page,context,expect,assert,dataDir})使用标准Playwright；脚本在不注入平台密钥的独立工程进程执行，支持交互、等待、上传下载及断言。steps兼容旧动作，与script二选一。默认复用实例并自动重载变化；read显示源码检查点、current_source与差异；restore用checkpoint_id/expected_source/paths还原所选文件并备份旧内容。mode=once仅旧steps单次现场。调试和恢复均不等于验收，通过规则后verify_app。',
     input_schema: { type: 'object', properties: { mode: { type: 'string', enum: ['once', 'open', 'act', 'read', 'reload', 'close', 'restore'] },
       debug_session_id: { type: 'string' }, process_id: { type: 'string' }, since_seq: { type: 'integer', minimum: 0 },
       script: { type: 'string', minLength: 1, maxLength: 512 }, script_source: {type:'string',minLength:1,maxLength:65536,description:'临时观察脚本正文，export default async({page,expect,assert,dataDir})。宿主保存到隔离诊断目录，不改候选源码，不作为正式验收。与script/steps互斥。'}, timeout_ms: { type: 'integer', minimum: 100, maximum: 300000 },

@@ -56,8 +56,9 @@ export type LaunchDeclarationParse =
   | { ok: false; error: string }
 
 /** This is adapter compatibility, not evidence that an application runs. */
+export const NATIVE_GUI_UI = ['browser','electron'] as const
 export function supportsNativeGuiAcceptance(launch: LaunchDeclaration) {
-  return launch.schema_version===2 && (launch.ui==='browser'||launch.ui==='electron')
+  return launch.schema_version===2 && NATIVE_GUI_UI.some(ui=>ui===launch.ui)
 }
 export function declaredEntryFacts(root:string) {
   const declared=readLaunchDeclaration(root)

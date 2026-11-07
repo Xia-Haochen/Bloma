@@ -40,6 +40,8 @@ export interface DelegationParentContext {
   publish: (type: AgentEvent['type'], payload: Record<string, unknown>) => void
   autoAnswer?: string
   onChildTurn?: (info: AgentLoopTurnInfo, child: { sessionId: string; requestId: string; role: DelegationRunRole }) => void
+  /** Domain-routed public messages; not child reasoning or parent chat events. */
+  onChildMessage?: (message:{turn:number;text:string;truncated:boolean},child:{sessionId:string;requestId:string;role:DelegationRunRole})=>void
   onChildCompaction?: (info: AgentLoopCompactionInfo, child: { sessionId: string; requestId: string; role: DelegationRunRole }) => void
   childExtraTools?: AgentLoopTool[]
   /** Optional host registration before the child can execute tools. */

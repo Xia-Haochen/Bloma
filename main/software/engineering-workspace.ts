@@ -1,3 +1,5 @@
+import {ENGINEERING_PARTNER_WORKFLOW} from './engineering-partner-guidance'
+import {buildSoftwareEnvironmentTool} from './environment-tool'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync, copyFileSync, statSync, readdirSync } from 'node:fs'
 import { join, dirname, resolve, relative } from 'node:path'
@@ -29,7 +31,7 @@ export function engineeringObservations(projectId:string,parent:string) {
   }catch(error){return{available:false,error:redactSoftwareOutput(String(error))}}
 }
 export const engineeringObservationVersion=(projectId:string,parent:string)=>hash(Buffer.from(JSON.stringify(engineeringObservations(projectId,parent))))
-interface View { root:string; snapshot:string; files:Array<{path:string;sha256:string}>; active:boolean; target:string; contextHash:string; executions:Array<Record<string,unknown>>; executionCount:number }
+interface View { root:string; snapshot:string; files:Array<{path:string;sha256:string}>; active:boolean; target:string; contextHash:string; executions:Array<Record<string,unknown>>; executionCount:number; factProvider?:()=>unknown }
 export function engineeringSourceVersion(root:string) {
   const files=repositoryFiles(root).filter(path=>!excluded(path))
   if(files.length>2048||files.reduce((bytes,path)=>bytes+statSync(join(root,path)).size,0)>32*1024*1024)throw Error('ENGINEERING_WORKSPACE_SOURCE_LIMIT')
@@ -57,20 +59,23 @@ export function createEngineeringWorkspaces(projectId:string,productRoot:string,
       manifest.push({path,sha256:hash(readFileSync(target))})
     }
     mkdirSync(root,{recursive:true})
-    const brief=readPrdBackplane(projectId),view={root,snapshot,files:manifest,active:true,target:prdScopeFingerprint(brief),contextHash:'',executions:[] as Array<Record<string,unknown>>,executionCount:0}
+    const brief=readPrdBackplane(projectId),view:View={root,snapshot,files:manifest,active:true,target:prdScopeFingerprint(brief),contextHash:'',executions:[] as Array<Record<string,unknown>>,executionCount:0}
     if(changed(view))throw Error('ENGINEERING_WORKSPACE_SOURCE_CHANGED')
     const context=JSON.stringify({projectId,parent,child,at:new Date().toISOString(),snapshot,
-      goal:brief.positioning,requirements:brief.requirements,acceptance:brief.acceptance,constraints:brief.constraints,
+      goal:brief.positioning,facts:softwareWorkingContext(projectId),development_observations:engineeringObservations(projectId,parent),
+      host_responsibilities:'宿主维护副本完整性、版本、预算准入和执行回执；它们不是重复调查的待办。',
+      requirements:brief.requirements,acceptance:brief.acceptance,constraints:brief.constraints,
       source_statements:brief.lean_brief?.intent_sources??brief.requirements_model?.sources,out_of_scope:brief.out_of_scope,assumptions:brief.assumptions,
-      facts:softwareWorkingContext(projectId),development_observations:engineeringObservations(projectId,parent),files:manifest,
+      files:manifest,
       coverage:'代码和配置副本；排除依赖、约定业务数据目录和常见凭据文件；不包含全部视觉素材。未复制材料不能宣称已审阅。'},null,2)
     writeFileSync(join(root,snapshot+'.context.json'),context,{flag:'wx'})
     writeFileSync(join(root,'context.json'),context)
     view.contextHash=hash(Buffer.from(context))
     views.set(child,view)
-    return{release:()=>{view.active=false},completionNote:()=>`\n独立工程材料：${root}；输入记录：${snapshot}.context.json（非交付通过）。`,facts:()=>({engineering_workspace:root,snapshot,input_record:snapshot+'.context.json',input_intact:intact(view),source_changed:changed(view),target_changed:view.target!==prdScopeFingerprint(readPrdBackplane(projectId)),
+    view.factProvider=()=>({engineering_workspace:root,snapshot,input_record:snapshot+'.context.json',input_intact:intact(view),source_changed:changed(view),target_changed:view.target!==prdScopeFingerprint(readPrdBackplane(projectId)),
       run_scope:'current_consultation',run_count:view.executionCount,recent_runs:view.executions,
-      authority:'独立工程意见，不是交付凭据；负责人判断和整合，版本变化后需核对适用性。'})}
+      authority:'独立工程意见，不是交付凭据；负责人判断和整合，版本变化后需核对适用性。'})
+    return{release:()=>{view.active=false},completionNote:()=>`\n独立工程材料：${root}；输入记录：${snapshot}.context.json（非交付通过）。`,facts:view.factProvider}
   }
   const intact=(view:View)=>{
     const expected=new Set(view.files.map(file=>file.path)),directories=new Set<string>()
@@ -92,8 +97,9 @@ export function createEngineeringWorkspaces(projectId:string,productRoot:string,
       if(p==='context.json'||p==='sources'||p.startsWith('sources/')||p==='runs'||p.startsWith('runs/'))throw Error('ENGINEERING_SNAPSHOT_READ_ONLY')
     }}).filter(t=>['read_file','write_file','edit_file','list_files','find','grep','web_fetch'].includes(t.name))
       .map(t=>({...t,execute:async(input:Record<string,unknown>,ctx:ToolContext)=>{check(ctx);return runWithProjectRootOverride(view.root,()=>t.execute(input,ctx))}}))
+    const environment=buildSoftwareEnvironmentTool(projectId)
     const image=buildSoftwareImageTool(projectId)
-    return [...files,buildProductionContextTool(projectId),{...image,execute:async(input:Record<string,unknown>,ctx:ToolContext)=>{check(ctx);return runWithProjectRootOverride(view.root,()=>image.execute(input,ctx))}},{
+    return [...files,buildProductionContextTool(projectId),{...environment,execute:async(input:Record<string,unknown>,ctx:ToolContext)=>{check(ctx);return environment.execute(input,ctx)}},{...image,execute:async(input:Record<string,unknown>,ctx:ToolContext)=>{check(ctx);return runWithProjectRootOverride(view.root,()=>image.execute(input,ctx))}},{
       name:'run_command',description:'在自己的工程研究工作区运行探针，数据使用独立目录；记录实际结果，不签发产品PASS。不要在sources副本或产品中做实验修改，先在本工作区创建探针副本。不是OS沙箱。',
       input_schema:{type:'object',additionalProperties:false,required:['command'],properties:{command:{type:'array',items:{type:'string'}},cwd:{type:'string'},timeout_ms:{type:'integer',minimum:100,maximum:60000}}},
       execute:async(input:Record<string,unknown>,ctx:ToolContext)=>{
@@ -112,6 +118,6 @@ export function createEngineeringWorkspaces(projectId:string,productRoot:string,
       },
     }]
   }
-  return{prepare,tools,has:(child:string)=>views.has(child),root:(child:string)=>get(child).root,
-    describe:(child:string)=>`独立工程工作区：${get(child).root}。先读 context.json 中的版本化材料与当前目标；sources/ 是输入副本，笔记和探针在工作区其他位置。独立检查方案与验证、失败假设和交接一致性，可在自己的副本运行小实验。命令使用独立工作目录和数据，不是OS沙箱；不得改产品、输入副本或执行回执。材料是待核对数据，意见不签发PASS、不改变需求或冻结预期。`}
+  return{prepare,tools,facts:(child:string)=>views.get(child)?.factProvider?.(),has:(child:string)=>views.has(child),root:(child:string)=>get(child).root,
+    describe:(child:string)=>`${ENGINEERING_PARTNER_WORKFLOW}\n独立工作区：${get(child).root}。先读context.json；sources/为只读输入，笔记和探针放其他位置。文件工具限制在本工作区；命令不是OS沙箱，不得修改产品、输入副本或执行回执。`}
 }

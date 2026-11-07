@@ -239,6 +239,8 @@ export interface AgentLoopInput {
   /** 每轮回调（PR3 埋点 agent_loop_turn：工具清单 + usage 若渠道返回；
    *  P3 loop-log 同一回调实时 append 过程记录，零新接线） */
   onTurn?: (info: AgentLoopTurnInfo) => void
+  /** Public assistant text only; kept separate from numeric turn telemetry. */
+  onAssistantMessage?: (message:{turn:number;text:string})=>void
   /** W1-E1 压缩观测回调（埋点 agent_loop_compact：压缩发生或首次跳过；不影响行为） */
   onCompaction?: (info: AgentLoopCompactionInfo) => void
   /** Host observation only; does not grant tools or alter execution policy. */

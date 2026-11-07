@@ -46,7 +46,7 @@ it.each<{mode:'quick'|'longterm';peer:boolean;hold?:boolean}>([{mode:'quick',pee
   const use = (id: string, name: string, input: Record<string, unknown>) => ({ type: 'tool_use' as const, id, name, input })
   const query: SDKQuery = async function* (_prompt, options) {
     if(options.accounting?.role==='research'){
-      if(hold){peerCalls++;yield{type:'assistant',message:{role:'assistant',content:[use('peer-hold','run_command',{command:['node','-e','advisory-probe-await-cancel']})]}};yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}};return}
+      if(hold){peerCalls++;yield{type:'assistant',message:{role:'assistant',content:peerCalls===1?[{type:'text',text:'PEER_PUBLIC_FINDING: validate the actual entry.'},use('peer-context','read_file',{path:'context.json'})]:[use('peer-hold','run_command',{command:['node','-e','advisory-probe-await-cancel']})]}};yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}};return}
 
       expect(JSON.stringify(options.messages?.filter(m=>m.role==='system'))).not.toContain('负责整个工程')
       expect(options.maxTokens).toBeLessThanOrEqual(16384)
@@ -72,7 +72,7 @@ it.each<{mode:'quick'|'longterm';peer:boolean;hold?:boolean}>([{mode:'quick',pee
   }
   const reviewedQuery=withEmptyQualityReview(query)
   const trackedQuery:SDKQuery=async function*(prompt,options){
-    if(options.accounting?.role==='review'&&pendingProbes>0)reviewWithActiveProbe=true
+    if(options.accounting?.role==='review'){expect(JSON.stringify(options.messages)).not.toContain('PEER_PUBLIC_FINDING');if(pendingProbes>0)reviewWithActiveProbe=true}
     yield* reviewedQuery(prompt,options)
   }
   const deps: DesktopRouteDeps = { publish: (_target, type, payload) => events.push({ type, payload }), persistAssistant: () => {}, persistSystem: () => {}, complete: () => {} }
@@ -86,7 +86,7 @@ it.each<{mode:'quick'|'longterm';peer:boolean;hold?:boolean}>([{mode:'quick',pee
   expect(findProject(project.project_id)).toMatchObject({ status: 'completed', desktop_phase: 'delivered' })
   expect(readFileSync(join(project.root_path, 'dist/app.cjs'), 'utf8')).toContain('console.log')
   expect(existsSync(join(project.root_path, 'app.py'))).toBe(false)
-  if(hold){expect(reviewWithActiveProbe).toBe(true);expect(peerCancelled).toBe(true);expect(pendingProbes).toBe(0)}else if(peer){expect(peerCalls).toBe(4);expect(calls.length).toBeGreaterThanOrEqual(2);expect(calls.length).toBeLessThanOrEqual(4)}else expect(calls).toHaveLength(2)
+  if(hold){expect(JSON.stringify(calls)).toContain('PEER_PUBLIC_FINDING');expect(reviewWithActiveProbe).toBe(true);expect(peerCancelled).toBe(true);expect(pendingProbes).toBe(0)}else if(peer){expect(peerCalls).toBe(4);expect(calls.length).toBeGreaterThanOrEqual(2);expect(calls.length).toBeLessThanOrEqual(4)}else expect(calls).toHaveLength(2)
   const evaluation=readFileSync(join(home,'harness-evaluation',project.project_id,'events.jsonl'),'utf8').trim().split('\n').map(line=>JSON.parse(line))
   const observed=evaluation.filter(e=>e.kind==='runtime_identity').map(e=>e.data.observation)
   expect(observed.some(o=>o.role==='orchestrator'&&o.runtime.packages['pi-coding-agent']==='1.4.0')).toBe(true)

@@ -154,7 +154,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   }
   const collaboration = createSoftwareCollaborationPolicy(input.projectId, project.root_path, input.sessionId)
   const pairedEngineering=process.env.BLOMA_ENGINEERING_PARTNER==='1'
-  const partner = createEngineeringPartner(pairedEngineering,()=>engineeringSourceVersion(project.root_path)+prdScopeFingerprint(readPrdBackplane(input.projectId)),()=>engineeringObservationVersion(input.projectId,input.sessionId))
+  const partner = createEngineeringPartner(pairedEngineering,()=>engineeringSourceVersion(project.root_path)+prdScopeFingerprint(readPrdBackplane(input.projectId)),()=>engineeringObservationVersion(input.projectId,input.sessionId),child=>collaboration.engineering.has(child))
   const quality = createQualityReview(input.projectId, input.sessionId, collaboration, input.env)
   const observeRuntime = (observation: import('../agent/loop/runtime-observation').RuntimeObservation) => {
     const review = readQualityLedger(input.projectId).reviews.find(r => r.child === observation.session_id)
@@ -247,7 +247,8 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     ...quality.parentTools,
     buildLeanScopeTool(input.projectId, input.content, emit, () => { scopePending = true }),
     brief.lean_brief.ui === 'required' ? buildLeanGuiTool(input.projectId) : buildLeanCliTool(input.projectId)])
-  const liveContext=()=>({delivery:{form:brief.lean_brief?.delivery,ui:brief.lean_brief?.ui,distribution:brief.lean_brief?.distribution??'local'},declared_entry:declaredEntryFacts(project.root_path),resources:executionWindowFacts()})
+  const executionFacts=()=>({delivery:{form:brief.lean_brief?.delivery,ui:brief.lean_brief?.ui,distribution:brief.lean_brief?.distribution??'local'},declared_entry:declaredEntryFacts(project.root_path),resources:executionWindowFacts()})
+  const liveContext=()=>{const advice=partner.latest();return{...executionFacts(),...(advice?{engineering_advice:advice}:{})}}
   const system = [
     SOFTWARE_ENGINEERING_INSTRUCTIONS,
     `宿主恢复检查点：${JSON.stringify(historyBase)}。这是版本恢复事实，不是工程提交或通过判定；由你检查产品仓库、处理可恢复问题并管理有意义的提交。`,
@@ -275,7 +276,8 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     delegationMaxTurns: 24, delegationTurnLimits: { review: 48 }, delegationTurnCaps: { review: 48 }, permissionMode: 'allow-all', temperature: .1, system, editFormat: 'diff', runtimeScope: 'lean-build',
     executionScope: budget.executionScope, materials: sessionMaterials(input.projectId, input.sessionId), publish: emit,
     childMaterialsBuilder: child => quality.isQualityChild(child) ? undefined : sessionMaterials(input.projectId, input.sessionId),
-    onRuntimeObservation: observeRuntime,liveContext,
+    onRuntimeObservation: observeRuntime,liveContext:executionFacts,
+    onChildMessage:(message,child)=>{if(collaboration.engineering.has(child.sessionId))partner.receive(child.sessionId,message,()=>collaboration.engineering.facts(child.sessionId))},
     childWorkspace: child => collaboration.engineering.has(child)?collaboration.engineering.root(child):undefined,
     childMaxTokens: child => collaboration.engineering.has(child)?Math.min(input.maxTokens,16384):undefined,
     childRuntimeScope: child => collaboration.engineering.has(child)?'engineering-peer':'lean-build',
@@ -346,7 +348,6 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     }
   }
   try {
-    if(!initialBudgetStop)partner.begin({projectId:input.projectId,sessionId:input.sessionId,requestId:input.requestId,signal:runSignal,state:createToolState()})
     for (;;) {
       runSignal.throwIfAborted()
       updateProject(input.projectId, { status: 'active', desktop_phase: 'desktop-implement', current_stage: 'generating_mvp', desktop_blocked: undefined })
@@ -366,7 +367,9 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
           if(feedback)task+='\n'+feedback;else hostCompleted=true
           }
         }
-        if(!hostCompleted)result = await runAgentLoop({ liveContext,runtimeScope: 'lean-build', system, task, query, env: input.env, tools,
+        if(!hostCompleted){
+        partner.begin({projectId:input.projectId,sessionId:input.sessionId,requestId:input.requestId,signal:runSignal,state:createToolState()})
+        result = await runAgentLoop({ liveContext,runtimeScope: 'lean-build', system, task, query, env: input.env, tools,
         onRuntimeObservation: observeRuntime,
         projectId: input.projectId, sessionId: input.sessionId, requestId: input.requestId, signal: runSignal,
         maxTokens: input.maxTokens, maxTurns, permissionMode: 'allow-all', workMode: 'implementation', executionScope: budget.executionScope,
@@ -385,7 +388,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
           if(!verified)return
           const feedback = await advanceCloseout(ctx)
           return feedback ? { feedback,verification:verificationToolFeedback(verified) } : { complete: true,verification:verificationToolFeedback(verified) }
-        }, recoveryContext: () => renderSoftwareWorkingContext(input.projectId), publish: emit }) }
+        }, recoveryContext: () => renderSoftwareWorkingContext(input.projectId), publish: emit }) } }
       catch (error) {
         const reason = error instanceof Error ? error.message : String(error)
         const detailedError = monetaryFailure instanceof Error && reason.includes(monetaryFailure.message) ? monetaryFailure : error

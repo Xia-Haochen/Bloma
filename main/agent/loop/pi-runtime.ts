@@ -315,7 +315,12 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
         if (event.toolName === 'run_security_scan') checkpoint('security')
       } else if (event.type === 'turn_end') {
         const usage = [...turnsUsage].reverse().find(usage => usage.turn === turns)
-        input.onTurn?.({ turn: turns, failed: event.message.role === 'assistant' && ['error', 'aborted', 'length'].includes(event.message.stopReason),
+        const failed=event.message.role==='assistant'&&['error','aborted','length'].includes(event.message.stopReason)
+        if(!failed&&!input.signal.aborted&&event.message.role==='assistant'&&input.onAssistantMessage){
+          const text=event.message.content.filter(block=>block.type==='text').map(block=>block.text).join('')
+          if(text.trim())try{input.onAssistantMessage({turn:turns,text})}catch{/* Advisory delivery never changes execution outcomes. */}
+        }
+        input.onTurn?.({ turn: turns, failed,
           toolCalls: toolCalls.filter(call => call.turn === turns), inputTokens: usage?.inputTokens, outputTokens: usage?.outputTokens })
       } else if (event.type === 'compaction_start') compacting = true
       else if (event.type === 'compaction_end') {

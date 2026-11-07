@@ -4,7 +4,7 @@ import { projectRequirementsModel } from '../../../main/model/requirements-model
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { afterEach, beforeEach, expect, it } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createProject } from '../../../main/project/project-service'
 import { readPrdBackplane, markPrdUserConfirmed } from '../../../main/project/prd-store'
 import { syncDocuments } from '../../../main/project/document-sync'
@@ -42,6 +42,7 @@ beforeEach(async () => {
   policy = createSoftwareCollaborationPolicy(project.project_id, project.root_path, parent); quality = createQualityReview(project.project_id, parent, policy)
 })
 afterEach(async () => {
+  vi.unstubAllEnvs()
   disposeParentDelegationState(parent); await settleParentDelegationRuns(parent, 20000)
   if (oldHome === undefined) delete process.env.PROMA_HOME; else process.env.PROMA_HOME = oldHome
   rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
@@ -385,6 +386,7 @@ it('recovers orphaned review records without accepting incomplete findings',asyn
 })
 
 it('resumes an unchanged verified candidate through host review without waking the maker',async()=>{
+ vi.stubEnv('BLOMA_ENGINEERING_PARTNER','1')
  const {enterDesktopLine}=await import('../../../main/desktop/desktop-route'),{findProject}=await import('../../../main/project/project-service')
  writeFileSync(join(project.root_path,'app.cjs'),'console.log(5)')
  expect((await verifySoftwareCandidate(project.project_id,'prior-request',ctx().signal)).status).toBe('passed')
