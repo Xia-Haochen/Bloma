@@ -307,7 +307,9 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   let task = input.observedSoftwareVersion ? trialFeedbackText(input.projectId, input.observedSoftwareVersion, input.content) : input.content
   let initial = true
   const waitForProductionChildren=async(ctx:import('../agent/loop/agent-loop').ToolContext)=>{
-    const waiting=await guardDispatcherCompletion(ctx,undefined,undefined,(delegation,child)=>quality.acceptedHandoff(delegation,child)||partner.owns(delegation))
+    // The host's optional advisor is not a prerequisite for mandatory C/V.
+    // Maker-owned work and required review children retain their normal wait.
+    const waiting=await guardDispatcherCompletion(ctx,undefined,undefined,quality.acceptedHandoff,partner.owns)
     return [waiting,partner.take(ctx)].filter(Boolean).join('\n')||undefined
   }
   const advanceCloseout = async (ctx: import('../agent/loop/agent-loop').ToolContext, locallyChecked = false) => {

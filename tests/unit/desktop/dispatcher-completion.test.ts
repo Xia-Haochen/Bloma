@@ -10,6 +10,16 @@ function record(): DelegationRecord {
     askSignal: { promise: new Promise(() => {}), resolve: () => {} } }
 }
 describe('dispatcher end response with active work', () => {
+  it('does not wait for a host advisor but still waits for required review',async()=>{
+    const advisor={...record(),delegationId:'advisor',childSessionId:'advisor-child',role:'research' as const}
+    const review={...record(),delegationId:'review',childSessionId:'review-child',role:'review' as const}
+    const wait=vi.fn(async(_ctx:ToolContext,args:{delegationIds?:string[]})=>{expect(args.delegationIds).toEqual(['review']);review.status='completed' as const;return[]})
+    const summary=vi.fn(()=>{throw Error('no unresolved work')})
+    const result=await guardDispatcherCompletion(ctx(),1000,{list:()=>[advisor,review],wait,summary},id=>id==='review',id=>id==='advisor')
+    expect(result).toBeUndefined();expect(wait).toHaveBeenCalledTimes(1);expect(advisor.status).toBe('running')
+    expect(await guardDispatcherCompletion(ctx(),0,{list:()=>[advisor],wait,summary},undefined,id=>id==='advisor')).toBeUndefined()
+  })
+
   it('awaits the child without cancelling it or deciding advancement on behalf of the model', async () => {
     const child = record(), abort = vi.spyOn(child.abort, 'abort')
     const wait = vi.fn(async () => { child.status = 'completed'; child.loopStatus = 'completed'; return [] })

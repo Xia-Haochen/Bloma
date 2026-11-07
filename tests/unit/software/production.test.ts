@@ -1,3 +1,4 @@
+import * as commandRuntime from '../../../main/software/command-runtime'
 import { execFileSync } from 'node:child_process'
 import { withEmptyQualityReview } from '../../fixtures/quality-review-query'
 import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync } from 'node:fs'
@@ -18,11 +19,22 @@ import { createEvaluationProtocol, stageEvaluationRun } from '../../../main/soft
 
 let home: string, previous: string | undefined
 beforeEach(() => { previous = process.env.PROMA_HOME; home = mkdtempSync(join(tmpdir(), 'bloma-software-loop-')); process.env.PROMA_HOME = home })
-afterEach(() => { vi.unstubAllEnvs(); if (previous === undefined) delete process.env.PROMA_HOME; else process.env.PROMA_HOME = previous;
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); if (previous === undefined) delete process.env.PROMA_HOME; else process.env.PROMA_HOME = previous;
   rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }) })
-it.each([{mode:'quick',peer:false},{mode:'longterm',peer:false},{mode:'quick',peer:true}] as const)('real Pi software loop builds, commits and delivers ($mode, peer=$peer)', async ({mode,peer}) => {
+it.each<{mode:'quick'|'longterm';peer:boolean;hold?:boolean}>([{mode:'quick',peer:false},{mode:'longterm',peer:false},{mode:'quick',peer:true},{mode:'quick',peer:true,hold:true}])('real Pi software loop builds, commits and delivers ($mode, peer=$peer, hold=$hold)', async ({mode,peer,hold}) => {
   vi.stubEnv('BLOMA_ENGINEERING_PARTNER',peer?'1':'0')
-  let peerCalls=0
+  let peerCalls=0,peerCancelled=false,pendingProbes=0,reviewWithActiveProbe=false
+  if(hold){
+    const execute=commandRuntime.executeSoftwareCommand
+    vi.spyOn(commandRuntime,'executeSoftwareCommand').mockImplementation(args=>{
+      if(Array.isArray(args.command)&&args.command[2]==='advisory-probe-await-cancel')return new Promise((_resolve,reject)=>{
+        pendingProbes++
+        const stop=()=>{pendingProbes--;peerCancelled=true;reject(Error('advisory cancelled after parent completion'))}
+        if(args.signal?.aborted)stop();else args.signal?.addEventListener('abort',stop,{once:true})
+      })
+      return execute(args)
+    })
+  }
   const project = createBareProject({ request_id: 'c', mode }, { workflowVersion: 'software-v1' })
   const parsed = parseLeanBrief(JSON.stringify({ action: 'brief', goal: '计算加法', ui: 'none', delivery: 'command', requirements: [{ description: '计算加法', expected: '2加3得5' }] }),
     { projectId: project.project_id, sessionId: 's', source: '计算加法', previous: readPrdBackplane(project.project_id), software: true })!
@@ -34,6 +46,8 @@ it.each([{mode:'quick',peer:false},{mode:'longterm',peer:false},{mode:'quick',pe
   const use = (id: string, name: string, input: Record<string, unknown>) => ({ type: 'tool_use' as const, id, name, input })
   const query: SDKQuery = async function* (_prompt, options) {
     if(options.accounting?.role==='research'){
+      if(hold){peerCalls++;yield{type:'assistant',message:{role:'assistant',content:[use('peer-hold','run_command',{command:['node','-e','advisory-probe-await-cancel']})]}};yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}};return}
+
       expect(JSON.stringify(options.messages?.filter(m=>m.role==='system'))).not.toContain('负责整个工程')
       expect(options.maxTokens).toBeLessThanOrEqual(16384)
       yield {type:'assistant',message:{role:'assistant',content:++peerCalls%2===1?[use('peer-context','read_file',{path:'context.json'}),...(peerCalls===1?[use('peer-note','write_file',{path:'notes.md',content:'核对确认的命令行交付、实际入口与数据边界。'})]:[])]:[{type:'text',text:'独立核对：当前任务为无持久状态的命令行计算，验证实际构建入口及正常输入；仍以真实测试为依据。'}]}}
@@ -56,18 +70,23 @@ it.each([{mode:'quick',peer:false},{mode:'longterm',peer:false},{mode:'quick',pe
     ] } }
     yield { type: 'result', subtype: 'success', usage: { input_tokens: 10, output_tokens: 20 } }
   }
+  const reviewedQuery=withEmptyQualityReview(query)
+  const trackedQuery:SDKQuery=async function*(prompt,options){
+    if(options.accounting?.role==='review'&&pendingProbes>0)reviewWithActiveProbe=true
+    yield* reviewedQuery(prompt,options)
+  }
   const deps: DesktopRouteDeps = { publish: (_target, type, payload) => events.push({ type, payload }), persistAssistant: () => {}, persistSystem: () => {}, complete: () => {} }
-  expect(await enterDesktopLine({ projectId: project.project_id, sessionId: 's', requestId: 'r', content: '直接实现', maxTokens: 4096, signal: AbortSignal.timeout(90000) }, withEmptyQualityReview(query), {}, deps)).toBe(true)
+  expect(await enterDesktopLine({ projectId: project.project_id, sessionId: 's', requestId: 'r', content: '直接实现', maxTokens: 4096, signal: AbortSignal.timeout(90000) }, trackedQuery, {}, deps)).toBe(true)
   if(mode==='longterm'){
     expect(findProject(project.project_id)).toMatchObject({status:'active',current_stage:'blocked_for_user_decision',longterm_summary:{status:'awaiting_confirmation'}})
     expect(await activeSoftwareRelease(project.project_id)).toBeUndefined()
     expect(events.some(event=>event.type==='user_decision_required'&&event.payload.kind==='longterm_milestone')).toBe(true)
-    await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'user-confirm',content:'确认本阶段',maxTokens:4096,signal:AbortSignal.timeout(90000)},withEmptyQualityReview(query),{},deps)
+    await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'user-confirm',content:'确认本阶段',maxTokens:4096,signal:AbortSignal.timeout(90000)},trackedQuery,{},deps)
   }
   expect(findProject(project.project_id)).toMatchObject({ status: 'completed', desktop_phase: 'delivered' })
   expect(readFileSync(join(project.root_path, 'dist/app.cjs'), 'utf8')).toContain('console.log')
   expect(existsSync(join(project.root_path, 'app.py'))).toBe(false)
-  if(peer){expect(peerCalls).toBe(4);expect(calls.length).toBeGreaterThanOrEqual(2);expect(calls.length).toBeLessThanOrEqual(3)}else expect(calls).toHaveLength(2)
+  if(hold){expect(reviewWithActiveProbe).toBe(true);expect(peerCancelled).toBe(true);expect(pendingProbes).toBe(0)}else if(peer){expect(peerCalls).toBe(4);expect(calls.length).toBeGreaterThanOrEqual(2);expect(calls.length).toBeLessThanOrEqual(4)}else expect(calls).toHaveLength(2)
   const evaluation=readFileSync(join(home,'harness-evaluation',project.project_id,'events.jsonl'),'utf8').trim().split('\n').map(line=>JSON.parse(line))
   const observed=evaluation.filter(e=>e.kind==='runtime_identity').map(e=>e.data.observation)
   expect(observed.some(o=>o.role==='orchestrator'&&o.runtime.packages['pi-coding-agent']==='1.4.0')).toBe(true)

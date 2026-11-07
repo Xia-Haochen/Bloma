@@ -11,10 +11,11 @@ interface Dependencies {
  * model calls, then return the actual handoffs so the parent can decide its next step. */
 export async function guardDispatcherCompletion(ctx: ToolContext, limitMs = 1_800_000,
   deps: Dependencies = { list: listDelegations, wait: waitForDelegations, summary: getDelegationSummary },
-  acceptedHandoff?: (delegationId:string,childSessionId:string)=>boolean): Promise<string | undefined> {
+  acceptedHandoff?: (delegationId:string,childSessionId:string)=>boolean,
+  advisory?: (delegationId:string,childSessionId:string)=>boolean): Promise<string | undefined> {
   const commands = activeSoftwareCommands(ctx.projectId, ctx.sessionId)
   if (commands.length) return '【宿主完成条件】已有命令仍在运行，不能结束制作或重复启动。用read_process读取这些会话的实际结果：\n' + JSON.stringify(commands)
-  const active=()=>deps.list(ctx.sessionId).filter(r=>r.projectId===ctx.projectId&&r.status==='running')
+  const active=()=>deps.list(ctx.sessionId).filter(r=>r.projectId===ctx.projectId&&r.status==='running'&&!advisory?.(r.delegationId,r.childSessionId))
   let running = active()
   if (!running.length) return undefined
   const awaited=new Set(running.map(r=>r.delegationId))
