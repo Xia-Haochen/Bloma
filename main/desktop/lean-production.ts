@@ -6,7 +6,7 @@ import { checkpointProjectHistory } from '../coding/project-git'
 import { locallyVerifiedSoftware } from '../software/verification'
 import {ModelRequestRefusal} from '../platform/llm/model-request-refusal'
 import {applyApprovedNativeCorrections} from '../software/native-gui-registration'
-import {currentFundedExecutionWindow,fundedExecutionLimits,configureSoftwareExecutionLimits,executionWindowFacts} from '../software/execution-limits'
+import {executionWindowFacts} from '../software/execution-limits'
 import { productDesignPolicy } from '../project/product-design-policy'
 import { beginProjectAssignment } from '../software/task-assignment'
 import { readFileSync, existsSync } from 'node:fs'
@@ -112,11 +112,6 @@ export async function runLeanProduction(input: DesktopRouteInput, deps: DesktopR
     }
   }
   try {
-    const window=currentFundedExecutionWindow()
-    if(window&&!isStop(input.content)&&window.remainingRmb>0&&window.remainingRequests>0){
-      const current=findProject(input.projectId),before=leanBudget(input.projectId,'desktop-implement').snapshot()
-      configureSoftwareExecutionLimits(input.projectId,current.lean_operation_id??'initial',{...fundedExecutionLimits(before,window),reason:'宿主已准入外层窗口，保持累计计数并对齐剩余执行额度。'})
-    }
     activatePendingEvaluation(input.projectId)
     recordEvaluationEvent(input.projectId,'operation_started',{session_id:input.sessionId,request_id:input.requestId})
     const finish = await withLeanRuntime(input.projectId, 'desktop-implement', input.signal,

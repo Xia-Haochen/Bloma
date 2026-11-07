@@ -1,4 +1,4 @@
-import { softwareExecutionLimits } from '../software/execution-limits'
+import { softwareExecutionLimits, currentFundedExecutionWindow, fundedExecutionLimits, configureSoftwareExecutionLimits } from '../software/execution-limits'
 import { GENERATION_MAX_TOKENS } from '../platform/llm/model-resolution'
 import { findProject } from '../project/project-service'
 import { createProductionBudget, productionDeadlineMs, PRODUCTION_LIMITS, RUNTIME_HEARTBEAT_MS } from './production-budget'
@@ -21,7 +21,14 @@ export function leanBudgetStopMessage(projectId: string, phase: string, reason: 
 /** Preparation, tools and host verification share active execution time. Human
  * waiting time is excluded. A failed accounting write cannot release delivery. */
 export async function withLeanRuntime<T>(projectId: string, phase: string, signal: AbortSignal | undefined,
-  work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  work: (signal: AbortSignal, budget: ReturnType<typeof leanBudget>) => Promise<T>): Promise<T> {
+  signal?.throwIfAborted()
+  const project=findProject(projectId),window=currentFundedExecutionWindow()
+  if(project.workflow_version==='software-v1'&&window&&window.remainingRmb>0&&window.remainingRequests>0){
+    const before=leanBudget(projectId,phase).snapshot()
+    configureSoftwareExecutionLimits(projectId,project.lean_operation_id??'initial',{
+      ...fundedExecutionLimits(before,window),reason:'宿主已准入共享执行窗口，保持累计计数；需求、设计与制作共用剩余额度。'})
+  }
   const budget = leanBudget(projectId, phase)
   const total = budget.startRuntime()
   // Software work has no fixed overall deadline. Runtime leases/accounting,
@@ -33,6 +40,6 @@ export async function withLeanRuntime<T>(projectId: string, phase: string, signa
     : setTimeout(() => guard.abort(new Error('HARNESS_DEADLINE_EXCEEDED')), remaining)
   const active = signal ? AbortSignal.any([signal, guard.signal]) : guard.signal
   const heartbeat = setInterval(() => { try { budget.heartbeatRuntime() } catch (error) { guard.abort(error) } }, RUNTIME_HEARTBEAT_MS)
-  try { active.throwIfAborted(); const result = await work(active); active.throwIfAborted(); return result }
+  try { active.throwIfAborted(); const result = await work(active,budget); active.throwIfAborted(); return result }
   finally { clearTimeout(timer); clearInterval(heartbeat); budget.finishRuntime() }
 }

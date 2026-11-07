@@ -14,7 +14,7 @@ import { prdScopeFingerprint } from '../project/requirement-contract'
 import { readGuideConfirmation, saveGuideConfirmation } from './confirmation-journal'
 import { LEAN_BRIEF_PROMPT, parseLeanBrief } from './lean-brief'
 import { authorizesDirectBuild, authorizesSkipPreview, publishLeanScope, stageLeanScope } from './lean-scope'
-import { leanBudget, withLeanRuntime } from '../desktop/lean-budget'
+import { withLeanRuntime } from '../desktop/lean-budget'
 import { renderMaterialContext, materialImageRefs } from '../platform/attachments/material-context'
 import { runUxConfirmGate, restoreUxConfirmation, replayUxConfirmation, hasPendingUxConfirm, resolveUxConfirmCardAnswer, resumeUxConfirmConfirmed, retryUxSketch,
   consumeUxConfirmDismiss, startUxAdjustAwait, takeUxAdjustFeedback, takeUxSketchCorrection, runUxAdjustRound } from './ux-confirm'
@@ -119,14 +119,12 @@ export async function handleLeanGuide(input: AgentSendMessageInput, publish: (ev
   const source = humanTexts.join('\n\n')
   const materials = model.materials ? renderMaterialContext(model.materials, input.session_id, true) : ''
   const images = [...(input.images ?? []), ...(model.materials ? materialImageRefs(model.materials) : [])]
-  const budget = leanBudget(input.project_id, 'prepare')
-  const query = budget.wrap(model.query)
   const software = isSoftwareProject(input.project_id)
   emit('stage_changed', { stage: 'clarifying' })
   let briefIssues: string[] = []
-  const result = await withLeanRuntime(input.project_id, 'prepare', model.signal, signal => callLlmForJson({ systemPrompt: LEAN_BRIEF_PROMPT + (software ? '\n另填delivery=desktop/browser/command描述用户使用方式；有界面默认desktop，仅用户明确要在浏览器使用才browser；无界面command。distribution描述交付：默认local本机使用，用户明确要复制到其他电脑直接运行用portable，要安装包用installer，只移交源码用source。框架、依赖、语言由工程Agent选择，不让用户做技术问卷。' : ''),
+  const result = await withLeanRuntime(input.project_id, 'prepare', model.signal, (signal,budget) => callLlmForJson({ systemPrompt: LEAN_BRIEF_PROMPT + (software ? '\n另填delivery=desktop/browser/command描述用户使用方式；有界面默认desktop，仅用户明确要在浏览器使用才browser；无界面command。distribution描述交付：默认local本机使用，用户明确要复制到其他电脑直接运行用portable，要安装包用installer，只移交源码用source。框架、依赖、语言由工程Agent选择，不让用户做技术问卷。' : ''),
     prompt: JSON.stringify({ previous: brief.lean_brief ? brief : undefined, conversation: source, sources: intentSources(source, brief.requirements_model?.sources ?? brief.lean_brief?.intent_sources), materials, latest: input.content }),
-    query: (text, options) => query(text, { ...options, images, accounting: { projectId: input.project_id, runId: input.request_id, role: 'brief', scope: 'prepare' } }),
+    query: (text, options) => budget.wrap(model.query)(text, { ...options, images, accounting: { projectId: input.project_id, runId: input.request_id, role: 'brief', scope: 'prepare' } }),
     env: model.env, signal, sessionId: input.session_id, maxTokens: model.maxTokens, temperature: .1, attempts: 2,
     retryFeedback: () => JSON.stringify({ conversation: source, sources: intentSources(source, brief.requirements_model?.sources ?? brief.lean_brief?.intent_sources), previous: brief.lean_brief ? brief : undefined, materials, latest: input.content, errors: briefIssues, instruction: '按具体错误重新给出完整JSON，不删除原始要求以规避校验。' }),
     parse: text => parseLeanBrief(text, { projectId: input.project_id, sessionId: input.session_id, source, previous: brief, software, assets: model.materials?.attachments, onIssues: issues => { briefIssues = issues } }) }))

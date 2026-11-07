@@ -6,7 +6,7 @@ import { createProductionBudget } from '../../../main/desktop/production-budget'
 import type { SDKQuery, SDKQueryOptions } from '../../../main/orchestration/stages/orchestration-contracts'
 import { leanBudget, withLeanRuntime } from '../../../main/desktop/lean-budget'
 import { createProject } from '../../../main/project/project-service'
-import { configureSoftwareExecutionLimits } from '../../../main/software/execution-limits'
+import { configureSoftwareExecutionLimits, withFundedExecutionWindow } from '../../../main/software/execution-limits'
 import { MonetaryBudgetError } from '../../../main/platform/llm/monetary-budget'
 import {ModelRequestRefusal} from '../../../main/platform/llm/model-request-refusal'
 
@@ -21,6 +21,21 @@ const ok: SDKQuery = async function* (_prompt, opts) {
 const limits = { requests: 3, phaseRequests: 3, output: 8192, perResponse: 2048 }
 
 describe('production admission is shared and durable', () => {
+  it('aligns preparation with the same funded window before exposing its budget without clearing prior usage',async()=>{
+    const project=createProject({request_id:'prepare',mode:'quick'},{workflowVersion:'software-v1'})
+    const initial=leanBudget(project.project_id,'prepare');initial.recordRuntime(0)
+    const prior=initial.snapshot()
+    writeFileSync(prior.file,JSON.stringify({version:1,requests:256,output:prior.limits.output,phases:{prepare:256}}))
+    await expect(withLeanRuntime(project.project_id,'prepare',options().signal,async(_signal,budget)=>drain(budget.wrap(ok)))).rejects.toThrow('HARNESS_REQUEST_BUDGET_EXHAUSTED')
+    await withFundedExecutionWindow(()=>({remainingRequests:8,remainingRmb:1,outputRmbPerMillion:8}),()=>
+      withLeanRuntime(project.project_id,'prepare',options().signal,async(_signal,budget)=>{
+        expect(budget.snapshot().limits.requests).toBe(264)
+        expect(budget.snapshot().limits.output).toBe(prior.limits.output+125000)
+        await drain(budget.wrap(ok))
+      }))
+    expect(leanBudget(project.project_id,'prepare').snapshot()).toMatchObject({requests:257,output:prior.limits.output+100})
+  })
+
   it('releases only a typed unsent host pause, preserving attempts and any started transport reserve',async()=>{
     const budget=createProductionBudget('p','host-pause','desktop-implement',limits)
     await expect(drain(budget.wrap(async function*(){throw new ModelRequestRefusal('SUPERVISOR_PAUSED')}))).rejects.toThrow('SUPERVISOR_PAUSED')
