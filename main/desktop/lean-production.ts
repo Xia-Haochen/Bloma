@@ -279,6 +279,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     childWorkspace: child => collaboration.engineering.has(child)?collaboration.engineering.root(child):undefined,
     childMaxTokens: child => collaboration.engineering.has(child)?Math.min(input.maxTokens,16384):undefined,
     childRuntimeScope: child => collaboration.engineering.has(child)?'engineering-peer':'lean-build',
+    childAfterTools: child => quality.isQualityChild(child)?quality.childAfterTools(child):undefined,
     ...(({ maxConcurrentDelegations: 2, allowChannelOverrides: false, delegationSummaryLimit: 3000,
       prepareDelegation: value => {
         const lease = quality.prepare(value)

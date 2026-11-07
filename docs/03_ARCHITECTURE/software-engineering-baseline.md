@@ -99,3 +99,7 @@ Git 使用独立索引与 `bloma-history` 分支。首次新建仓库为 main �
 本批最终 `npm run check:offline` 完整通过：类型检查、文档引用检查、构建、19 文件 / 170 项标准离线回归（包含实际浏览器与 Electron 验收）。日志：`run-artifacts/engineering-partner-final-offline-20261107.log`。本批源文件摘要：`run-artifacts/engineering-partner-source-20261107.json`。新增付费调用为 0；以上测试不能替代真实模型对照。
 
 建议与必需工作的等待职责回归：普通快速/长期制作、双角色制作及调度器用例通过；另以一直等待取消的伙伴探针验证真实 Pi 的必需审阅、发布和资源回收，最终双角色2项复验通过。日志 `run-artifacts/advisory-closeout-20261107.log` 与 `advisory-closeout-final-20261107.log`；初次用例误把调用次数固定为1，已改验活跃探针期间的审阅与最终回收，不放宽发布状态断言。类型检查通过。
+
+独立 C/V 的有效最终提交现为审阅的提交时点：校验候选身份、读取材料、实际图片送达、意见和修复依据后原子写入完成状态，由宿主结束子会话，不再购买额外结束文字。未提交、拒绝、过期和旧孤立 submitted 记录仍按未完成处理；审阅完成不代替实际验收、缺陷闭合或发布校验。
+
+最终提交收口验证：代码审阅27项通过；视觉7项最终通过（初次两处旧请求数断言已更新，完整GUI发布用例并行时超时，保留原时限单独复验通过）；持续建议探针下的真实Pi审阅、发布与回收再次通过。日志 `run-artifacts/review-final-submit-20261108.log`、`review-final-submit-visual-final-20261108.log`、`review-final-submit-visual-isolated-20261108.log`、`review-final-submit-advisory-20261108.log`。类型与文档检查通过。历史未完成审阅未补写批准，真实模型续跑仍须重新核对当前候选。

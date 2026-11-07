@@ -1,4 +1,4 @@
-import {withFundedExecutionWindow} from '../main/software/execution-limits'
+import {withFundedExecutionWindow,remainingSoftwareRequests} from '../main/software/execution-limits'
 import {createTrialWallet} from './trial-wallet'
 import {readPendingDecision} from '../main/guide/pending-decision'
 import {loadUserTestFiles} from './user-test-files'
@@ -130,9 +130,9 @@ export async function main() {
   observationBalance(liveModels,liveBalanceReply,requestReserve)
   if(!continuation&&existsSync(policy+'.state.json'))throw Error('OBSERVATION_LEDGER_NOT_FRESH')
   const existingRequests=existsSync(policy+'.state.json')?JSON.parse(readFileSync(policy+'.state.json','utf8')).entries.length:0
-  if(existingRequests>=512)throw Error('TRIAL_REQUEST_LIMIT')
+  const requestLimit=remainingSoftwareRequests(existingRequests)
+  if(!requestLimit)throw Error('HARNESS_REQUEST_BUDGET_EXHAUSTED')
   if(!continuation)claimObservationRun(root,{runtimeHash,thinking:trialThinking})
-  const requestLimit=512-existingRequests
   const money = () => {
     if (existsSync(policy + '.state.json')) return readMonetaryBudget(policy)
     if (existsSync(startedMarker)) throw Error('TRIAL_ACCOUNTING_MISSING')

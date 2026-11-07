@@ -49,7 +49,7 @@ afterEach(async () => {
 function register(query: SDKQuery) {
   registerParentLoopContext(parent, { query, env: {}, maxTokens: 2048, maxTurns: 4, delegationMaxTurns: 4, permissionMode: 'allow-all',
     system: 'A_SUCCESS_STORY_MUST_NOT_LEAK', temperature: .1, editFormat: 'diff', maxConcurrentDelegations: 2, allowChannelOverrides: false,
-    prepareDelegation: quality.prepare, childSystemBuilder: (_role, child) => quality.system(child)!,
+    prepareDelegation: quality.prepare, childAfterTools:quality.childAfterTools, childSystemBuilder: (_role, child) => quality.system(child)!,
     childToolsBuilder: (id, role) => quality.reviewTools(buildSoftwareAgentTools(id, role, policy)), publish: () => {} })
 }
 async function review(findings: Record<string, unknown>[] = [finding], intent?: unknown[], resolutions?: unknown[], engineering: import('../../../main/software/engineering-design').EngineeringReview | null = {status:'supported',evidence:'app.cjs owns pure addition; CLI owns parsing/output; no persistence or external resources.',limitations:'CLI fixture only'}) {
@@ -66,6 +66,22 @@ async function review(findings: Record<string, unknown>[] = [finding], intent?: 
   expect(readQualityLedger(project.project_id).reviews.at(-1)?.status).toBe('complete')
   return child
 }
+it('settles an accepted final review without buying an epilogue request',async()=>{
+  let calls=0
+  register(async function*(){
+    if(++calls>1)throw Error('NO_EPILOGUE_BUDGET')
+    yield{type:'assistant',message:{role:'assistant',content:[
+      {type:'tool_use',id:'materials',name:'read_quality_review',input:{}},
+      {type:'tool_use',id:'source',name:'read_file',input:{path:'app.cjs'}},
+      {type:'tool_use',id:'submit',name:'submit_quality_findings',input:{findings:[]}}]}}
+    yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
+  })
+  const child=await quality.begin(ctx());await findDelegation(parent,child.delegation_id)!.completion
+  expect(calls).toBe(1)
+  expect(readQualityLedger(project.project_id).reviews.at(-1)?.status).toBe('complete')
+  disposeParentDelegationState(parent)
+  expect(readQualityLedger(project.project_id).reviews.at(-1)?.status).toBe('complete')
+})
 it('actual Pi C submits host-bound findings; a real injected CLI defect fails, is repaired, and closes only after same-case host retest', async () => {
   await review()
   const initial = readQualityLedger(project.project_id).findings[0]
@@ -380,7 +396,7 @@ it('resumes an unchanged verified candidate through host review without waking t
  }
  await enterDesktopLine({projectId:project.project_id,sessionId:parent,requestId:'resume-host',content:'继续',maxTokens:2048,signal:AbortSignal.timeout(90000)},query,{},
  {publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
- expect(makerCalls).toBe(0);expect(reviewCalls).toBe(2);expect(findProject(project.project_id).status).toBe('completed')
+ expect(makerCalls).toBe(0);expect(reviewCalls).toBe(1);expect(findProject(project.project_id).status).toBe('completed')
 },120000)
 
 it('refuses maker-selected review delegation before buying a child request',()=>{

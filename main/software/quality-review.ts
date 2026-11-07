@@ -15,7 +15,7 @@ import { visualReviewChecklist, visualCoverageComplete } from './visual-review-c
 import { createHash, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { AgentLoopTool, ToolContext } from '../agent/loop/agent-loop'
+import type { AgentLoopTool, ToolContext, AgentLoopInput } from '../agent/loop/agent-loop'
 import { startDelegation, findDelegation, isProjectDelegationRunning } from '../agent/delegation/agent-collaboration'
 import type { DelegationParentContext } from '../agent/delegation/delegation-context'
 import { findProject } from '../project/project-service'
@@ -93,21 +93,7 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       lease.release(); release(); children.delete(input.childSessionId)
       const ledger = readQualityLedger(projectId), stored = ledger.reviews.find(r => r.id === review.id)!
       if (stored.status !== 'complete') { const ended = findDelegation(parent, input.delegationId); stored.status = 'interrupted'; stored.failure_code = ended?.error?.match(/\b[A-Z][A-Z_]{4,}\b/)?.[0] ?? 'loop:' + (ended?.loopStatus ?? 'interrupted'); save(ledger) }
-    }, completionNote: () => {
-      const ledger = readQualityLedger(projectId), stored = ledger.reviews.find(r => r.id === review.id)!
-      if (stored.status === 'submitted' && findDelegation(parent, input.delegationId)?.loopStatus === 'completed') {
-        stored.status = 'complete'
-        for (const item of stored.resolutions ?? []) {
-          const finding = ledger.findings.find(f => f.id === item.finding_id)
-          if (!finding) continue
-          const evidence = { identity: stored.identity, review: stored.id, evidence: item.evidence }
-          if (item.case_name) finding.retest = { ...evidence, case_name: item.case_name, rules: rulesVersion(projectId) }
-          else if (!qualityFailureBaseline(finding)) finding.reviewed = evidence
-        }
-        save(ledger)
-      }
-      return '\n结构化审阅意见已交宿主台账；子任务完成不代表缺陷已关闭。'
-    } }
+    }, completionNote: () => '\n结构化审阅意见按实际提交记录保管；子任务完成不代表缺陷已关闭。' }
   }
   const begin = async (ctx: ToolContext, kind: ReviewKind = 'code', debugId?: string) => exclusive(async () => {
     assertParent(ctx)
@@ -217,7 +203,16 @@ export function createQualityReview(projectId: string, parent: string, policy: R
           ||(f.review_kind??'code')!==(review.kind??'code')||typeof item.evidence!=='string'||!item.evidence.trim()||item.evidence.length>4000)throw Error('QUALITY_RESOLUTION_INVALID')
       }
       review.resolutions=[...resolutions,...bindings]
-      ledger.findings.push(...rows); review.status = 'submitted'; save(ledger)
+      // This validated final submission is the review's commit point. A later
+      // transport failure or cancellation cannot undo an already accepted opinion.
+      ledger.findings.push(...rows); review.status = 'complete'
+      for(const item of review.resolutions){
+        const finding=ledger.findings.find(f=>f.id===item.finding_id)!
+        const evidence={identity:review.identity,review:review.id,evidence:item.evidence}
+        if(item.case_name)finding.retest={...evidence,case_name:item.case_name,rules:rulesVersion(projectId)}
+        else if(!qualityFailureBaseline(finding))finding.reviewed=evidence
+      }
+      save(ledger)
       return { output: JSON.stringify({ submitted: true, findings: rows, verification: 'unverified' }) }
     } }, { name: 'view_quality_image', description: '读取本视觉子会话获宿主授权的当前候选真实PNG。无path或debug_session_id参数；跨会话、过期、换图拒绝。附图之后还须实际核对并提交具体可见观察，图片本身不签发PASS。', input_schema: { type: 'object', additionalProperties: false, properties: {} }, execute: async (input, ctx) => {
       ctx.signal.throwIfAborted()
@@ -336,7 +331,11 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       stored.visual_delivery = { at: new Date().toISOString(), image_hash: review.visual.image_hash, request_hash: requestHash }; save(ledger)
     }
   }
-  return { prepare, system, gate, begin, acceptedHandoff:(delegation:string,child:string)=>readQualityLedger(projectId).reviews.some(r=>r.delegation===delegation&&r.child===child&&r.status==='complete'), completionAction: async (signal?: AbortSignal) => { const reason = await deliveryQualityBlock(projectId,signal,activeRoute), current = await identity(projectId, signal); const ledger=applicableQualityLedger(projectId);return {...qualityCloseout(ledger,current,reason,rulesVersion(projectId),independentDesignVersion(projectId),currentObservation()?.digest),feedback:JSON.stringify(qualityWorkQueue(ledger,current,reason,rulesVersion(projectId),independentDesignVersion(projectId)))} }, parentTools, reviewTools, wrapQuery, isQualityChild: (child: string) => children.has(child),
+  const childAfterTools=(child:string):AgentLoopInput['afterTools']=>async(_ctx,calls)=>{
+    if(calls.some(c=>c.status!=='ok'||c.pending)||!calls.some(c=>c.name==='submit_quality_findings'))return
+    if(readQualityLedger(projectId).reviews.some(r=>r.child===child&&r.status==='complete'))return{complete:true}
+  }
+  return { prepare, system, gate, begin, childAfterTools, acceptedHandoff:(delegation:string,child:string)=>readQualityLedger(projectId).reviews.some(r=>r.delegation===delegation&&r.child===child&&r.status==='complete'), completionAction: async (signal?: AbortSignal) => { const reason = await deliveryQualityBlock(projectId,signal,activeRoute), current = await identity(projectId, signal); const ledger=applicableQualityLedger(projectId);return {...qualityCloseout(ledger,current,reason,rulesVersion(projectId),independentDesignVersion(projectId),currentObservation()?.digest),feedback:JSON.stringify(qualityWorkQueue(ledger,current,reason,rulesVersion(projectId),independentDesignVersion(projectId)))} }, parentTools, reviewTools, wrapQuery, isQualityChild: (child: string) => children.has(child),
     // The role-only tool builder cannot know the child ID until execute. Protocol
     // tools authenticate the actual session, including against parent forgeries.
     childProtocol }

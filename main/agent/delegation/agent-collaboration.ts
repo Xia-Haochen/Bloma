@@ -351,6 +351,7 @@ async function runChildLoop(opts: {
     executionScope: parentCtx.executionScope,
 
     liveContext: parentCtx.liveContext,
+    afterTools: parentCtx.childAfterTools?.(record.childSessionId),
     runtimeScope: parentCtx.childRuntimeScope?.(record.childSessionId) ?? parentCtx.runtimeScope,
     onRuntimeObservation: parentCtx.onRuntimeObservation,
     permissionMode: parentCtx.permissionMode,

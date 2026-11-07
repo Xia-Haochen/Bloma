@@ -101,7 +101,7 @@ function register(override?: SDKQuery) {
   const env = { PATH: process.env.PATH!, ANTHROPIC_AUTH_TOKEN: 'local-fixture-never-provider', ANTHROPIC_MODEL: 'fixture-vision', ANTHROPIC_BASE_URL: `http://127.0.0.1:${(model.address() as { port: number }).port}` }
   registerParentLoopContext(parent, { query: quality.wrapQuery(route), env,
     maxTokens: 4096, maxTurns: 5, delegationMaxTurns: 5, permissionMode: 'allow-all', temperature: .1, system: 'A_SUCCESS_STORY', editFormat: 'diff',
-    maxConcurrentDelegations: 2, allowChannelOverrides: false, prepareDelegation: quality.prepare, childSystemBuilder: (_role, child) => quality.system(child)!, childMaterialsBuilder: () => undefined,
+    maxConcurrentDelegations: 2, allowChannelOverrides: false, prepareDelegation: quality.prepare, childAfterTools:quality.childAfterTools, childSystemBuilder: (_role, child) => quality.system(child)!, childMaterialsBuilder: () => undefined,
     childToolsBuilder: (id, role, _format, child) => quality.reviewTools(buildSoftwareAgentTools(id, role, policy), child), publish: () => {} })
   return { route, env }
 }
@@ -200,7 +200,7 @@ it('normal production repairs local failures before buying C/V and publishes the
   expect(findProject(project.project_id).status).toBe('completed')
   expect(ledger.reviews.filter(r => r.status === 'complete').map(r => r.kind)).toEqual(['code', 'visual'])
   expect(verificationStatuses).toEqual(['failed','passed'])
-  expect(leanBudget(project.project_id, 'desktop-implement').snapshot().requests).toBe(step + wireBodies.length + 2)
+  expect(leanBudget(project.project_id, 'desktop-implement').snapshot().requests).toBe(step + wireBodies.length + 1)
   const artifacts = join(process.cwd(), 'run-artifacts', 'q2-visual'); mkdirSync(artifacts, { recursive: true })
   writeFileSync(join(artifacts, 'production-ledger.json'), JSON.stringify(ledger, null, 2))
   // A real verified baseline, not selector fixture metadata: only cosmetic CSS
@@ -246,7 +246,7 @@ it('production stops on the first actual image rejection without retrying V or c
     { publish: () => {}, persistAssistant: () => {}, persistSystem: () => {}, complete: () => {} })
   expect(parentCalls).toBe(1)
   expect(wireBodies).toHaveLength(2)
-  expect(leanBudget(project.project_id, 'desktop-implement').snapshot().requests).toBe(5)
+  expect(leanBudget(project.project_id, 'desktop-implement').snapshot().requests).toBe(4)
   expect(readQualityLedger(project.project_id).reviews.filter(r => r.kind === 'visual')).toHaveLength(1)
   expect(findProject(project.project_id).desktop_blocked?.note).toContain('QUALITY_VISUAL_MODEL_UNSUPPORTED')
   expect(findProject(project.project_id).status).toBe('active')

@@ -1,7 +1,7 @@
 import type { AgentEvent, PromaPermissionMode } from '../../../shared/types'
 import type { DelegationRunRole } from '../../../shared/delegation-run-context'
 import type { SDKQuery } from '../../orchestration/orchestrator'
-import type { AgentLoopCompactionInfo, AgentLoopTool, AgentLoopTurnInfo } from '../loop/agent-loop'
+import type { AgentLoopCompactionInfo, AgentLoopTool, AgentLoopTurnInfo, AgentLoopInput } from '../loop/agent-loop'
 import type { ChildToolsBuilder } from './agent-collaboration'
 
 /** 父上下文随 session 隔离；保留统一缺省预算，允许宿主按工作角色指定预算。 */
@@ -27,6 +27,7 @@ export interface DelegationParentContext {
   childMaxTokens?: (childSessionId:string)=>number|undefined
   liveContext?: () => unknown
   childRuntimeScope?: (childSessionId:string)=>string|undefined
+  childAfterTools?: (childSessionId:string)=>AgentLoopInput['afterTools']
   runtimeScope?: string
   permissionMode: PromaPermissionMode
   temperature: number
