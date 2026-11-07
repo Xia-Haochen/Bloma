@@ -4,6 +4,8 @@
 
 本批恢复验证：84项定向回归通过；完整 `check:offline` 的类型、文档、构建与19文件171项回归通过。额外核对跨进程恢复的无图调整卡；未修改产品或冻结断言。日志：`run-artifacts/preparation-recovery-final-20261107.log`、`preparation-recovery-offline-20261107.log`、`preparation-decision-final-20261107.log`。钱包展示不再把责任预留称作实际消费。
 
+实际修复进展：静态检查失败身份按问题的文件、类型、严重性及数量生成，修复后问题集合变化可以继续，只有行号/报告时间变化不能重置无进展计数。Pi真实循环、反馈契约与安全规则61项回归通过，类型检查通过；日志 `run-artifacts/static-repair-progress-20261107.log`。本次不改变静态规则或业务预期。
+
 ## 当前方法：允许正常用户交互，禁止外部工程代修
 
 制作中断续跑：已结束的试验、没有活跃预留请求的旧账及当前 active/software-v1 制作状态，可在 `prepare-user` 时显式设置 `BLOMA_OBSERVATION_RESUME_PRODUCTION=1`，配合新的 `BLOMA_OBSERVATION_RETEST` 名称和既有用户续跑授权。驱动冻结项目与账本身份，记录一次普通“继续完成原任务”消息，通过原制作入口恢复，再在真实确认卡或已发布产物边界进入用户代理。不清零用量，不改产品或冻结预期，不自动循环续跑，也不恢复用户明确停止、归档或仍在运行的任务。原失败段保留，不能称为原冻结方法一次成功。

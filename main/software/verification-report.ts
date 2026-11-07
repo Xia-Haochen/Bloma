@@ -12,11 +12,16 @@ const digest=(value:unknown)=>createHash('sha256').update(JSON.stringify(value))
 const readMore=(report_hash:string,offset=0)=>({tool:'read_production_context',arguments:{topic:'verification-report',report_hash,offset}})
 export function verificationToolFeedback(result:SoftwareVerification):ToolFeedback{
   const failure=verificationFailure(result),category=failure?.category
+  // A shrinking or changed set of actual findings is new evidence. Line shifts,
+  // report timestamps and wording alone must not reset the no-progress guard.
+  const staticFindings=category==='security_policy'?result.security?.issues
+    .filter(row=>['high','critical'].includes(row.severity))
+    .map(row=>JSON.stringify([row.file,row.category,row.severity])).sort():undefined
   return safeToolFeedback({schema_version:1,execution:'completed',source:'host',scope:'software_candidate',
     verification:result.status==='passed'?'passed':result.status==='failed'?'failed':'unverified',
     category:category==='unknown'?'unknown':['test_adapter','harness','security_policy'].includes(category??'')?'verification_harness':category==='environment'?'environment':category==='product_assertion'?'product_assertion':undefined,
     assessment:failure&&{certainty:failure.diagnosis?.certainty??'unknown',root_cause_confirmed:false},
-    reason:failure?.code,fingerprint:failure?digest([category,failure.code,failure.step,...(category==='product_assertion'?[failure.expected,failure.actual]:[])]):undefined,recovery:result.status==='passed'?'none':category==='environment'?'prepare_environment':'inspect'})!
+    reason:failure?.code,fingerprint:failure?digest([category,failure.code,failure.step,...(category==='product_assertion'?[failure.expected,failure.actual]:staticFindings?[staticFindings]:[])]):undefined,recovery:result.status==='passed'?'none':category==='environment'?'prepare_environment':'inspect'})!
 }
 export function verificationRefusalFeedback(error:unknown):ToolFeedback{
   const code=String(error).match(/\b(?:PROJECT_STAGE|GUI_NATIVE|GUI_EXISTING|TEST_CORRECTION|TEST_CONTRACT)_[A-Z_]+/)?.[0]

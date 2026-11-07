@@ -44,6 +44,19 @@ function tool(name: string, execute: AgentLoopTool['execute']): AgentLoopTool {
 function nativeFile() { return piSessionPath('test-project', 'test-session', 'desktop-implement:', process.cwd()) }
 
 describe('real upstream Pi AgentSession integration', () => {
+  it.each([true,false])('distinguishes changing static findings from shifted line numbers (progress=%s)',async progress=>{
+    const q=scripted([[call('one','verify_app')],[call('two','verify_app')],[call('three','verify_app')],[text('continue after actual repairs')]])
+    let checks=0
+    const result=await runAgentLoop(input(q.query,{tools:[tool('verify_app',async()=>{
+      checks++
+      const observed={status:'failed',summary:'rule hits',security:{passed:false,issues:Array.from({length:progress?4-checks:3},(_,i)=>({file:'app.js',category:'unsafe_dom',severity:'high',line:i+checks*100,user_visible_summary:'rule hit'}))}} as never
+      return{output:'static findings',isError:true,feedback:verificationToolFeedback(observed)}
+    })]}))
+    expect(checks).toBe(3)
+    if(progress){expect(result.status).toBe('completed');expect(q.received).toHaveLength(4)}
+    else{expect(result.termination_detail).toMatchObject({reason:'no_progress',observed:3});expect(q.received).toHaveLength(3)}
+  })
+
   it('stops repeated host closeout failures even when the initiating model tool succeeds',async()=>{
     const q=scripted([[call('review','start_quality_review')]])
     const failed=verificationToolFeedback({status:'failed',summary:'wrong total',core:{host_cli:{cases:[{name:'total',passed:false,exit_code:0,expected:{stdout:'4',exit_code:0},actual:'5'}]}}} as never)
