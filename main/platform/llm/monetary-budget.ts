@@ -2,13 +2,14 @@ import { createHash, randomUUID } from 'node:crypto'
 import { acquireMonetaryEpoch } from './monetary-epoch'
 import { closeSync, existsSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import type { SDKMessage } from '../../../shared/types'
+import {reportedPricingCredit,type ReportedPricingCheckpoint} from './reported-pricing'
 
 type Usage = NonNullable<SDKMessage['usage']>
 interface Rate { host: string; model: string; cap_rmb: number; context_tokens: number; input_rmb_per_million: number; output_rmb_per_million: number; cache_rmb_per_million: number }
 interface Policy { version: 1; models: Rate[] }
 interface Entry { id: string; model: string; host: string; at?: string; home?: string; budget_wait_ms?: number; input_tokens_limit?: number; output_tokens_limit?: number; reserved_micro_rmb: number; charged_micro_rmb: number; status: 'reserved' | 'reported' | 'unknown' | 'reconciled_unauthenticated' | 'reconciled_pre_execution'; usage?: Usage }
 interface BalanceCheckpoint { id: string; host: string; model: string; covered_request_ids: string[]; spent_upper_micro_rmb: number; evidence_path: string; evidence_sha256: string }
-interface State { version: 1; policy_hash: string; entries: Entry[]; balance_checkpoints?: BalanceCheckpoint[] }
+interface State { version: 1; policy_hash: string; entries: Entry[]; balance_checkpoints?: BalanceCheckpoint[]; reported_pricing_checkpoints?:ReportedPricingCheckpoint[] }
 
 export interface MonetaryAdmissionDetails {
   cap_rmb: number
@@ -34,6 +35,8 @@ export function monetaryStopMessage(error: unknown): string | undefined {
 const fail = (code: string): never => { throw new MonetaryBudgetError(code) }
 const integer = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0
 const micro = (tokens: number, rmbPerMillion: number) => Math.ceil(tokens * rmbPerMillion)
+const reportedCharge=(state:State,host:string,model:string)=>state.entries.filter(e=>e.host===host&&e.model===model&&e.status==='reported').reduce((sum,e)=>sum+e.charged_micro_rmb,0)
+  -(state.reported_pricing_checkpoints??[]).filter(c=>c.host===host&&c.model===model).reduce((sum,c)=>sum+c.original_micro_rmb-c.settled_micro_rmb,0)
 
 /** A trusted balance statement bounds the aggregate liability of covered calls. Keep
  * every original per-call record; do not fabricate zero usage for unknown responses. */
@@ -59,6 +62,9 @@ function accountedSpent(state: State, host: string, model: string, settledOnly =
     }
     total += checkpoint.spent_upper_micro_rmb - original
   }
+  for(const checkpoint of state.reported_pricing_checkpoints??[]){
+    if(checkpoint.host===host&&checkpoint.model===model)total-=reportedPricingCredit(checkpoint,entries,covered)
+  }
   return total
 }
 
@@ -79,7 +85,8 @@ export function readMonetaryBudget(policyPath: string) {
   return policy.models.map(rate => ({ model: rate.model, host: rate.host, cap_rmb: rate.cap_rmb,
     accounted_upper_rmb: accountedSpent(state, rate.host, rate.model) / 1_000_000,
     remaining_rmb: rate.cap_rmb - accountedSpent(state, rate.host, rate.model) / 1_000_000,
-    reported_peak_rmb: state.entries.filter(e => e.host === rate.host && e.model === rate.model && e.status === 'reported').reduce((sum, e) => sum + e.charged_micro_rmb, 0) / 1_000_000 }))
+    reported_peak_rmb: state.entries.filter(e => e.host === rate.host && e.model === rate.model && e.status === 'reported').reduce((sum, e) => sum + e.charged_micro_rmb, 0) / 1_000_000,
+    ...(state.reported_pricing_checkpoints?.length?{reported_priced_rmb:reportedCharge(state,rate.host,rate.model)/1_000_000}:{}) }))
 }
 
 /** Read-only output fitting. Input liability, historical charges and the policy
@@ -197,7 +204,7 @@ export function reserveModelRequest(url: string, body: string, policyPath = proc
       const cap = Math.floor(rate.cap_rmb * 1_000_000)
       throw new MonetaryBudgetError('MONETARY_BUDGET_EXHAUSTED', {
         cap_rmb: cap / 1e6, accounted_upper_rmb: spent / 1e6,
-        reported_upper_rmb: entries.filter(row => row.status === 'reported').reduce((sum, row) => sum + row.charged_micro_rmb, 0) / 1e6,
+        reported_upper_rmb: reportedCharge(state,host,rate.model) / 1e6,
         unresolved_reserve_rmb: entries.filter(row => row.status === 'reserved' || row.status === 'unknown').reduce((sum, row) => sum + row.charged_micro_rmb, 0) / 1e6,
         next_request_reserve_rmb: reserved / 1e6, remaining_rmb: Math.max(0, cap - spent) / 1e6,
         shortfall_rmb: (spent + reserved - cap) / 1e6,
