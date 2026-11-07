@@ -189,11 +189,23 @@ export async function main() {
     if(continuation){
       const userSid=`simulated-user-${randomUUID()}`;recordSessionActivity(userSid,project.project_id)
       const surface=new SimulatedUserSurface(project.project_id,join(taskDir,'simulated-user'),userSid,userFiles)
+      if(continuation.resume_production){
+        const content='继续完成原任务。'
+        report.production_resume={actor:'test_driver',content,previous_report:continuation.retest_of,at:new Date().toISOString()}
+        appendSessionMessage(sid,{role:'user',origin:'user',content:[{type:'text',text:content}],timestamp:Date.now()})
+        const resumed=await observeOneTurn(async record=>enterDesktopLine({projectId:project.project_id,sessionId:sid,requestId:randomUUID(),content,
+          initialMessagePersisted:true,maxTokens:requestMaxTokens,signal},query,binding.env,
+          {publish:(_target,type,payload)=>record({event_id:randomUUID(),session_id:sid,project_id:project.project_id,created_at:new Date().toISOString(),type,payload}),
+            persistAssistant:(_sid,text)=>model.persistAssistant(text),persistSystem:()=>{},complete:()=>{}}).then(()=>{}),event,signal)
+        report.production_resume.outcome=resumed.status
+        if(resumed.error||resumed.status==='stopped')throw Error(resumed.error??'PRODUCTION_RESUME_STOPPED')
+      }
       const pending=readPendingDecision(project.project_id,sid)
       latestCard=pending?{event_id:randomUUID(),session_id:sid,project_id:project.project_id,created_at:new Date().toISOString(),type:'user_decision_required',payload:pending.payload}:undefined
       previewUrl=pending?.preview_url
       report.retest_of=continuation.retest_of
-      if(!latestCard&&!(project.status==='completed'&&project.desktop_phase==='delivered'&&await activeSoftwareRelease(project.project_id)))throw Error('SIMULATED_USER_DECISION_MISSING')
+      const current=findProject(project.project_id)
+      if(!latestCard&&!(current.status==='completed'&&current.desktop_phase==='delivered'&&await activeSoftwareRelease(project.project_id)))throw Error('SIMULATED_USER_DECISION_MISSING: '+(current.desktop_blocked?.note??current.current_stage))
       try{
         report.user_trial=await simulateUserSession({goal:task.goal,signal,
           turn:async reply=>{

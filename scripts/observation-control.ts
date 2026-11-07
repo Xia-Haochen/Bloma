@@ -57,7 +57,7 @@ export function assertSimulatedContinuation(root:string,thinking:string,runtimeT
   const report=JSON.parse(readFileSync(join(root,m.report),'utf8'))
   if(existsSync(join(root,'user-run-claimed'+suffix+'.json')))throw Error('SIMULATED_USER_BOUNDARY_REQUIRED')
   if(suffix){
-    if(m.attempt!==suffix||!m.boundary||JSON.stringify(continuationBoundary(root,report))!==JSON.stringify(m.boundary))throw Error('SIMULATED_USER_BOUNDARY_CHANGED')
+    if(m.attempt!==suffix||!m.boundary||JSON.stringify(continuationBoundary(root,report,{resumeProduction:m.boundary.resume_production===true}))!==JSON.stringify(m.boundary))throw Error('SIMULATED_USER_BOUNDARY_CHANGED')
   }else if(report.status!=='awaiting_user')throw Error('SIMULATED_USER_BOUNDARY_REQUIRED')
   return suffix?{...report,...m.boundary,status:'awaiting_user',retest_of:m.report}:report
 }

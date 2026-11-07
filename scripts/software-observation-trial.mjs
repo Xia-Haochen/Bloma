@@ -32,7 +32,7 @@ export async function prepareObservation(root,compile,userAuthorization){
     const report=JSON.parse(readFileSync(join(folder,reports[0]),'utf8'))
     let boundary
     if(suffix){
-      boundary=continuationBoundary(root,report)
+      boundary=continuationBoundary(root,report,{resumeProduction:process.env.BLOMA_OBSERVATION_RESUME_PRODUCTION==='1'})
     }else if(report.status!=='awaiting_user')throw Error('SIMULATED_USER_BOUNDARY_REQUIRED')
     const sha=file=>createHash('sha256').update(readFileSync(file)).digest('hex')
     migration={authorization:userAuthorization,attempt:suffix,boundary,previous_runtime_digest:manifest.runtime_tree_sha256,

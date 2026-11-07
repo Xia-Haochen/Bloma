@@ -152,3 +152,20 @@ it('holds one execution owner across attempt names and retains consumed claims',
     expect(existsSync(join(home,'user-run-claimed-one.json'))).toBe(true)
   }finally{if(previous===undefined)delete process.env.BLOMA_OBSERVATION_RETEST;else process.env.BLOMA_OBSERVATION_RETEST=previous}
 })
+
+it('only explicitly resumes a finished production attempt with settled accounting and current project identity',()=>{
+  mkdirSync(join(home,'home'))
+  const project={project_id:'p',workflow_version:'software-v1',status:'active',current_stage:'generating_mvp',desktop_phase:'desktop-implement',desktop_blocked:{reason:'verification-incomplete'}}
+  const report={project_id:'p',session_id:'s',status:'failed',finished_at:new Date().toISOString()}
+  const save=()=>writeFileSync(join(home,'home/projects.json'),JSON.stringify({projects:[project]}))
+  save();writeFileSync(join(home,'monetary-policy.json.state.json'),JSON.stringify({entries:[{status:'reported'}]}))
+  expect(()=>continuationBoundary(home,report)).toThrow('NOT_AT_USER_BOUNDARY')
+  expect(continuationBoundary(home,report,{resumeProduction:true})).toMatchObject({resume_production:true,project_id:'p',session_id:'s'})
+  expect(()=>continuationBoundary(home,{...report,status:'running'},{resumeProduction:true})).toThrow('FINISHED')
+  project.desktop_blocked.reason='user-stop';save()
+  expect(()=>continuationBoundary(home,report,{resumeProduction:true})).toThrow('NOT_AT_USER_BOUNDARY')
+  project.desktop_blocked.reason='verification-incomplete';project.status='archived';save()
+  expect(()=>continuationBoundary(home,report,{resumeProduction:true})).toThrow('NOT_AT_USER_BOUNDARY')
+  project.status='active';save();writeFileSync(join(home,'monetary-policy.json.state.json'),JSON.stringify({entries:[{status:'reserved'}]}))
+  expect(()=>continuationBoundary(home,report,{resumeProduction:true})).toThrow('UNSETTLED')
+})

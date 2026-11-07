@@ -2,6 +2,8 @@
 
 ## 当前方法：允许正常用户交互，禁止外部工程代修
 
+制作中断续跑：已结束的试验、全部结算的旧请求及当前 active/software-v1 制作状态，可在 `prepare-user` 时显式设置 `BLOMA_OBSERVATION_RESUME_PRODUCTION=1`，配合新的 `BLOMA_OBSERVATION_RETEST` 名称和既有用户续跑授权。驱动冻结项目与账本身份，记录一次普通“继续完成原任务”消息，通过原制作入口恢复，再在真实确认卡或已发布产物边界进入用户代理。不清零用量，不改产品或冻结预期，不自动循环续跑，也不恢复用户明确停止、归档或仍在运行的任务。原失败段保留，不能称为原冻结方法一次成功。
+
 用户已明确，阶段确认和基于实际效果的意见属于测试需要；理想流程由Agent模拟真实用户测试制作效果。当前采用“模拟用户交互、无外部工程协助”的口径，不再把需求确认作为整个试验不可逾越的终点。原只观察段的结果和费用保持不变。
 
 新增 `prepare-user` 与 `simulate` 两个阶段，沿用 `software-observation-trial.mjs`，不恢复已删除的旧驾驶器。先完成原始需求的run段，停在awaiting_user；prepare-user读取这一边界及原manifest/策略/项目哈希，独立生成user-runtime.json，记录新的模拟用户授权和方法变化，不覆盖原运行包、报告或账本。simulate在同一项目、会话、费用策略和epoch中继续，独占user-run-claimed.json，不能重复启动。制作方和用户代理共用金额保护及累计请求上限；用户代理费用以simulated-user角色单列，原费用不清零。
