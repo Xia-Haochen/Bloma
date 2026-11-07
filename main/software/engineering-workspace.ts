@@ -1,5 +1,6 @@
 import {ENGINEERING_PARTNER_WORKFLOW} from './engineering-partner-guidance'
 import {buildSoftwareEnvironmentTool} from './environment-tool'
+import { buildQualityFindingsTool } from './quality-findings-tool'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync, copyFileSync, statSync, readdirSync } from 'node:fs'
 import { join, dirname, resolve, relative } from 'node:path'
@@ -63,6 +64,7 @@ export function createEngineeringWorkspaces(projectId:string,productRoot:string,
     if(changed(view))throw Error('ENGINEERING_WORKSPACE_SOURCE_CHANGED')
     const context=JSON.stringify({projectId,parent,child,at:new Date().toISOString(),snapshot,
       goal:brief.positioning,facts:softwareWorkingContext(projectId),development_observations:engineeringObservations(projectId,parent),
+      quality_findings:{tool:'read_quality_findings',note:'读取当前问题原文与证据；编号和历史失败摘要不足以推断具体错因。'},
       host_responsibilities:'宿主维护副本完整性、版本、预算准入和执行回执；它们不是重复调查的待办。',
       requirements:brief.requirements,acceptance:brief.acceptance,constraints:brief.constraints,
       source_statements:brief.lean_brief?.intent_sources??brief.requirements_model?.sources,out_of_scope:brief.out_of_scope,assumptions:brief.assumptions,
@@ -99,7 +101,7 @@ export function createEngineeringWorkspaces(projectId:string,productRoot:string,
       .map(t=>({...t,execute:async(input:Record<string,unknown>,ctx:ToolContext)=>{check(ctx);return runWithProjectRootOverride(view.root,()=>t.execute(input,ctx))}}))
     const environment=buildSoftwareEnvironmentTool(projectId)
     const image=buildSoftwareImageTool(projectId)
-    return [...files,buildProductionContextTool(projectId),{...environment,execute:async(input:Record<string,unknown>,ctx:ToolContext)=>{check(ctx);return environment.execute(input,ctx)}},{...image,execute:async(input:Record<string,unknown>,ctx:ToolContext)=>{check(ctx);return runWithProjectRootOverride(view.root,()=>image.execute(input,ctx))}},{
+    return [...files,buildProductionContextTool(projectId),buildQualityFindingsTool(projectId,check),{...environment,execute:async(input:Record<string,unknown>,ctx:ToolContext)=>{check(ctx);return environment.execute(input,ctx)}},{...image,execute:async(input:Record<string,unknown>,ctx:ToolContext)=>{check(ctx);return runWithProjectRootOverride(view.root,()=>image.execute(input,ctx))}},{
       name:'run_command',description:'在自己的工程研究工作区运行探针，数据使用独立目录；记录实际结果，不签发产品PASS。不要在sources副本或产品中做实验修改，先在本工作区创建探针副本。不是OS沙箱。',
       input_schema:{type:'object',additionalProperties:false,required:['command'],properties:{command:{type:'array',items:{type:'string'}},cwd:{type:'string'},timeout_ms:{type:'integer',minimum:100,maximum:60000}}},
       execute:async(input:Record<string,unknown>,ctx:ToolContext)=>{

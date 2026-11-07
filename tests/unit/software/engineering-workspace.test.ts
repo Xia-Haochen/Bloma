@@ -7,6 +7,7 @@ import { createEngineeringWorkspaces } from '../../../main/software/engineering-
 import { createSoftwareCollaborationPolicy } from '../../../main/software/collaboration-policy'
 import { buildSoftwareAgentTools } from '../../../main/software/agent-tools'
 import { createToolState } from '../../../main/agent/loop/agent-loop'
+import { qualityLedgerPath, saveQualityLedger, type QualityFinding } from '../../../main/software/quality-ledger'
 import { registerParentLoopContext, startDelegation, continueDelegation, findDelegation, getDelegationSummary, disposeParentDelegationState, settleParentDelegationRuns } from '../../../main/agent/delegation/agent-collaboration'
 
 let home:string,old:string|undefined,project:ReturnType<typeof createProject>
@@ -92,3 +93,22 @@ it('gives the peer the shared environment inspector and puts current host facts 
   expect(lease.facts()).toMatchObject({input_intact:true})
   lease.release()
 },30000)
+
+it('lets an owned peer read the actual quality finding without changing evidence or acquiring review authority',async()=>{
+  const finding:QualityFinding={id:'specific-finding',review:'review',identity:{source:'old-source',target:'target',environment:'environment'},
+    requirement:'F-001',expected_source:'保存失败必须可见',category:'behavior',severity:'high',location:'storage.js',
+    trigger:'磁盘写入失败后保存',evidence:'错误被捕获但界面显示保存成功',reproduction:'拒绝磁盘写入后按保存',unknowns:'修复后未复测',disposition:'suspected',checks:[]}
+  saveQualityLedger(project.project_id,{version:1,reviews:[],findings:[finding]})
+  const before=readFileSync(qualityLedgerPath(project.project_id),'utf8')
+  const work=createEngineeringWorkspaces(project.project_id,project.root_path,'parent'),lease=work.prepare('child',args)
+  const tools=work.tools('child'),read=tools.find(t=>t.name==='read_quality_findings')!
+  expect(JSON.parse((await read.execute({finding_id:finding.id},ctx())).output)).toEqual({finding})
+  expect(JSON.parse(readFileSync(join(work.root('child'),'context.json'),'utf8')).quality_findings.tool).toBe(read.name)
+  expect(tools.map(t=>t.name)).not.toContain('submit_quality_findings')
+  expect(tools.map(t=>t.name)).not.toContain('start_quality_review')
+  await expect(read.execute({finding_id:finding.id},ctx('another-child'))).rejects.toThrow('ENGINEERING_WORKSPACE_OWNER_MISMATCH')
+  await expect(read.execute({finding_id:'missing'},ctx())).rejects.toThrow('QUALITY_FINDING_UNKNOWN')
+  expect(readFileSync(qualityLedgerPath(project.project_id),'utf8')).toBe(before)
+  lease.release()
+  await expect(read.execute({finding_id:finding.id},ctx())).rejects.toThrow('ENGINEERING_WORKSPACE_INACTIVE')
+})

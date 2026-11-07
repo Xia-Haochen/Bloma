@@ -1,4 +1,5 @@
 import { readEngineeringDesign, ENGINEERING_GUIDANCE, ENGINEERING_REVIEW_SCHEMA, parseEngineeringReview } from './engineering-design'
+import { buildQualityFindingsTool } from './quality-findings-tool'
 import {softwareVerificationFingerprint} from '../desktop/verification-fingerprint'
 import { deliveryQualityGate, deliveryQualityBlock } from './delivery-qualification'
 import { withAbort } from '../agent/loop/agent-loop'
@@ -272,7 +273,7 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       if (Object.keys(input).some(k => k !== 'debug_session_id') || input.debug_session_id !== undefined && typeof input.debug_session_id !== 'string') throw Error('VISUAL_INPUT_INVALID')
       return { output: JSON.stringify(await begin(ctx, 'visual', input.debug_session_id as string | undefined)) }
     } },
-    { name: 'read_quality_findings', description: '默认读取当前必修/待复现队列和审阅状态；历史建议保留但不自动扩大范围。finding_id按需读取单条完整历史证据。', input_schema: { type: 'object', additionalProperties:false, properties: {finding_id:{type:'string'}} }, execute: async (input, ctx) => { assertParent(ctx); const block = await deliveryQualityBlock(projectId,ctx.signal,activeRoute), current = await identity(projectId, ctx.signal), ledger = readQualityLedger(projectId); if(input.finding_id!==undefined){const finding=ledger.findings.find(f=>f.id===input.finding_id);if(!finding)throw Error('QUALITY_FINDING_UNKNOWN');return{output:JSON.stringify({finding})}}return { output: JSON.stringify({ ...qualityWorkQueue(applicableQualityLedger(projectId),current,block,rulesVersion(projectId),independentDesignVersion(projectId)) }) } } }, check]
+    buildQualityFindingsTool(projectId, assertParent, () => activeRoute), check]
   const reviewProtocol=(kind?:'code'|'visual')=>childProtocol.map(tool=>{
     if(!kind||tool.name!=='submit_quality_findings')return tool
     const schema=tool.input_schema as {properties:Record<string,unknown>;required?:string[]}
