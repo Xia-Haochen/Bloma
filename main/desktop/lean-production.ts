@@ -1,9 +1,12 @@
+import { serializeModelQueries } from '../agent/loop/query-queue'
+import { createEngineeringPartner } from '../software/engineering-partner'
+import { engineeringSourceVersion, engineeringObservationVersion } from '../software/engineering-workspace'
 import {createToolState} from '../agent/loop/agent-loop'
 import { checkpointProjectHistory } from '../coding/project-git'
 import { locallyVerifiedSoftware } from '../software/verification'
 import {ModelRequestRefusal} from '../platform/llm/model-request-refusal'
 import {applyApprovedNativeCorrections} from '../software/native-gui-registration'
-import {currentFundedExecutionWindow,fundedExecutionLimits,configureSoftwareExecutionLimits} from '../software/execution-limits'
+import {currentFundedExecutionWindow,fundedExecutionLimits,configureSoftwareExecutionLimits,executionWindowFacts} from '../software/execution-limits'
 import { productDesignPolicy } from '../project/product-design-policy'
 import { beginProjectAssignment } from '../software/task-assignment'
 import { readFileSync, existsSync } from 'node:fs'
@@ -29,7 +32,7 @@ import { sessionMaterials } from '../platform/attachments/material-context'
 import { buildLeanGuiTool } from './lean-gui-tool'
 import { buildLeanCliTool, cliSuitePath } from './lean-cli-check'
 import { guiSuitePath } from './gui-acceptance'
-import { readLaunchDeclaration, runLaunchSmoke } from './launch-smoke'
+import { declaredEntryFacts, readLaunchDeclaration, runLaunchSmoke } from './launch-smoke'
 import { createHash, randomUUID } from 'node:crypto'
 import { finishCorrectionSession, hasActiveCorrectionSession, settleCorrectionTeardown } from './correction-session'
 import { readCorrectionSubmission, clearCorrectionSubmission } from './correction-outbox'
@@ -155,6 +158,8 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     saveSoftwareRunState({ projectId: input.projectId, sessionId: input.sessionId, runId, status, ...patch })
   }
   const collaboration = createSoftwareCollaborationPolicy(input.projectId, project.root_path, input.sessionId)
+  const pairedEngineering=process.env.BLOMA_ENGINEERING_PARTNER==='1'
+  const partner = createEngineeringPartner(pairedEngineering,()=>engineeringSourceVersion(project.root_path)+prdScopeFingerprint(readPrdBackplane(input.projectId)),()=>engineeringObservationVersion(input.projectId,input.sessionId))
   const quality = createQualityReview(input.projectId, input.sessionId, collaboration, input.env)
   const observeRuntime = (observation: import('../agent/loop/runtime-observation').RuntimeObservation) => {
     const review = readQualityLedger(input.projectId).reviews.find(r => r.child === observation.session_id)
@@ -224,7 +229,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   let monetaryFailure: unknown
   // Pi persists an error string. Retain this run's typed refusal at the query
   // boundary so its cost breakdown survives the native session adapter.
-  const query: SDKQuery = quality.wrapQuery(async function* (prompt, options) {
+  const guardedQuery: SDKQuery = async function* (prompt, options) {
     try { yield* budgetedQuery(prompt, { ...options, requestGuard: request => {
       options.requestGuard?.(request)
       try {
@@ -238,7 +243,8 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
       } catch { /* observational only; never store raw request bodies or credentials */ }
     } }) }
     catch (error) { if (monetaryStopMessage(error)) monetaryFailure = error; throw error }
-  })
+  }
+  const query=quality.wrapQuery(pairedEngineering?serializeModelQueries(guardedQuery):guardedQuery)
   const baseTools = buildSoftwareAgentTools(input.projectId, 'parent', collaboration,
     url => emit('software_preview_changed', { preview_url: url ?? null }), () => emit('software_suggestions_changed', {}),()=>emit('longterm_changed',{summary:findProject(input.projectId).longterm_summary}))
   let scopePending = false
@@ -246,6 +252,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     ...quality.parentTools,
     buildLeanScopeTool(input.projectId, input.content, emit, () => { scopePending = true }),
     brief.lean_brief.ui === 'required' ? buildLeanGuiTool(input.projectId) : buildLeanCliTool(input.projectId)])
+  const liveContext=()=>({delivery:{form:brief.lean_brief?.delivery,ui:brief.lean_brief?.ui,distribution:brief.lean_brief?.distribution??'local'},declared_entry:declaredEntryFacts(project.root_path),resources:executionWindowFacts()})
   const system = [
     SOFTWARE_ENGINEERING_INSTRUCTIONS,
     `宿主恢复检查点：${JSON.stringify(historyBase)}。这是版本恢复事实，不是工程提交或通过判定；由你检查产品仓库、处理可恢复问题并管理有意义的提交。`,
@@ -273,13 +280,16 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     delegationMaxTurns: 24, delegationTurnLimits: { review: 48 }, delegationTurnCaps: { review: 48 }, permissionMode: 'allow-all', temperature: .1, system, editFormat: 'diff', runtimeScope: 'lean-build',
     executionScope: budget.executionScope, materials: sessionMaterials(input.projectId, input.sessionId), publish: emit,
     childMaterialsBuilder: child => quality.isQualityChild(child) ? undefined : sessionMaterials(input.projectId, input.sessionId),
-    onRuntimeObservation: observeRuntime,
+    onRuntimeObservation: observeRuntime,liveContext,
+    childWorkspace: child => collaboration.engineering.has(child)?collaboration.engineering.root(child):undefined,
+    childMaxTokens: child => collaboration.engineering.has(child)?Math.min(input.maxTokens,16384):undefined,
+    childRuntimeScope: child => collaboration.engineering.has(child)?'engineering-peer':'lean-build',
     ...(({ maxConcurrentDelegations: 2, allowChannelOverrides: false, delegationSummaryLimit: 3000,
       prepareDelegation: value => {
         const lease = quality.prepare(value)
         recordEvaluationEvent(input.projectId, 'delegation_started', {
           session_id: value.childSessionId, parent_session_id: input.sessionId,
-          source: quality.isQualityChild(value.childSessionId) ? 'required_quality' : 'model_selected',
+          source: quality.isQualityChild(value.childSessionId) ? 'required_quality' : collaboration.engineering.has(value.childSessionId)?'independent_engineering':'model_selected',
           reason: value.args.expectedOutput ?? value.args.task,
           task: value.args.task, role: value.args.role ?? 'implement', write_paths: value.args.writePaths ?? [],
           max_children: 2, budget_scope: budget.executionScope,
@@ -292,7 +302,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
         } }
       },
       childSystemBuilder: (_role: import('../../shared/delegation-run-context').DelegationRunRole, child: string) =>
-        quality.system(child) ?? (collaboration.experiments.has(child) ? `你负责独立实验。先核对输入和关键未知，查必要资料，再运行最小可判定探针；失败先定位类别再调整，不原样重试。${collaboration.experiments.describe(child)}。可写文件和执行命令仅用于实验，不修改正式项目、不递归委派。用record_experiment_result交接方法、结论及真实产物；supports/refutes是解释，不是产品PASS。` : `完成主负责人交付的具体子任务，先读负责人指出的当前设计和相关文件，沿用已确定职责与接口；发现设计不成立时回报依据，由负责人更新设计。项目根：${project.root_path}。文件权限：${collaboration.describe(child)}。仅在归属范围内修改；不运行命令、不再委派、不修改目标/验收输入。需要跨边界修改时回报主负责人。简短交接实际修改、检查和未验证项，不自报产品通过。全局约束：${JSON.stringify(brief.constraints)}`) })),
+        quality.system(child) ?? (collaboration.engineering.has(child) ? collaboration.engineering.describe(child) : collaboration.experiments.has(child) ? `你负责独立实验。先核对输入和关键未知，查必要资料，再运行最小可判定探针；失败先定位类别再调整，不原样重试。${collaboration.experiments.describe(child)}。可写文件和执行命令仅用于实验，不修改正式项目、不递归委派。用record_experiment_result交接方法、结论及真实产物；supports/refutes是解释，不是产品PASS。` : `完成主负责人交付的具体子任务，先读负责人指出的当前设计和相关文件，沿用已确定职责与接口；发现设计不成立时回报依据，由负责人更新设计。项目根：${project.root_path}。文件权限：${collaboration.describe(child)}。仅在归属范围内修改；不运行命令、不再委派、不修改目标/验收输入。需要跨边界修改时回报主负责人。简短交接实际修改、检查和未验证项，不自报产品通过。全局约束：${JSON.stringify(brief.constraints)}`) })),
     childToolsBuilder: (id, role, _format, child) => {
       const childTools = buildSoftwareAgentTools(id, role, collaboration,undefined,undefined,undefined,child)
       return role === 'review' ? quality.reviewTools(childTools, child) : childTools
@@ -301,10 +311,16 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   runSignal.addEventListener('abort', cancelChildren, { once: true })
   let task = input.observedSoftwareVersion ? trialFeedbackText(input.projectId, input.observedSoftwareVersion, input.content) : input.content
   let initial = true
-  const waitForProductionChildren=(ctx:import('../agent/loop/agent-loop').ToolContext)=>guardDispatcherCompletion(ctx,undefined,undefined,quality.acceptedHandoff)
+  const waitForProductionChildren=async(ctx:import('../agent/loop/agent-loop').ToolContext)=>{
+    const waiting=await guardDispatcherCompletion(ctx,undefined,undefined,(delegation,child)=>quality.acceptedHandoff(delegation,child)||partner.owns(delegation))
+    return [waiting,partner.take(ctx)].filter(Boolean).join('\n')||undefined
+  }
   const advanceCloseout = async (ctx: import('../agent/loop/agent-loop').ToolContext, locallyChecked = false) => {
     const waiting = await waitForProductionChildren(ctx)
     if (waiting) return waiting
+    partner.closeout(ctx)
+    const peerWaiting=await waitForProductionChildren(ctx)
+    if(peerWaiting)return peerWaiting
     // A maker stopping is not evidence of a stable candidate. Let the common
     // verifier/repair loop observe failures before purchasing any review.
     if (!locallyChecked && !await recentSoftwareVerification(input.projectId, input.requestId, ctx.signal)) return
@@ -332,6 +348,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     }
   }
   try {
+    if(!initialBudgetStop)partner.begin({projectId:input.projectId,sessionId:input.sessionId,requestId:input.requestId,signal:runSignal,state:createToolState()})
     for (;;) {
       runSignal.throwIfAborted()
       updateProject(input.projectId, { status: 'active', desktop_phase: 'desktop-implement', current_stage: 'generating_mvp', desktop_blocked: undefined })
@@ -351,7 +368,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
           if(feedback)task+='\n'+feedback;else hostCompleted=true
           }
         }
-        if(!hostCompleted)result = await runAgentLoop({ runtimeScope: 'lean-build', system, task, query, env: input.env, tools,
+        if(!hostCompleted)result = await runAgentLoop({ liveContext,runtimeScope: 'lean-build', system, task, query, env: input.env, tools,
         onRuntimeObservation: observeRuntime,
         projectId: input.projectId, sessionId: input.sessionId, requestId: input.requestId, signal: runSignal,
         maxTokens: input.maxTokens, maxTurns, permissionMode: 'allow-all', workMode: 'implementation', executionScope: budget.executionScope,
@@ -360,6 +377,9 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
         shouldPause: () => scopePending,
         beforeComplete: advanceCloseout,
         afterTools: async (ctx, calls) => {
+          if(!scopePending)partner.observe(ctx,calls)
+          const peerFeedback=partner.take(ctx)
+          if(peerFeedback)return{feedback:peerFeedback}
           // Only an actual full verification for the exact current inputs
           // starts closeout. Partial stage checks and self-reported success do not.
           if(scopePending||!calls.some(c=>c.status==='ok'&&!c.pending&&['verify_app','inspect_app'].includes(c.name)))return

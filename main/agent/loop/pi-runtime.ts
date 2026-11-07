@@ -1,3 +1,5 @@
+import { resolveProjectRoot } from '../../../shared/project-root-override'
+import { loopThinking } from './loop-thinking'
 import { join } from 'node:path'
 import type { AgentMessage, AgentToolResult, AgentTurnContext } from '@earendil-works/pi-agent-core'
 import type { AgentSession, ToolDefinition } from '@earendil-works/pi-coding-agent'
@@ -30,9 +32,9 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
   const contextPolicy = await resolveModelContext(input.env, input.maxTokens)
   input = {...input,maxTokens:Math.min(input.maxTokens,contextPolicy.maxOutputTokens)}
   let cwd: string
-  try { cwd = findProject(input.projectId).root_path || process.cwd() } catch { cwd = process.cwd() }
+  try { cwd = resolveProjectRoot(input.projectId,()=>findProject(input.projectId).root_path) || process.cwd() } catch { cwd = process.cwd() }
   // C/V receive only their independently scoped materials, never maker skills.
-  const activeSkills=await buildActiveSkills(cwd,input.accountingRole==='review',input.runtimeScope==='lean-build',
+  const activeSkills=await buildActiveSkills(cwd,(input.accountingRole==='review'||input.runtimeScope==='engineering-peer'),input.runtimeScope==='lean-build',
     input.runtimeScope==='lean-build'&&!input.delegationDepth?['software-engineering']:[])
   input={...input,system:[input.system,activeSkills.prompt].filter(Boolean).join('\n\n'),tools:[...input.tools,...activeSkills.tools.filter(tool=>!input.tools.some(existing=>existing.name===tool.name))]}
   const scope = input.runtimeScope === 'lean-build' ? 'lean-build' : `${input.runtimeScope ?? 'default'}:${input.executionScope ?? ''}`
@@ -142,7 +144,7 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
       },
     }))
     ;({ session } = await createAgentSession({ cwd, agentDir, modelRuntime, settingsManager, resourceLoader,
-      sessionManager: opened.manager, model, thinkingLevel: input.thinkingLevel ?? 'low', noTools: 'all',
+      sessionManager: opened.manager, model, thinkingLevel: loopThinking(input), noTools: 'all',
       tools: customTools.map(tool => tool.name), excludeTools: ['mcp__*', 'codemode', 'tool_search'], customTools }))
     const activeSession = session
     const expectedTools = input.tools.map(tool => tool.name).sort()

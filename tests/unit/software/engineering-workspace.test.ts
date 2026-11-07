@@ -1,0 +1,81 @@
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { beforeEach, afterEach, expect, it } from 'vitest'
+import { createProject } from '../../../main/project/project-service'
+import { createEngineeringWorkspaces } from '../../../main/software/engineering-workspace'
+import { createSoftwareCollaborationPolicy } from '../../../main/software/collaboration-policy'
+import { buildSoftwareAgentTools } from '../../../main/software/agent-tools'
+import { createToolState } from '../../../main/agent/loop/agent-loop'
+import { registerParentLoopContext, startDelegation, continueDelegation, findDelegation, getDelegationSummary, disposeParentDelegationState, settleParentDelegationRuns } from '../../../main/agent/delegation/agent-collaboration'
+
+let home:string,old:string|undefined,project:ReturnType<typeof createProject>
+beforeEach(()=>{old=process.env.PROMA_HOME;home=mkdtempSync(join(tmpdir(),'bloma-engineering-peer-'));process.env.PROMA_HOME=home;project=createProject({request_id:'r',mode:'quick'},{workflowVersion:'software-v1'});writeFileSync(join(project.root_path,'app.js'),'original')})
+afterEach(async()=>{disposeParentDelegationState('parent');await settleParentDelegationRuns('parent');if(old===undefined)delete process.env.PROMA_HOME;else process.env.PROMA_HOME=old;rmSync(home,{recursive:true,force:true,maxRetries:5,retryDelay:100})})
+const ctx=(sessionId='child')=>({projectId:project.project_id,sessionId,requestId:'r',signal:AbortSignal.timeout(30000),state:createToolState()})
+const args={task:'核对方案',role:'research' as const,readOnly:true,independentWorkspace:true}
+
+it('keeps independent notes, immutable versioned source views, and reports changed evidence on continuation',async()=>{
+  mkdirSync(join(project.root_path,'data'));writeFileSync(join(project.root_path,'data/private.json'),'private');writeFileSync(join(project.root_path,'.env'),'SECRET')
+  const work=createEngineeringWorkspaces(project.project_id,project.root_path,'parent'),lease=work.prepare('child',args),root=work.root('child')
+  const first=JSON.parse(readFileSync(join(root,'context.json'),'utf8'))
+  expect(first.files.map((f:{path:string})=>f.path)).not.toContain('data/private.json');expect(existsSync(join(root,first.snapshot,'.env'))).toBe(false)
+  const tools=work.tools('child'),write=tools.find(t=>t.name==='write_file')!
+  expect((await write.execute({path:'notes.md',content:'independent diagnosis'},ctx())).isError).not.toBe(true)
+  expect(readFileSync(join(root,'notes.md'),'utf8')).toBe('independent diagnosis');expect(existsSync(join(project.root_path,'notes.md'))).toBe(false)
+  const run=await tools.find(t=>t.name==='run_command')!.execute({command:['node','-e',"require('fs').writeFileSync('probe.txt','probe');console.log(process.env.APP_DATA_DIR)"]},ctx())
+  expect(run.isError).toBe(false);expect(lease.facts()).toMatchObject({run_count:1,recent_runs:[{exit_code:0,product_verified:false}]});expect(JSON.parse(run.output).product_verified).toBe(false)
+  expect(readFileSync(join(root,'probe.txt'),'utf8')).toBe('probe');expect(existsSync(join(project.root_path,'probe.txt'))).toBe(false)
+  let refused=false;try{refused=Boolean((await write.execute({path:`notes/../${first.snapshot}/app.js`,content:'tampered'},ctx())).isError)}catch{refused=true}
+  expect(refused).toBe(true);expect(readFileSync(join(root,first.snapshot,'app.js'),'utf8')).toBe('original')
+  writeFileSync(join(project.root_path,'added.js'),'added');expect(JSON.stringify(lease.facts())).toContain('"source_changed":true');
+  writeFileSync(join(project.root_path,'app.js'),'new version');expect(JSON.stringify(lease.facts())).toContain('"source_changed":true');lease.release()
+  const next=work.prepare('child',args),second=JSON.parse(readFileSync(join(root,'context.json'),'utf8'))
+  expect(second.snapshot).not.toBe(first.snapshot);expect(JSON.parse(readFileSync(join(root,first.snapshot+'.context.json'),'utf8')).snapshot).toBe(first.snapshot);expect(readFileSync(join(root,first.snapshot,'app.js'),'utf8')).toBe('original')
+  expect(readFileSync(join(root,second.snapshot,'app.js'),'utf8')).toBe('new version');expect(readFileSync(join(root,'notes.md'),'utf8')).toBe('independent diagnosis');next.release()
+})
+
+it('runs the actual delegated Pi session in its own workspace without producer prompt or skills',async()=>{
+  const policy=createSoftwareCollaborationPolicy(project.project_id,project.root_path,'parent');let calls=0;const observations:any[]=[]
+  registerParentLoopContext('parent',{env:{BLOMA_LOOP_THINKING:'high'},query:async function*(_prompt,options){
+    expect(JSON.stringify(options.messages)).not.toContain('PRODUCER_PRIVATE_SUCCESS');expect(options.thinkingLevel).toBe('high');expect(options.maxTokens).toBe(2048)
+    yield{type:'assistant',message:{role:'assistant',content:++calls===1?[{type:'tool_use',id:'note',name:'write_file',input:{path:'notes.md',content:'independent notes'}}]:[{type:'text',text:'独立意见，不签发通过。'}]}}
+    yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
+  },maxTokens:640000,childMaxTokens:()=>2048,maxTurns:5,delegationMaxTurns:5,permissionMode:'allow-all',temperature:.1,system:'PRODUCER_PRIVATE_SUCCESS',editFormat:'diff',
+    prepareDelegation:policy.prepare,childWorkspace:child=>policy.engineering.root(child),childRuntimeScope:()=> 'engineering-peer',
+    childSystemBuilder:(_role,child)=>policy.engineering.describe(child),childToolsBuilder:(id,role,_format,child)=>buildSoftwareAgentTools(id,role,policy,undefined,undefined,undefined,child),
+    onRuntimeObservation:value=>observations.push(value),publish:()=>{}})
+  const started=startDelegation(ctx('parent'),args),record=findDelegation('parent',started.delegation_id)!
+  const own=policy.engineering.root(started.child_session_id)
+  await record.completion;await settleParentDelegationRuns('parent')
+  expect(record.status,record.error).toBe('completed');
+  expect(getDelegationSummary(record).workspace_facts).toMatchObject({input_intact:true,run_count:0})
+  writeFileSync(join(project.root_path,'app.js'),'updated after independent opinion')
+  continueDelegation(ctx('parent'),started.delegation_id,'根据新版本继续核对')
+  await record.completion;await settleParentDelegationRuns('parent');expect(record.status,record.error).toBe('completed')
+  const latest=JSON.parse(readFileSync(join(own,'context.json'),'utf8'))
+  expect(readFileSync(join(own,latest.snapshot,'app.js'),'utf8')).toBe('updated after independent opinion')
+  expect(existsSync(join(project.root_path,'notes.md'))).toBe(false)
+  expect(observations[0].skills.names).toEqual([]);expect(observations[0].skills.available).toEqual([])
+  expect(readFileSync(join(own,'notes.md'),'utf8')).toBe('independent notes')
+},60000)
+
+it('invalidates a probe interpretation if its command changes the input copy, while leaving the product intact',async()=>{
+  const work=createEngineeringWorkspaces(project.project_id,project.root_path,'parent'),lease=work.prepare('child',args),root=work.root('child')
+  const context=JSON.parse(readFileSync(join(root,'context.json'),'utf8')),tools=work.tools('child')
+  const result=await tools.find(t=>t.name==='run_command')!.execute({command:['node','-e',`require('fs').writeFileSync(${JSON.stringify(context.snapshot+'/app.js')},'changed copy')`]},ctx())
+  expect(result.isError).toBe(true);expect(JSON.parse(result.output)).toMatchObject({input_intact:false,product_verified:false,code:'ENGINEERING_INPUT_CHANGED'})
+  expect(readFileSync(join(project.root_path,'app.js'),'utf8')).toBe('original')
+  expect(JSON.stringify(lease.facts())).toContain('"input_intact":false');lease.release()
+})
+
+it('views its own probe images without acquiring access to product image paths',async()=>{
+  const work=createEngineeringWorkspaces(project.project_id,project.root_path,'parent'),lease=work.prepare('child',args),root=work.root('child')
+  const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1F0AAAAASUVORK5CYII=','base64')
+  writeFileSync(join(root,'probe.png'),png);writeFileSync(join(project.root_path,'outside.png'),png)
+  const image=work.tools('child').find(t=>t.name==='view_image')!
+  const viewed=await image.execute({path:'probe.png'},ctx())
+  expect('images' in viewed ? viewed.images : undefined).toHaveLength(1)
+  expect((await image.execute({path:join(project.root_path,'outside.png')},ctx())).isError).toBe(true)
+  lease.release()
+})

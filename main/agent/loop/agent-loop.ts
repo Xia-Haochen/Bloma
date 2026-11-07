@@ -180,6 +180,8 @@ export interface AgentLoopInput {
   runtimeScope?: string
   /** Host prerequisite check after a no-tool final response; feedback keeps the loop open. */
   beforeComplete?: (ctx: ToolContext) => Promise<string | undefined>
+  /** Ephemeral host facts, refreshed for each request; never appended to history. */
+  liveContext?: () => unknown
   /** Host-owned closeout after actual tool results, without buying a model turn
    * merely to ask it to announce completion. Undefined keeps normal execution. */
   afterTools?: (ctx: ToolContext, calls: AgentLoopToolCallRecord[]) => Promise<{ complete?: boolean; feedback?: string; verification?: ToolFeedback } | undefined>

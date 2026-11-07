@@ -353,3 +353,19 @@ describe('real upstream Pi AgentSession integration', () => {
     await expect(runAgentLoop(input(empty, { sessionId: 'empty' }))).rejects.toThrow('EMPTY_MODEL_STREAM')
   })
 })
+
+it.each(['off','low','high','max'] as const)('uses the same %s setting for requests and runtime observations',async level=>{
+  const q=scripted([[text('finished')]]),observations:any[]=[]
+  await runAgentLoop(input(q.query,{env:{BLOMA_LOOP_THINKING:level},onRuntimeObservation:o=>observations.push(o)}))
+  expect(q.received[0].thinkingLevel).toBe(level)
+  expect(observations[0].settings.thinking).toBe(level)
+})
+it('refreshes ephemeral host facts without accumulating them in the Pi transcript',async()=>{
+  let remaining=10
+  const q=scripted([[call('step','step')],[text('finished')]])
+  await runAgentLoop(input(q.query,{tools:[tool('step',async()=>{remaining=3;return{output:'executed'}})],liveContext:()=>({remaining})}))
+  const messages=q.received[1].messages!
+  const facts=messages.filter(m=>JSON.stringify(m.content).includes('当前宿主事实'))
+  expect(facts).toHaveLength(1);expect(JSON.stringify(facts)).toContain('remaining');expect(JSON.stringify(facts)).toContain('3')
+  expect(readFileSync(nativeFile(),'utf8')).not.toContain('当前宿主事实')
+})

@@ -21,10 +21,14 @@ export function validateSoftwareCommand(value: unknown): string[] {
   if (!Array.isArray(value) || !value.length || value.length > 128 || value.some(x => typeof x !== 'string' || x.includes('\0'))
     || value.join('').length > 64000 || !value[0].trim()) throw new Error('COMMAND_INVALID_ARGUMENTS')
   const command = value as string[], name = basename(command[0]).replace(/\.(exe|cmd|bat)$/i, '').toLowerCase()
+  const globalFlag=(arg:string)=>['--global','--global=true','-g'].includes(arg)
+  let operationIndex=1
+  while(globalFlag(command[operationIndex]??''))operationIndex++
+  const globalRead=['ls','list','root','prefix'].includes(command[operationIndex]?.toLowerCase())
   if (/[|&<>\r\n]/.test(command[0])) throw new Error('COMMAND_EXECUTABLE_REQUIRED')
   if (['sudo', 'runas', 'format', 'diskpart', 'reg', 'regedit', 'shutdown', 'reboot', 'bcdedit', 'msiexec', 'schtasks'].includes(name)
     || name === 'git' && ['push', 'clean'].includes(command[1]?.toLowerCase())
-    || ['npm', 'pnpm', 'yarn'].includes(name) && (command.some(x => ['--global', '-g'].includes(x)) || ['publish', 'login', 'logout', 'config', 'unpublish'].includes(command[1]?.toLowerCase()))
+    || ['npm', 'pnpm', 'yarn'].includes(name) && (command.some(globalFlag)&&!globalRead || ['publish', 'login', 'logout', 'config', 'unpublish'].includes(command[1]?.toLowerCase()))
     || ['cmd', 'powershell', 'pwsh', 'sh', 'bash'].includes(name) && /(?:Remove-Item|Remove-Computer|Set-ExecutionPolicy|Invoke-WebRequest.+\|\s*(?:iex|Invoke-Expression)|\brm\s+-rf|\bdel\s+\/[sq])/i.test(command.join(' '))) {
     throw new Error('COMMAND_REQUIRES_SEPARATE_AUTHORIZATION: 系统修改、外发发布或破坏性清理不属于普通项目构建')
   }

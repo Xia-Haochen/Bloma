@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { getPromaHome } from '../../storage/config-paths'
 import { writeTextFileAtomic } from '../../storage/json-store'
 import { mainRootDir } from '../platform/paths'
-import { readLaunchDeclaration } from './launch-smoke'
+import { readLaunchDeclaration, supportsNativeGuiAcceptance } from './launch-smoke'
 import { buildDriverEnv, execFileDriverSpawn, resolveDriverVenvCommand, type DriverSpawn } from './process-driver'
 import { verificationFingerprint } from './verification-fingerprint'
 import { GUI_ACTION_KINDS } from './gui-tool-contract'
@@ -136,7 +136,7 @@ export async function runGuiAcceptance(options: { projectId: string; root: strin
     const root = realpathSync(options.root)
     const launch = readLaunchDeclaration(root)
     if (suite.native_tests) {
-      if (!isSoftwareProject(options.projectId) || !launch?.ok || launch.launch.schema_version !== 2 || !['electron','browser'].includes(launch.launch.ui??'')) throw Error('GUI_NATIVE_RUNTIME_UNSUPPORTED')
+      if (!isSoftwareProject(options.projectId) || !launch?.ok || !supportsNativeGuiAcceptance(launch.launch)) throw Error('GUI_NATIVE_RUNTIME_UNSUPPORTED')
       const { runNativeGuiTests } = await import('../software/native-gui-observer')
       Object.assign(result,await runNativeGuiTests({projectId:options.projectId,root,launch:launch.launch,suite,signal:options.signal}))
     } else if (launch?.ok && launch.launch.schema_version === 2 && ['electron', 'browser'].includes(launch.launch.ui ?? '')) {

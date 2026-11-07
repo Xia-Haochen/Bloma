@@ -55,6 +55,19 @@ export type LaunchDeclarationParse =
   | { ok: true; launch: LaunchDeclaration }
   | { ok: false; error: string }
 
+/** This is adapter compatibility, not evidence that an application runs. */
+export function supportsNativeGuiAcceptance(launch: LaunchDeclaration) {
+  return launch.schema_version===2 && (launch.ui==='browser'||launch.ui==='electron')
+}
+export function declaredEntryFacts(root:string) {
+  const declared=readLaunchDeclaration(root)
+  if(!declared)return{declared:false}
+  if(!declared.ok)return{declared:true,valid:false,error:declared.error}
+  return{declared:true,valid:true,ui:declared.launch.ui,mode:declared.launch.mode,
+    native_js_acceptance_supported:supportsNativeGuiAcceptance(declared.launch),
+    note:'仅说明已实现验收适配器的兼容性，不证明运行时可用或产品通过。其他验证方式按对应契约核对。'}
+}
+
 /** 解析 LAUNCH.json（纯函数）：schema_version=1 / command 非空字符串数组 / window_title 可选。 */
 export function parseLaunchDeclaration(raw: string): LaunchDeclarationParse {
   let parsed: unknown

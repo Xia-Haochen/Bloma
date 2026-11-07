@@ -1,3 +1,4 @@
+import { runWithProjectRootOverride } from '../../../shared/project-root-override'
 import { randomUUID } from 'node:crypto'
 import { acquireChildRunContext, formatWorktreeNote, invokeChildLoopWithContext, summarizeChildResult, buildChildSystemPrompt, buildDelegationPrompt } from './child-run-context';
 
@@ -66,6 +67,7 @@ import type { DelegationRunRole as DelegationRole } from '../../../shared/delega
 export type DelegationStatus = 'running' | 'completed' | 'failed' | 'cancelled'
 
 export interface DelegateAgentArgs {
+  independentWorkspace?: boolean
   experiment?: { criterion: string; inputs?: string[] }
   writePaths?: string[]
   readOnly?: boolean
@@ -87,6 +89,7 @@ export interface StartDelegationResult {
 }
 
 export interface DelegationSummary {
+  workspace_facts?: unknown
   task_handoff?: TaskHandoff
   delegation_id: string
   role: DelegationRole
@@ -109,8 +112,9 @@ export interface AskSignal {
 }
 
 export interface DelegationRecord {
-  assignment?: { writePaths?: string[]; readOnly?: boolean; experiment?: DelegateAgentArgs['experiment'] }
-  workspaceLease?: { release: () => void; completionNote?: () => string }
+  assignment?: { writePaths?: string[]; readOnly?: boolean; experiment?: DelegateAgentArgs['experiment']; independentWorkspace?: boolean }
+  workspaceLease?: { release: () => void; completionNote?: () => string; facts?:()=>unknown }
+  workspaceFacts?:()=>unknown
   taskHandoff?: TaskHandoff
   delegationId: string
   parentSessionId: string
@@ -229,8 +233,9 @@ export function startDelegation(parent: ToolContext, args: DelegateAgentArgs): S
     askSignal: createAskSignal(),
     channelOverride: resolveDelegationChannelOverride(args) ?? undefined,
   }
-  record.assignment = { writePaths: args.writePaths, readOnly: args.readOnly, experiment: args.experiment }
+  record.assignment = { writePaths: args.writePaths, readOnly: args.readOnly, experiment: args.experiment, independentWorkspace: args.independentWorkspace }
   record.workspaceLease = parentCtx.prepareDelegation?.({ parent, args, childSessionId, delegationId })
+  record.workspaceFacts=record.workspaceLease?.facts
   delegations.set(delegationId, record)
   ensureDelegationWatchStarted()
   // delegation-persistence 阶段 1（2026-08-28）：子会话索引写归属 meta——重启后
@@ -340,12 +345,13 @@ async function runChildLoop(opts: {
     accountingRole: role,
     projectId: parent.projectId,
     requestId: childRequestId,
-    maxTokens: record.channelOverride?.maxTokens ?? parentCtx.maxTokens,
+    maxTokens: Math.min(record.channelOverride?.maxTokens ?? parentCtx.maxTokens,parentCtx.childMaxTokens?.(record.childSessionId) ?? Number.MAX_SAFE_INTEGER),
     maxTurns,
     ...(role === 'implement' && parentCtx.executionScope ? { workMode: 'implementation' as const } : {}),
     executionScope: parentCtx.executionScope,
 
-    runtimeScope: parentCtx.runtimeScope,
+    liveContext: parentCtx.liveContext,
+    runtimeScope: parentCtx.childRuntimeScope?.(record.childSessionId) ?? parentCtx.runtimeScope,
     onRuntimeObservation: parentCtx.onRuntimeObservation,
     permissionMode: parentCtx.permissionMode,
     delegationDepth: parent.state.delegation_depth + 1,
@@ -363,7 +369,8 @@ async function runChildLoop(opts: {
       ? (info) => parentCtx.onChildCompaction!(info, { sessionId: record.childSessionId, requestId: childRequestId, role })
       : undefined,
   })
-  const { result, meta } = await invokeChildLoopWithContext(runContext, invoke)
+  const independentRoot=parentCtx.childWorkspace?.(record.childSessionId)
+  const { result, meta } = await invokeChildLoopWithContext(runContext, independentRoot?()=>runWithProjectRootOverride(independentRoot,invoke):invoke)
   if (meta && record.abort === runAbort) record.worktreeMeta = { ...(record.worktreeMeta ?? {}), ...meta }
   return result
 }
@@ -417,7 +424,10 @@ export async function settleParentDelegationRuns(parentSessionId: string, timeou
 
 export function getDelegationSummary(record: DelegationRecord): DelegationSummary {
   refreshDelegationHandoff(record)
+  let workspaceFacts:unknown
+  if(record.workspaceFacts)try{workspaceFacts=record.workspaceFacts()}catch(error){workspaceFacts={available:false,error:String(error)}}
   return {
+    ...(record.workspaceFacts?{workspace_facts:workspaceFacts}:{}),
     ...(record.taskHandoff ? { task_handoff: record.taskHandoff } : {}),
     delegation_id: record.delegationId,
     role: record.role,
@@ -669,6 +679,7 @@ export function continueDelegation(parent: ToolContext, delegationId: string, ta
   const previousHandoff = record.taskHandoff
   record.workspaceLease = parentCtx.prepareDelegation?.({ parent, args: { task: trimmedTask, role: record.role, ...record.assignment },
     childSessionId: record.childSessionId, delegationId: record.delegationId })
+  record.workspaceFacts=record.workspaceLease?.facts
   record.taskHandoff = undefined
   record.status = 'running'
   record.loopStatus = undefined

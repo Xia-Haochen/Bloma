@@ -1,3 +1,4 @@
+import { loopThinking } from './loop-thinking'
 import { createHash } from 'node:crypto'
 import { readFileSync, existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -45,7 +46,7 @@ function adapterFingerprint(): string {
     const own = fileURLToPath(import.meta.url)
     // Bundled production code is one artifact; source-mode tests fingerprint the
     // executing adapter modules, not a git label or the user's dirty worktree.
-    const files = own.endsWith('.ts') ? ['runtime-observation.ts', 'pi-runtime.ts', 'pi-transport.ts', 'pi-messages.ts', 'pi-session-store.ts', 'agent-loop.ts', '../tools/active-skills.ts', '../../platform/mcp/skill-catalog.ts', '../../platform/llm/model-context.ts'].map(f => join(dirname(own), f)) : [own]
+    const files = own.endsWith('.ts') ? ['loop-thinking.ts', 'runtime-observation.ts', 'pi-runtime.ts', 'pi-transport.ts', 'pi-messages.ts', 'pi-session-store.ts', 'agent-loop.ts', '../tools/active-skills.ts', '../../platform/mcp/skill-catalog.ts', '../../platform/llm/model-context.ts'].map(f => join(dirname(own), f)) : [own]
     return runtimeHash(files.map(file => createHash('sha256').update(readFileSync(file)).digest('hex')))
   } catch { return 'unknown' }
 }
@@ -61,7 +62,7 @@ export function observePiRuntime(input: AgentLoopInput, skills: { names: string[
   return { version: 1, session_id: input.sessionId, request_id: input.requestId, role: input.accountingRole ?? 'orchestrator', runtime,
     route: { model: input.env.ANTHROPIC_MODEL || 'unknown', provider: input.providerType ?? input.env.ANTHROPIC_PROVIDER_TYPE ?? 'unknown', endpoint_origin: origin, endpoint_path_sha256: endpointPath },
     settings: { ...contextPolicy, maxTokens: input.maxTokens, maxTurns: input.maxTurns,
-      thinking: input.thinkingLevel ?? (input.env.BLOMA_LOOP_THINKING === 'off' ? 'off' : 'low'), temperature: input.temperature ?? null, tool_execution: 'sequential',permission_mode:input.permissionMode,retry:PI_RETRY_POLICY },
+      thinking: loopThinking(input), temperature: input.temperature ?? null, tool_execution: 'sequential',permission_mode:input.permissionMode,retry:PI_RETRY_POLICY },
     tools_sha256: runtimeHash(input.tools.map(tool => ({ name: tool.name, description: tool.description, schema: tool.input_schema }))),
     prompt_sha256: runtimeHash(input.system), skills: { mode: skills.available?.length?'agent-selected':'explicit-bloma', names: skills.names, content_sha256: runtimeHash(skills.content),...(skills.available?{available:skills.available,catalog_sha256:skills.catalogHash}:{}) }, memory_sha256: runtimeHash(memory) }
 }

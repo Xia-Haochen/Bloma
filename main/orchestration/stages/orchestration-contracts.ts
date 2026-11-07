@@ -83,6 +83,8 @@ export interface SDKQueryOptions {
    * 顶层 system 字段）；不传 = 现状拼装路径，零行为变化。
    */
   messages?: ConversationTurn[]
+  /** Internal bridge callback: refresh ephemeral facts after waiting for a slot. */
+  refreshMessages?: () => ConversationTurn[]
   /** 单次响应的最大 token 数，缺省 1200（去硬编码：由渠道配置传入） */
   maxTokens?: number
   /** 采样温度（§7.7 类别校准表：guide 0.3 / 生成与判定类 0.1）；缺省不传，由 API 默认 */

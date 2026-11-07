@@ -69,8 +69,10 @@ export async function main() {
   cpSync(source, copied)
   const binding = resolveDelegationChannelOverride({ channelId: 'c0711f40-a244-4df1-96bd-b06a323b829e', modelId: 'deepseek-flash' })!
   if (binding.modelName !== 'deepseek-flash' || binding.env.ANTHROPIC_BASE_URL !== 'https://api.deepseek.com/anthropic') throw Error('TRIAL_ROUTE_CHANGED')
+  const engineeringPartner=process.env.BLOMA_OBSERVATION_ENGINEERING_PARTNER==='1'
+  process.env.BLOMA_ENGINEERING_PARTNER=engineeringPartner?'1':'0'
   const trialThinking=process.env.BLOMA_OBSERVATION_THINKING??'low'
-  if(trialThinking!=='low'&&trialThinking!=='off')throw Error('TRIAL_THINKING_MODE_INVALID')
+  if(!['off','low','high','max'].includes(trialThinking))throw Error('TRIAL_THINKING_MODE_INVALID')
   binding.env.BLOMA_LOOP_THINKING=trialThinking
   const generationMaxTokens = resolveGenerationMaxTokens({ max_tokens: binding.maxTokens })
   const key = binding.env.ANTHROPIC_AUTH_TOKEN ?? binding.env.ANTHROPIC_API_KEY
@@ -101,7 +103,7 @@ export async function main() {
     trialOutputCap(capRmb, generationMaxTokens, rates)
     writeFileSync(policy, JSON.stringify({ version: 1, models: [rates] }, null, 2))
     writeFileSync(manifestPath, JSON.stringify({ version: 1, at: new Date().toISOString(), source_head: execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),
-      runtime_sha256:runtimeHash,runtime_tree_sha256:runtimeTree,thinking:trialThinking,authorization: { source: 'direct_user_confirmation', cap_rmb: capRmb, user_text: process.env.BLOMA_OBSERVATION_AUTHORIZATION_TEXT },
+      runtime_sha256:runtimeHash,runtime_tree_sha256:runtimeTree,thinking:trialThinking,engineering_partner:engineeringPartner,authorization: { source: 'direct_user_confirmation', cap_rmb: capRmb, user_text: process.env.BLOMA_OBSERVATION_AUTHORIZATION_TEXT },
       selector_sha256: hash(readFileSync(source)), policy_sha256: hash(readFileSync(policy)), pricing_path:pricingPath,pricing_sha256:hash(pricing),quote_reviewed_at:quote.reviewed_at,pricing_source_url:quote.source_url,rates, tasks,user_files_sha256:existsSync(join(root,'user-files.json'))?hash(readFileSync(join(root,'user-files.json'))):null,
       balance_before: availableBalance, model_catalog: models.data.map((r: any) => r.id),
       old_accounting: oldFiles.map(path => ({ path, sha256: hash(readFileSync(path)) })),
@@ -109,6 +111,7 @@ export async function main() {
     console.log(safe({ status: 'ready', balance_rmb: availableBalance, cap_rmb: capRmb, model: binding.modelName, generation_requests: 0 })); return
   }
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  if(Boolean(manifest.engineering_partner)!==engineeringPartner)throw Error('TRIAL_ENGINEERING_CONFIGURATION_CHANGED')
   if (manifest.authorization?.cap_rmb !== capRmb || JSON.stringify(manifest.tasks)!==JSON.stringify(tasks) || manifest.selector_sha256 !== hash(readFileSync(source)) || manifest.policy_sha256 !== hash(readFileSync(policy))) throw Error('TRIAL_AUTHORIZATION_OR_CONFIGURATION_CHANGED')
   if(manifest.pricing_path&&hash(readFileSync(manifest.pricing_path))!==manifest.pricing_sha256)throw Error('TRIAL_PRICING_EVIDENCE_CHANGED')
   if((manifest.user_files_sha256??null)!==(existsSync(join(root,'user-files.json'))?hash(readFileSync(join(root,'user-files.json'))):null))throw Error('USER_TEST_FILES_CHANGED')
@@ -139,17 +142,18 @@ export async function main() {
   const trace=createTrialRequestRecorder(join(root,'trace'),safe,session=>{
     try{const p=findProject(project.project_id);return{project_id:p.project_id,status:p.status,current_stage:latestStage??p.current_stage,persisted_stage:p.current_stage,desktop_phase:p.desktop_phase,source:softwareVerificationFingerprint(p.root_path),review_kind:readQualityLedger(p.project_id).reviews.find(r=>r.child===session)?.kind}}catch{return{phase}}
   },policyRate)
+  const deadlineAt=Date.now()+45*60000
   const paid = control.wrap(anthropicMessagesQueryViaProviders), signal = AbortSignal.timeout(45 * 60000)
   const rawQuery: SDKQuery = async function* (prompt, options) {
     if(existsSync(join(root,'pause-generation')))throw new ModelRequestRefusal('TRIAL_PAUSED_BETWEEN_REQUESTS')
     writeFileSync(startedMarker, 'started')
     const briefText: string[] = []
-    try { for await (const message of paid(prompt, { ...options, monetaryPolicyPath: policy, thinkingLevel: trialThinking, signal: AbortSignal.any([options.signal, signal]),
+    try { for await (const message of paid(prompt, { ...options, monetaryPolicyPath: policy, thinkingLevel: trialThinking as import('../shared/reasoning-profile').ThinkingLevel, signal: AbortSignal.any([options.signal, signal]),
       requestGuard: request => {
         options.requestGuard?.(request)
         const body = JSON.parse(request.body)
         const wireSystems = body.system ?? (body.messages ?? []).filter((m: any) => m.role === 'system').map((m: any) => m.content)
-        appendFileSync(join(root, 'request-shapes.jsonl'), JSON.stringify({ at: new Date().toISOString(), task: which, phase, state: 'prepared_not_proof_of_send', requested_max_tokens: options.maxTokens, wire_max_tokens: body.max_tokens, system_sha256: hash(JSON.stringify(wireSystems)), system_bytes: Buffer.byteLength(JSON.stringify(wireSystems)), body_bytes: Buffer.byteLength(request.body), thinking: body.thinking?.type }) + '\n')
+        appendFileSync(join(root, 'request-shapes.jsonl'), JSON.stringify({ at: new Date().toISOString(), task: which, phase, state: 'prepared_not_proof_of_send', requested_max_tokens: options.maxTokens, wire_max_tokens: body.max_tokens, system_sha256: hash(JSON.stringify(wireSystems)), system_bytes: Buffer.byteLength(JSON.stringify(wireSystems)), body_bytes: Buffer.byteLength(request.body), thinking: body.thinking?.type,effort:body.output_config?.effort??body.reasoning_effort,requested_thinking:trialThinking,role:options.accounting?.role??'unassigned' }) + '\n')
         if ((body.tools ?? []).some((t: any) => t.type && !['custom','function'].includes(t.type))) throw Error('SERVER_SIDE_PAID_TOOLS_NOT_AUTHORIZED')
       } })) {
       if (options.accounting?.role === 'brief' && message.type === 'assistant' && message.message) {
@@ -182,7 +186,7 @@ export async function main() {
   }
   const model = { query, env: binding.env, signal, sessionId: sid, history: [{role:'user' as const,content:task.goal}], maxTokens: requestMaxTokens,
     persistAssistant: (text: string) => appendSessionMessage(sid, { role: 'assistant', origin: 'agent', content: [{ type: 'text', text }], timestamp: Date.now() }) }
-  await withFundedExecutionWindow(()=>({remainingRequests:Math.max(0,requestLimit-control.snapshot().physical_requests),remainingRmb:Math.min(fundedAllowance-(control.snapshot().upper_rmb??0),money()[0]?.remaining_rmb??fundedAllowance),outputRmbPerMillion:policyRate.output_rmb_per_million}),async()=>{
+  await withFundedExecutionWindow(()=>({remainingRequests:Math.max(0,requestLimit-control.snapshot().physical_requests),remainingRmb:Math.min(fundedAllowance-(control.snapshot().upper_rmb??0),money()[0]?.remaining_rmb??fundedAllowance),outputRmbPerMillion:policyRate.output_rmb_per_million,deadlineAt}),async()=>{
   const releaseAttempt=continuation?claimSimulatedRun(root,{at:new Date().toISOString(),runtimeHash,previous_report:continuation.session_id},()=>assertSimulatedContinuation(root,thinking,runtimeTree)):undefined
   try {
     save(true)

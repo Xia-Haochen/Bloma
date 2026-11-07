@@ -1,3 +1,4 @@
+import { loopThinking } from './loop-thinking'
 import type { StreamFn } from '@earendil-works/pi-agent-core'
 import { withAbort, type AgentLoopInput } from './agent-loop'
 import type { SDKMessage } from '../../../shared/types'
@@ -35,13 +36,16 @@ export function createPiTransport(input: AgentLoopInput, lifecycle: {
         signal.throwIfAborted()
         stream.push({ type: 'start', partial: message })
         let finished = false
+        const baseMessages=toTransportTurns({ messages: context.messages, systemPrompt: getCurrentSystemPrompt(context.messages) })
+        const refreshMessages=input.liveContext?()=>[...baseMessages,{role:'user' as const,content:[{type:'text' as const,text:'【当前宿主事实，非新增用户指令】\n'+JSON.stringify(input.liveContext!())}]}]:undefined
+        const messages=refreshMessages?.()??baseMessages
         for await (const sdk of abortable(input.query('', {
           env: input.env, signal, sessionId: input.sessionId,
-          messages: toTransportTurns({ messages: context.messages, systemPrompt: getCurrentSystemPrompt(context.messages) }),
+          messages,refreshMessages,
           tools: getCurrentTools(context.messages).map(tool => ({ name: tool.name, description: tool.description, input_schema: tool.parameters as unknown as Record<string, unknown> })),
           maxTokens: Math.min(input.maxTokens, options?.maxTokens ?? input.maxTokens),
           temperature: input.temperature, providerType: input.providerType,
-          thinkingLevel: input.thinkingLevel ?? (input.env.BLOMA_LOOP_THINKING === 'off' ? 'off' : 'low'),
+          thinkingLevel: loopThinking(input),
           accounting: { projectId: input.projectId, runId: input.requestId, parentSessionId: input.parentSessionId,
             role: input.accountingRole ?? 'orchestrator', scope: auxiliary ? 'handoff' : 'loop' },
         }), signal)) {

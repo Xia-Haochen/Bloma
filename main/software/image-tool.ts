@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { readDebugSession } from './debug-sessions'
 import { softwareVerificationFingerprint } from '../desktop/verification-fingerprint'
 import { findProject } from '../project/project-service'
+import { resolveProjectRoot } from '../../shared/project-root-override'
 import type { AgentLoopTool } from '../agent/loop/agent-loop'
 import { MAX_PASTED_IMAGE_BYTES, savePastedImage } from '../platform/shell/pasted-images'
 
@@ -15,7 +16,7 @@ export function buildSoftwareImageTool(projectId: string): AgentLoopTool {
         ctx.signal.throwIfAborted()
         if (ctx.projectId !== projectId || !/^[A-Za-z0-9_-]+$/.test(ctx.sessionId)) throw Error('IMAGE_OWNER_INVALID')
         if(Object.keys(input).some(key=>!['path','debug_session_id'].includes(key))||Boolean(input.path)===Boolean(input.debug_session_id))throw Error('IMAGE_SOURCE_REQUIRED: path和debug_session_id二选一')
-        const root = realpathSync(findProject(projectId).root_path)
+        const root = realpathSync(resolveProjectRoot(projectId,()=>findProject(projectId).root_path))
         let file:string,source: string|undefined,version:number|undefined
         if(input.debug_session_id){
           if(typeof input.debug_session_id!=='string')throw Error('IMAGE_SESSION_INVALID')

@@ -1,3 +1,4 @@
+import { withFundedExecutionWindow } from '../../../main/software/execution-limits'
 import { createHash } from 'node:crypto'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
@@ -94,4 +95,20 @@ it('discovers metadata first and serves only the requested capability protocol',
   const command = await tool.execute({ topic: 'execution' }, ctx)
   expect(command.output).toContain('yield_ms'); expect(command.output).not.toContain('speech_runtime')
   expect((await tool.execute({ topic: 'capabilities' }, { ...ctx, projectId: 'foreign' })).isError).toBe(true)
+})
+
+it('exposes an outer deadline and monetary admission facts without treating them as new authorization',()=>{
+  const deadlineAt=Date.now()+60000
+  const facts=withFundedExecutionWindow(()=>({remainingRequests:8,remainingRmb:2.5,outputRmbPerMillion:8,deadlineAt}),()=>softwareWorkingContext(project.project_id))
+  expect(facts.execution_window).toMatchObject({available:true,remaining_requests:8,admission_remaining_rmb:2.5,deadline_at:new Date(deadlineAt).toISOString()})
+  const rendered=JSON.parse(renderWorkingFacts(facts).split('\n').slice(1).join('\n'))
+  expect(rendered.execution_window.remaining_ms).toBeGreaterThan(0)
+  expect(softwareWorkingContext(project.project_id).execution_window).toEqual({available:false})
+})
+
+it('reports declared runtime compatibility before executing a final acceptance suite',()=>{
+  writeFileSync(join(project.root_path,'LAUNCH.json'),JSON.stringify({schema_version:2,command:['python','main.py'],ui:'webview'}))
+  expect(softwareWorkingContext(project.project_id).declared_entry).toMatchObject({ui:'webview',native_js_acceptance_supported:false})
+  writeFileSync(join(project.root_path,'LAUNCH.json'),JSON.stringify({schema_version:2,command:['electron','main.cjs'],ui:'electron',window_title:'fixture'}))
+  expect(softwareWorkingContext(project.project_id).declared_entry).toMatchObject({ui:'electron',native_js_acceptance_supported:true})
 })

@@ -5,11 +5,18 @@ import { getPromaHome } from '../../storage/config-paths'
 import { writeTextFileAtomic } from '../../storage/json-store'
 import { findProject } from '../project/project-service'
 
-export interface FundedExecutionWindow {remainingRequests:number;remainingRmb:number;outputRmbPerMillion:number}
+export interface FundedExecutionWindow {remainingRequests:number;remainingRmb:number;outputRmbPerMillion:number;deadlineAt?:number}
 const admittedWindow = new AsyncLocalStorage<() => FundedExecutionWindow>()
 /** Host scope only: the outer request/money guards remain authoritative. */
 export function withFundedExecutionWindow<T>(window:()=>FundedExecutionWindow, work:()=>T):T {return admittedWindow.run(window,work)}
 export function currentFundedExecutionWindow(){return admittedWindow.getStore()?.()}
+export function executionWindowFacts(now=Date.now()) {
+  const window=currentFundedExecutionWindow()
+  if(!window)return{available:false as const}
+  return{available:true as const,remaining_requests:window.remainingRequests,admission_remaining_rmb:window.remainingRmb,
+    ...(Number.isFinite(window.deadlineAt)?{deadline_at:new Date(window.deadlineAt!).toISOString(),remaining_ms:Math.max(0,window.deadlineAt!-now)}:{}),
+    note:'共享执行窗口的实时准入余量，不是账户余额或新增授权；未知费用责任仍占用额度。'}
+}
 interface ExecutionLimits { version: 1; operation: string; requests: number; output: number; reason: string; at: string }
 /** Translate an explicitly admitted outer window into cumulative inner limits.
  * This never grants money or resets usage; callers must keep monetary admission. */

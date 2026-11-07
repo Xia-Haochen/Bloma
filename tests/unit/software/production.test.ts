@@ -3,7 +3,7 @@ import { withEmptyQualityReview } from '../../fixtures/quality-review-query'
 import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { afterEach, beforeEach, expect, it } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { findProject, createProject as createBareProject } from '../../../main/project/project-service'
 import { createEngineeringProject as createProject } from '../../fixtures/engineering-project'
 import { readPrdBackplane, markPrdUserConfirmed } from '../../../main/project/prd-store'
@@ -18,9 +18,11 @@ import { createEvaluationProtocol, stageEvaluationRun } from '../../../main/soft
 
 let home: string, previous: string | undefined
 beforeEach(() => { previous = process.env.PROMA_HOME; home = mkdtempSync(join(tmpdir(), 'bloma-software-loop-')); process.env.PROMA_HOME = home })
-afterEach(() => { if (previous === undefined) delete process.env.PROMA_HOME; else process.env.PROMA_HOME = previous;
+afterEach(() => { vi.unstubAllEnvs(); if (previous === undefined) delete process.env.PROMA_HOME; else process.env.PROMA_HOME = previous;
   rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }) })
-it.each(['quick', 'longterm'] as const)('real Pi software loop writes JS, builds with bundled npm, host verifies and delivers for %s', async mode => {
+it.each([{mode:'quick',peer:false},{mode:'longterm',peer:false},{mode:'quick',peer:true}] as const)('real Pi software loop builds, commits and delivers ($mode, peer=$peer)', async ({mode,peer}) => {
+  vi.stubEnv('BLOMA_ENGINEERING_PARTNER',peer?'1':'0')
+  let peerCalls=0
   const project = createBareProject({ request_id: 'c', mode }, { workflowVersion: 'software-v1' })
   const parsed = parseLeanBrief(JSON.stringify({ action: 'brief', goal: '计算加法', ui: 'none', delivery: 'command', requirements: [{ description: '计算加法', expected: '2加3得5' }] }),
     { projectId: project.project_id, sessionId: 's', source: '计算加法', previous: readPrdBackplane(project.project_id), software: true })!
@@ -31,6 +33,12 @@ it.each(['quick', 'longterm'] as const)('real Pi software loop writes JS, builds
   const calls: SDKQueryOptions[] = [], events: Array<{ type: string; payload: Record<string, unknown> }> = []
   const use = (id: string, name: string, input: Record<string, unknown>) => ({ type: 'tool_use' as const, id, name, input })
   const query: SDKQuery = async function* (_prompt, options) {
+    if(options.accounting?.role==='research'){
+      expect(JSON.stringify(options.messages?.filter(m=>m.role==='system'))).not.toContain('负责整个工程')
+      expect(options.maxTokens).toBeLessThanOrEqual(16384)
+      yield {type:'assistant',message:{role:'assistant',content:++peerCalls%2===1?[use('peer-context','read_file',{path:'context.json'}),...(peerCalls===1?[use('peer-note','write_file',{path:'notes.md',content:'核对确认的命令行交付、实际入口与数据边界。'})]:[])]:[{type:'text',text:'独立核对：当前任务为无持久状态的命令行计算，验证实际构建入口及正常输入；仍以真实测试为依据。'}]}}
+      yield {type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}};return
+    }
     calls.push(options)
     yield { type: 'assistant', message: { role: 'assistant', content: calls.length === 1 ? [
       use('design', 'write_file', {path:'DESIGN.md', content:'CLI entry owns argument parsing and output; calculation is stateless. Build script only copies application sources to dist. No persistence, server or GUI. Errors propagate as process failures. Verify addition through the normal built entry with two arguments.'}),
@@ -40,7 +48,7 @@ it.each(['quick', 'longterm'] as const)('real Pi software loop writes JS, builds
       use('build', 'run_command', { command: ['npm', 'run', 'build'] }),
       use('launch', 'write_file', { path: 'LAUNCH.json', content: JSON.stringify({ schema_version: 2, mode: 'command', command: ['node', 'dist/app.cjs'] }) }),
       use('check', 'register_cli_check', { expectations: { 'F-001': '2加3得5' }, cases: [{ name: 'sum', covers: ['F-001'], args: ['2', '3'], stdout: '5', exit_code: 0 }] }),
-    ] : [
+    ] : calls.length>2 ? [{type:'text',text:'已结合独立意见核对当前实现，进入已有宿主检查。'}] : [
       use('git-status','run_command',{command:['git','status','--short']}),
       use('git-add','run_command',{command:['git','add','--','DESIGN.md','package.json','app.cjs','build.cjs','LAUNCH.json','dist/app.cjs']}),
       use('git-commit','run_command',{command:['git','-c','user.name=Fixture','-c','user.email=fixture@local','-c','commit.gpgsign=false','-c','core.hooksPath=','commit','-m','Implement stateless addition CLI; validate build and normal entry']}),
@@ -59,7 +67,7 @@ it.each(['quick', 'longterm'] as const)('real Pi software loop writes JS, builds
   expect(findProject(project.project_id)).toMatchObject({ status: 'completed', desktop_phase: 'delivered' })
   expect(readFileSync(join(project.root_path, 'dist/app.cjs'), 'utf8')).toContain('console.log')
   expect(existsSync(join(project.root_path, 'app.py'))).toBe(false)
-  expect(calls).toHaveLength(2)
+  if(peer){expect(peerCalls).toBe(4);expect(calls.length).toBeGreaterThanOrEqual(2);expect(calls.length).toBeLessThanOrEqual(3)}else expect(calls).toHaveLength(2)
   const evaluation=readFileSync(join(home,'harness-evaluation',project.project_id,'events.jsonl'),'utf8').trim().split('\n').map(line=>JSON.parse(line))
   const observed=evaluation.filter(e=>e.kind==='runtime_identity').map(e=>e.data.observation)
   expect(observed.some(o=>o.role==='orchestrator'&&o.runtime.packages['pi-coding-agent']==='1.4.0')).toBe(true)

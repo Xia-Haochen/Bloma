@@ -9,7 +9,7 @@ export interface DelegationParentContext {
   maxConcurrentDelegations?: number
   allowChannelOverrides?: boolean
   delegationSummaryLimit?: number
-  prepareDelegation?: (input: { parent: import('../loop/agent-loop').ToolContext; args: import('./agent-collaboration').DelegateAgentArgs; childSessionId: string; delegationId: string }) => { release: () => void; completionNote?: () => string }
+  prepareDelegation?: (input: { parent: import('../loop/agent-loop').ToolContext; args: import('./agent-collaboration').DelegateAgentArgs; childSessionId: string; delegationId: string }) => { release: () => void; completionNote?: () => string; facts?:()=>unknown }
   materials?: import('../../../shared/attachment-types').MaterialContext
   /** Domain may give a quality reviewer only its own candidate material. */
   childMaterialsBuilder?: (childSessionId: string) => import('../../../shared/attachment-types').MaterialContext | undefined
@@ -23,6 +23,10 @@ export interface DelegationParentContext {
   delegationTurnCaps?: Partial<Record<DelegationRunRole, number>>
   executionScope?: string
 
+  childWorkspace?: (childSessionId:string)=>string|undefined
+  childMaxTokens?: (childSessionId:string)=>number|undefined
+  liveContext?: () => unknown
+  childRuntimeScope?: (childSessionId:string)=>string|undefined
   runtimeScope?: string
   permissionMode: PromaPermissionMode
   temperature: number
