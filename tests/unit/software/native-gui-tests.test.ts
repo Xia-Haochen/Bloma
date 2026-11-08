@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
 import { beforeEach, afterEach, it, expect, vi } from 'vitest';
 import * as uiObservation from '../../../main/software/ui-observation';
+import * as commandRuntime from '../../../main/software/command-runtime';
 import { createProject, updateProject } from '../../../main/project/project-service';
 import { readPrdBackplane, markPrdUserConfirmed } from '../../../main/project/prd-store';
 import { parseLeanBrief } from '../../../main/guide/lean-brief';
@@ -24,6 +25,23 @@ const script = `export default async({test,page,expect,assert,phase,evidenceDir}
  await test('F-001 create Alice',async()=>{await page.goto('/');await page.locator('#name').focus();await page.keyboard.type('Alice');await page.locator('#save').click();await expect(page.locator('#list')).toHaveText('Alice')});
  await test('F-002 reject blank',async()=>{await page.locator('#name').fill('');await page.locator('#save').click();await expect(page.locator('#status')).toHaveText('required');assert.equal(await page.locator('#list').innerText(),'Alice')});
 }`;
+it.each(['passed','failed'])('retains %s case evidence when a later case hits the execution deadline without passing the suite',async first=>{
+  const execute=commandRuntime.executeSoftwareCommand
+  vi.spyOn(commandRuntime,'executeSoftwareCommand').mockImplementation(input=>execute(input.browserBinding?.nativeTest?{...input,timeoutMs:10000}:input))
+  writeFileSync(join(project.root_path,'tests/acceptance.mjs'),`export default async({test,page,expect})=>{
+    await test('F-001 completed',async()=>{await page.goto('/');await page.locator('#name').fill('Alice');await page.locator('#save').click();await expect(page.locator('#list')).toHaveText('${first==='passed'?'Alice':'WRONG'}')});
+    await test('F-002 interrupted',async()=>{await new Promise(()=>{})});
+  }`)
+  registerNativeGuiTests(project.project_id,'tests/acceptance.mjs')
+  const result=await verifySoftwareCandidate(project.project_id,'partial-deadline',AbortSignal.timeout(60000))
+  expect(result.status).not.toBe('passed')
+  expect(result.core?.host_gui?.status).toBe(first==='failed'?'failed':'unverified')
+  expect(result.core?.host_gui?.case_results).toEqual(expect.arrayContaining([
+    expect.objectContaining({name:'F-001 completed',status:first}),
+    expect.objectContaining({name:'F-002 interrupted',status:'not_run'}),
+  ]))
+  expect(result.core?.host_gui?.error).toContain('GUI_NATIVE_EXECUTION_INCOMPLETE')
+},60000)
 it('owns registered case lifetimes even when the entry does not await each case',async()=>{
   writeFileSync(join(project.root_path,'tests/acceptance.mjs'),script.replaceAll('await test(', 'test('))
   registerNativeGuiTests(project.project_id,'tests/acceptance.mjs',true)

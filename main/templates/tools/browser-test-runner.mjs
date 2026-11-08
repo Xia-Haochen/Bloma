@@ -12,6 +12,7 @@ await test('Bloma native application suite', async () => {
     const evidenceDir = bindScreenshotEvidence(page, context);
     const lifecycle = createNativeTestScope();
     const counts = { interactions: 0, assertions: 0, cases: [] }, cache = new WeakMap(), originals = new WeakMap(), current = new AsyncLocalStorage();
+    const persistCounts = () => writeFileSync(process.env.BLOMA_NATIVE_TEST_TRACE, JSON.stringify(counts));
     // Playwright compares Locator/Frame identities (e.g. filter({has})). Keep
     // observation wrappers transparent when values re-enter the native API.
     const unwrap = value => {
@@ -63,10 +64,11 @@ await test('Bloma native application suite', async () => {
         return lifecycle.register(() => method(...args.slice(0, -1), async (t) => {
             const record = { name: String(args[0]), interactions: 0, assertions: 0 };
             counts.cases.push(record);
-            return current.run(record, async () => { await lifecycle.run(() => callback(new Proxy(t, { get(target, key) { if (key === 'assert')
+            persistCounts();
+            return current.run(record, async () => { try { await lifecycle.run(() => callback(new Proxy(t, { get(target, key) { if (key === 'assert')
                     return checkedAssertion(target.assert); if (key === 'test')
                     return (...nested) => runCase(target.test.bind(target), nested); const member = Reflect.get(target, key, target); return typeof member === 'function' ? member.bind(target) : member; } }))); if (/\bF-\d+\b/.test(record.name) && !record.assertions)
-                throw Error('GUI_NATIVE_ASSERTION_REQUIRED: 每项业务测试需实际断言'); });
+                throw Error('GUI_NATIVE_ASSERTION_REQUIRED: 每项业务测试需实际断言'); } finally { persistCounts(); } });
         }));
     };
     const checkedTest = new Proxy(test, { apply(target, self, args) { return runCase(target, args); }, get(target, key) { const member = Reflect.get(target, key); return ['skip', 'todo', 'only'].includes(String(key)) ? (...args) => runCase(member, args) : member; } });
@@ -79,7 +81,7 @@ await test('Bloma native application suite', async () => {
             dataDir: process.env.APP_DATA_DIR, evidenceDir, phase: process.env.BLOMA_NATIVE_TEST_PHASE }));
     }
     finally {
-        writeFileSync(process.env.BLOMA_NATIVE_TEST_TRACE, JSON.stringify(counts));
+        persistCounts();
         // CDP Browser.close disconnects this client; it does not own the app process.
         await browser.close();
     }

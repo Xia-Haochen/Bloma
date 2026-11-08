@@ -3,6 +3,7 @@ import { deliveryQualityBlock } from './delivery-qualification'
 import { independentDesignVersion } from './independent-design'
 import { qualityWorkQueue } from './quality-closeout'
 import { applicableQualityLedger, qualityIdentity, qualityRulesVersion, readQualityLedger } from './quality-ledger'
+import {testCorrectionView} from './test-corrections'
 
 /** One read model for makers and engineering peers. The caller owns access;
  * reading findings cannot start a review, change a finding or issue approval. */
@@ -21,7 +22,7 @@ export function buildQualityFindingsTool(projectId: string, authorize: (ctx: Too
       }
       const block = await deliveryQualityBlock(projectId, ctx.signal, route?.())
       const current = await qualityIdentity(projectId, ctx.signal)
-      return { output: JSON.stringify(qualityWorkQueue(applicableQualityLedger(projectId), current, block, qualityRulesVersion(projectId), independentDesignVersion(projectId))) }
+      return { output: JSON.stringify({...qualityWorkQueue(applicableQualityLedger(projectId), current, block, qualityRulesVersion(projectId), independentDesignVersion(projectId)),test_corrections:testCorrectionView(projectId)}) }
     },
   }
 }

@@ -24,6 +24,7 @@ export async function runNativeGuiTests(input: {
         trace: string;
     }> = [];
     const runtimeFailures:string[]=[]
+    let interrupted:string|undefined
     const evidenceWarnings: string[] = []
     try {
         for (const phase of native.restart ? ['initial', 'reopened'] : ['initial']) {
@@ -31,16 +32,18 @@ export async function runNativeGuiTests(input: {
             runtime.verify();
             const opened = await openDebugSession({ projectId: input.projectId, sessionId, root: input.root, launch: input.launch, signal, formal:true });
             const directory = debugWorkspace(input.projectId, sessionId), report = join(directory, `native-${phase}.jsonl`), trace = join(directory, `native-${phase}-trace.json`);
-            const observed = await actDebugSession({ projectId: input.projectId, sessionId, id: opened.id, signal, nativeTests: { file, phase, report, trace } });
+            let observed:Awaited<ReturnType<typeof actDebugSession>>|undefined
+            try{observed=await actDebugSession({ projectId: input.projectId, sessionId, id: opened.id, signal, nativeTests: { file, phase, report, trace } })}
+            catch(error){signal.throwIfAborted();interrupted=String(error)}
             runtime.verify();
-            if (observed.screenshot_error) evidenceWarnings.push(observed.screenshot_error)
-            const outcome = observed.steps.find(step => step.id === 'native-tests')?.actual as {
+            if (observed?.screenshot_error) evidenceWarnings.push(observed.screenshot_error)
+            const outcome = observed?.steps.find(step => step.id === 'native-tests')?.actual as {
                 exit_code?: number;
                 stderr?: string;
             } | undefined;
             if (!existsSync(report) || !existsSync(trace) || statSync(report).size > 2 * 1024 * 1024 || statSync(trace).size > 16384)
-                throw Error(`GUI_NATIVE_REPORT_MISSING: ${outcome?.stderr ?? ''}\n${existsSync(report) ? readFileSync(report, 'utf8').slice(-8000) : 'Node reporter did not produce output'}`);
-            const runtimeErrors = observed.observations.filter(row => row.version === observed.version && /^renderer\.(?:error|startup_error)$/.test(row.kind));
+                throw Error(`GUI_NATIVE_REPORT_MISSING: ${interrupted??outcome?.stderr ?? ''}\n${existsSync(report) ? readFileSync(report, 'utf8').slice(-8000) : 'Node reporter did not produce output'}`);
+            const runtimeErrors = observed?.observations.filter(row => row.version === observed!.version && /^renderer\.(?:error|startup_error)$/.test(row.kind))??[];
             runtimeFailures.push(...runtimeErrors.map(row=>row.message))
             reports.push({ code: runtimeErrors.length ? 1 : outcome?.exit_code ?? 1, events: readFileSync(report, 'utf8'), trace: readFileSync(trace, 'utf8') });
             await closeDebugSessions(input.projectId, sessionId);
@@ -50,6 +53,7 @@ export async function runNativeGuiTests(input: {
         frozenNativeGuiEntry(input.projectId, native, input.root);
         const result=nativeGuiObservations(input.suite,reports)
         const evidence_dir = join(workspace, 'evidence', 'acceptance')
+        if(interrupted)return{...result,evidence_dir,evidence_warnings:evidenceWarnings,status:result.status==='failed'?'failed' as const:'unverified' as const,failure_kind:result.status==='failed'?result.failure_kind:'incomplete' as const,error:'GUI_NATIVE_EXECUTION_INCOMPLETE: '+interrupted}
         return runtimeFailures.length?{...result,evidence_dir,evidence_warnings:evidenceWarnings,status:'failed' as const,failure_kind:'runtime' as const,
           case_results:result.case_results.map(row=>row.status==='passed'?{...row,status:'unverified' as const}:row),error:`GUI_NATIVE_RUNTIME_ERROR: ${runtimeFailures[0]}`,
           steps:[...result.steps,{id:'native-runtime',passed:false,actual:runtimeFailures.slice(0,3)}]}:{...result,evidence_dir,evidence_warnings:evidenceWarnings}

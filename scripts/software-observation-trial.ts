@@ -19,7 +19,7 @@ import { homedir } from 'node:os'
 import { resolveDelegationChannelOverride } from '../main/agent/delegation/delegation-channel'
 import { anthropicMessagesQueryViaProviders } from '../main/platform/upstream/providers/loop-query'
 import { createRequestBudget } from '../main/platform/llm/request-budget'
-import { readMonetaryBudget } from '../main/platform/llm/monetary-budget'
+import { readMonetaryBudget, MonetaryBudgetError } from '../main/platform/llm/monetary-budget'
 import { createProject, findProject } from '../main/project/project-service'
 import { handleGuideMessage } from '../main/guide/stages/guide-pipeline'
 import { activeSoftwareRelease } from '../main/software/release-store'
@@ -147,12 +147,16 @@ export async function main() {
     try{const p=findProject(project.project_id);return{project_id:p.project_id,status:p.status,current_stage:latestStage??p.current_stage,persisted_stage:p.current_stage,desktop_phase:p.desktop_phase,source:softwareVerificationFingerprint(p.root_path),review_kind:readQualityLedger(p.project_id).reviews.find(r=>r.child===session)?.kind}}catch{return{phase}}
   },policyRate)
   const deadlineAt=Date.now()+45*60000
+  const availableFunding=()=>Math.min(fundedAllowance-(control.snapshot().upper_rmb??0),money()[0]?.remaining_rmb??fundedAllowance)
   const paid = control.wrap(anthropicMessagesQueryViaProviders), signal = AbortSignal.timeout(45 * 60000)
   const rawQuery: SDKQuery = async function* (prompt, options) {
     if(existsSync(join(root,'pause-generation')))throw new ModelRequestRefusal('TRIAL_PAUSED_BETWEEN_REQUESTS')
+    let affordableOutput:number
+    try{affordableOutput=trialOutputCap(availableFunding(),Math.min(options.maxTokens??requestMaxTokens,requestMaxTokens),policyRate)}
+    catch(error){if(/TRIAL_CAP_BELOW_COMPLETE_INPUT_RESERVE|TRIAL_OUTPUT_QUOTE_INVALID/.test(String(error)))throw new MonetaryBudgetError('MONETARY_OPERATION_EXHAUSTED');throw error}
     writeFileSync(startedMarker, 'started')
     const briefText: string[] = []
-    try { for await (const message of paid(prompt, { ...options, monetaryPolicyPath: policy, thinkingLevel: trialThinking as import('../shared/reasoning-profile').ThinkingLevel, signal: AbortSignal.any([options.signal, signal]),
+    try { for await (const message of paid(prompt, { ...options, maxTokens:affordableOutput,monetaryPolicyPath: policy, thinkingLevel: trialThinking as import('../shared/reasoning-profile').ThinkingLevel, signal: AbortSignal.any([options.signal, signal]),
       requestGuard: request => {
         options.requestGuard?.(request)
         const body = JSON.parse(request.body)
@@ -190,7 +194,7 @@ export async function main() {
   }
   const model = { query, env: binding.env, signal, sessionId: sid, history: [{role:'user' as const,content:task.goal}], maxTokens: requestMaxTokens,
     persistAssistant: (text: string) => appendSessionMessage(sid, { role: 'assistant', origin: 'agent', content: [{ type: 'text', text }], timestamp: Date.now() }) }
-  await withFundedExecutionWindow(()=>({remainingRequests:Math.max(0,requestLimit-control.snapshot().physical_requests),remainingRmb:Math.min(fundedAllowance-(control.snapshot().upper_rmb??0),money()[0]?.remaining_rmb??fundedAllowance),outputRmbPerMillion:policyRate.output_rmb_per_million,deadlineAt}),async()=>{
+  await withFundedExecutionWindow(()=>({remainingRequests:Math.max(0,requestLimit-control.snapshot().physical_requests),remainingRmb:availableFunding(),outputRmbPerMillion:policyRate.output_rmb_per_million,deadlineAt}),async()=>{
   const releaseAttempt=continuation?claimSimulatedRun(root,{at:new Date().toISOString(),runtimeHash,previous_report:continuation.session_id},()=>assertSimulatedContinuation(root,thinking,runtimeTree)):undefined
   const walletTimer=setInterval(()=>{void wallet.sample()},30000)
   try {

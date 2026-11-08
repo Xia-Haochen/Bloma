@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createRequestBudget } from '../../main/platform/llm/request-budget'
+import {trialOutputCap} from '../../scripts/trial-output-cap'
 import { streamSSE, setSseRetryWaitBudgetForTests } from '../../main/platform/upstream/providers/sse-reader'
 import { ANTHROPIC_SSE_ADAPTER } from '../../main/platform/upstream/providers/anthropic-sse-adapter'
 import { MonetaryBudgetError } from '../../main/platform/llm/monetary-budget'
@@ -27,6 +28,21 @@ describe('operation request budget', () => {
   const options = (): SDKQueryOptions => ({ env: {}, sessionId: 'budget', signal: new AbortController().signal, maxTokens: 100 })
   const drain = async (query: SDKQuery) => { for await (const _ of query('test', options())) {} }
   const request = { url: 'https://test.invalid/messages', headers: {}, body: JSON.stringify({ model: 'test', max_tokens: 100, messages: [] }) }
+  it('fits a later request to the remaining operation allowance without releasing previous charges or the full image input reserve',async()=>{
+    const rate={context_tokens:10000,input_rmb_per_million:2,output_rmb_per_million:8}
+    const budget=createRequestBudget({}, {requests:3,outputTokens:10000,rmb:.1})
+    const first:SDKQuery=async function*(_p,opt){opt.requestGuard!({...request,body:JSON.stringify({model:'test',max_tokens:10000,messages:[]})});yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:5000}}}
+    await drain(budget.wrap(first))
+    const spent=budget.snapshot().upper_rmb!
+    expect(spent).toBe(.04002)
+    const cap=trialOutputCap(.1-spent,10000,rate)
+    let sent=false
+    const second:SDKQuery=async function*(_p,opt){opt.requestGuard!({...request,body:JSON.stringify({model:'test',max_tokens:opt.maxTokens,messages:[{type:'image'}]})});sent=true;yield{type:'result',subtype:'success',usage:{input_tokens:10000,output_tokens:10}}}
+    for await(const _ of budget.wrap(second)('test',{...options(),maxTokens:cap})){}
+    expect(sent).toBe(true);expect(cap).toBeLessThan(10000)
+    expect(Math.ceil(rate.context_tokens*rate.input_rmb_per_million)+Math.ceil(cap*rate.output_rmb_per_million)).toBeLessThanOrEqual(Math.floor((.1-spent)*1e6))
+    expect(budget.snapshot().upper_rmb).toBeGreaterThan(spent);expect(budget.snapshot().upper_rmb).toBeLessThanOrEqual(.1)
+  })
   it('admits an exact micro-RMB boundary after many receipts and rejects the next micro-RMB',async()=>{
     writeFileSync(process.env.BLOMA_MONETARY_POLICY!,JSON.stringify({version:1,models:[{host:'test.invalid',model:'test',cap_rmb:5,context_tokens:100,input_rmb_per_million:0,output_rmb_per_million:1,cache_rmb_per_million:0}]}))
     const budget=createRequestBudget({}, {requests:20,outputTokens:100,rmb:.00001})

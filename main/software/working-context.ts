@@ -16,6 +16,7 @@ import { leanBudget } from '../desktop/lean-budget'
 import {readVerificationReport} from './verification-report'
 import { applicableQualityLedger } from './quality-ledger'
 import { importantFinding } from './quality-closeout'
+import { testCorrectionFacts } from './test-corrections'
 
 function recentTools(sessionId?: string) {
   if (!sessionId || !/^[A-Za-z0-9_-]+$/.test(sessionId)) return { available: false, tools: [] }
@@ -71,6 +72,7 @@ export function softwareWorkingContext(projectId: string, busy = true) {
     }
   }catch(error){verification.reason=String(error).match(/VERIFICATION_REPORT_[A-Z_]+/)?.[0]??'VERIFICATION_REPORT_READ_ERROR'}
   return { project_id: projectId, operation_id: project.lean_operation_id, session_id: current?.sessionId ?? project.last_session_id,
+    quality,test_corrections:brief.user_confirmed_at?testCorrectionFacts(projectId):undefined,
     delivery: brief.lean_brief && { form: brief.lean_brief.delivery, ui: brief.lean_brief.ui, distribution: brief.lean_brief.distribution ?? 'local',
       launch_contract: {tool:'read_production_context',arguments:{topic:'launch'}}, verification_contract: {tool:'read_production_context',arguments:{topic:brief.lean_brief.ui==='required'?'verification-gui':'verification'}} },
     execution_window: executionWindowFacts(),
@@ -81,7 +83,7 @@ export function softwareWorkingContext(projectId: string, busy = true) {
     source_changed_since_checkpoint: source && current?.source ? source !== current.source : undefined,
     pending_commands: activeSoftwareCommands(projectId, current?.sessionId ?? project.last_session_id ?? ''),
     current_error: current?.error, historical_failure: current?.last_failure,
-    budget,verification,quality,
+    budget,verification,
     recent: recentTools(current?.sessionId ?? project.last_session_id),
     instruction: '这是宿主现场索引，不是新需求或通过凭据。最近检查与失败均有对应版本；先核对当前版本和已有工具回执，未决命令用read_process接续，不重复安装、写入或其它副作用。完整目标用features/overview读取；继续不清零账本。' }
 }
@@ -103,6 +105,7 @@ export function renderWorkingFacts(facts:ReturnType<typeof softwareWorkingContex
     budget:facts.budget,execution_window:facts.execution_window,delivery:facts.delivery,declared_entry:facts.declared_entry,verification:facts.verification,confirmed:facts.confirmed,omitted_sections:omitted,
     verification_details:{tool:'read_production_context',arguments:{topic:'verification-report'}},
     quality:{count:facts.quality.count,details:facts.quality.details,problems:facts.quality.problems.map(f=>({id:f.id,requirement:f.requirement,trigger:f.trigger.slice(0,180),evidence:f.evidence.slice(0,240),disposition:f.disposition}))},
+    test_corrections:facts.test_corrections&&{...facts.test_corrections,proposals:facts.test_corrections.proposals.map(p=>({...p,decision:p.decision&&{...p.decision,reason:p.decision.reason.slice(0,300),truncated:p.decision.truncated||p.decision.reason.length>300}}))},
     instruction:'状态是宿主导航，不是当前通过凭据。先处理current_error和未完成进程；历史通过需重新核对。omitted_sections所列依据尚未包含，必要时读取，不猜测、不重放副作用。'}
   if(facts.pending_commands.length>8)omit('pending_commands')
   for(const [field,value,topic]of [['goal_excerpt',facts.goal_excerpt,'overview'],['feature_ids',facts.feature_ids,'features'],['intent',facts.intent,'features'],['recent',facts.recent,'working-state']] as const){

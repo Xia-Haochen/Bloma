@@ -1,13 +1,12 @@
 import { serializeModelQueries } from '../agent/loop/query-queue'
 import { createEngineeringPartner } from '../software/engineering-partner'
-import { engineeringSourceVersion, engineeringObservationVersion } from '../software/engineering-workspace'
 import {createToolState} from '../agent/loop/agent-loop'
 import { checkpointProjectHistory } from '../coding/project-git'
 import { locallyVerifiedSoftware } from '../software/verification'
 import {ModelRequestRefusal} from '../platform/llm/model-request-refusal'
 import {applyApprovedNativeCorrections} from '../software/native-gui-registration'
 import {reviewPendingTestCorrections} from '../software/test-correction-review'
-import {pendingTestCorrection,testCorrectionView} from '../software/test-corrections'
+import {pendingTestCorrection,testCorrectionFacts} from '../software/test-corrections'
 import {executionWindowFacts} from '../software/execution-limits'
 import { productDesignPolicy } from '../project/product-design-policy'
 import { beginProjectAssignment } from '../software/task-assignment'
@@ -143,7 +142,11 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   const historyBase = await checkpointProjectHistory(project.root_path, { kind: 'production_base', summary: '制作前的实际工程基线' }, signal)
   signal.throwIfAborted()
   recordEvaluationEvent(input.projectId, 'project_history', { ...historyBase, boundary: 'before_implementation' })
-  const correctionQuery=leanBudget(input.projectId,'desktop-implement').wrap(input.query)
+  const pairedEngineering=process.env.BLOMA_ENGINEERING_PARTNER==='1'
+  // Maker, peer and isolated adjudication use the same transport queue, so an
+  // in-flight peer reservation is not mistaken for permanently exhausted funds.
+  const executionQuery=pairedEngineering?serializeModelQueries(input.query):input.query
+  const correctionQuery=leanBudget(input.projectId,'desktop-implement').wrap(executionQuery)
   const settleCorrections=async(reviewSignal:AbortSignal)=>{
     await reviewPendingTestCorrections({projectId:input.projectId,sessionId:input.sessionId,query:correctionQuery,env:input.env,maxTokens:input.maxTokens,signal:reviewSignal})
     return applyApprovedNativeCorrections(input.projectId,reviewSignal)
@@ -160,8 +163,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     saveSoftwareRunState({ projectId: input.projectId, sessionId: input.sessionId, runId, status, ...patch })
   }
   const collaboration = createSoftwareCollaborationPolicy(input.projectId, project.root_path, input.sessionId)
-  const pairedEngineering=process.env.BLOMA_ENGINEERING_PARTNER==='1'
-  const partner = createEngineeringPartner(pairedEngineering,()=>engineeringSourceVersion(project.root_path)+prdScopeFingerprint(readPrdBackplane(input.projectId)),()=>engineeringObservationVersion(input.projectId,input.sessionId),child=>collaboration.engineering.has(child))
+  const partner = createEngineeringPartner(pairedEngineering,child=>collaboration.engineering.has(child))
   const quality = createQualityReview(input.projectId, input.sessionId, collaboration, input.env)
   const observeRuntime = (observation: import('../agent/loop/runtime-observation').RuntimeObservation) => {
     const review = readQualityLedger(input.projectId).reviews.find(r => r.child === observation.session_id)
@@ -227,7 +229,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   if (!deps.coreVerification && !deps.securityScan && !deps.launchSmoke) assignment = beginProjectAssignment(input.projectId,input.sessionId,runId)
   checkpoint('running', { source: softwareVerificationFingerprint(project.root_path) })
   const runSignal = signal
-  const budgetedQuery = budget.wrap(input.query)
+  const budgetedQuery = budget.wrap(executionQuery)
   let monetaryFailure: unknown
   // Pi persists an error string. Retain this run's typed refusal at the query
   // boundary so its cost breakdown survives the native session adapter.
@@ -246,7 +248,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     } }) }
     catch (error) { if (monetaryStopMessage(error)) monetaryFailure = error; throw error }
   }
-  const query=quality.wrapQuery(pairedEngineering?serializeModelQueries(guardedQuery):guardedQuery,async signal=>{await settleCorrections(signal)})
+  const query=quality.wrapQuery(guardedQuery,async signal=>{await settleCorrections(signal)})
   const baseTools = buildSoftwareAgentTools(input.projectId, 'parent', collaboration,
     url => emit('software_preview_changed', { preview_url: url ?? null }), () => emit('software_suggestions_changed', {}),()=>emit('longterm_changed',{summary:findProject(input.projectId).longterm_summary}))
   let scopePending = false
@@ -255,7 +257,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     buildLeanScopeTool(input.projectId, input.content, emit, () => { scopePending = true }),
     brief.lean_brief.ui === 'required' ? buildLeanGuiTool(input.projectId) : buildLeanCliTool(input.projectId)])
   const executionFacts=()=>({delivery:{form:brief.lean_brief?.delivery,ui:brief.lean_brief?.ui,distribution:brief.lean_brief?.distribution??'local'},declared_entry:declaredEntryFacts(project.root_path),resources:executionWindowFacts()})
-  const liveContext=()=>{const advice=partner.latest();return{...executionFacts(),test_corrections:testCorrectionView(input.projectId).proposals.map(p=>({id:p.id,status:p.status,applied_at:p.applied_at,decision:p.decision})),...(advice?{engineering_advice:advice}:{})}}
+  const liveContext=()=>{const advice=partner.latest();return{...executionFacts(),test_corrections:testCorrectionFacts(input.projectId),...(advice?{engineering_advice:advice}:{})}}
   const system = [
     SOFTWARE_ENGINEERING_INSTRUCTIONS,
     `宿主恢复检查点：${JSON.stringify(historyBase)}。这是版本恢复事实，不是工程提交或通过判定；由你检查产品仓库、处理可恢复问题并管理有意义的提交。`,
@@ -330,9 +332,6 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     }
     const waiting = await waitForProductionChildren(ctx)
     if (waiting) return waiting
-    partner.closeout(ctx)
-    const peerWaiting=await waitForProductionChildren(ctx)
-    if(peerWaiting)return peerWaiting
     // A maker stopping is not evidence of a stable candidate. Let the common
     // verifier/repair loop observe failures before purchasing any review.
     if (!locallyChecked && !await recentSoftwareVerification(input.projectId, input.requestId, ctx.signal)) return
@@ -390,7 +389,6 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
         shouldPause: () => scopePending,
         beforeComplete: advanceCloseout,
         afterTools: async (ctx, calls) => {
-          if(!scopePending)partner.observe(ctx,calls)
           const peerFeedback=partner.take(ctx)
           if(peerFeedback)return{feedback:peerFeedback}
           // Only an actual full verification for the exact current inputs

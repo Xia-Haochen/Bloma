@@ -87,6 +87,13 @@ export function testCorrectionView(id:string){
     proposals:read(id).proposals.filter(p=>p.scope===current).map(({replacement,before,after,...p})=>({...p,contract_digest:before.digest,replacement_digest:after.digest})),verification:'not_issued'}
 }
 export function pendingTestCorrection(id:string){return read(id).proposals.some(p=>p.scope===scope(id)&&p.status==='pending')}
+export function testCorrectionFacts(id:string){
+  const current=scope(id),rows=read(id).proposals.filter(p=>p.scope===current)
+  return{pending:rows.some(p=>p.status==='pending'),count:rows.length,
+    proposals:rows.slice(-3).map(p=>({id:p.id,status:p.status,applied_at:p.applied_at,
+      decision:p.decision&&{reviewer:p.decision.reviewer,at:p.decision.at,reason:p.decision.reason.slice(0,1200),truncated:p.decision.reason.length>1200}})),
+    details:{tool:'read_quality_findings',arguments:{}},authority:'当前提案处理事实；历史错误不代表提案仍在等待，拒绝修改不禁止负责人继续诊断。'}
+}
 /** Exact, host-owned inputs for a separate adjudication. No maker conversation. */
 export function pendingTestCorrectionInputs(id:string){
   return read(id).proposals.filter(p=>p.scope===scope(id)&&p.status==='pending').map(p=>({
