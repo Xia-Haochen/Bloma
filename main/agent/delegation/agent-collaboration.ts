@@ -418,6 +418,12 @@ function launchChildLoop(opts: Parameters<typeof runChildLoop>[0]): void {
     result => { if (opts.record.abort === ownedAbort) settleChildLoop(opts.record, result) },
     error => { if (opts.record.abort === ownedAbort) settleChildLoopError(opts.record, error) },
   ).finally(() => {
+    // Logical stop releases waiters immediately. Seal cancellation again only
+    // after this invocation's late tool receipts have drained, never a newer run.
+    if(opts.record.abort===ownedAbort&&opts.record.status==='cancelled'){
+      try{appendDelegationSettle(opts.record.childSessionId,'cancelled',{error:opts.record.error})}
+      catch(error){console.warn('[delegation-persistence] cancelled teardown 落盘失败:',error)}
+    }
     pending.delete(invocation); if (!pending.size) childInvocations.delete(opts.record.parentSessionId)
     if(latestChildInvocation.get(opts.record)===invocation)latestChildInvocation.delete(opts.record)
   })

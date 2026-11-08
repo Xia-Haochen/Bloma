@@ -81,12 +81,22 @@ function inferStatusFromJsonl(jsonlPath: string): { status: RestoredDelegationSt
   const lines = readFileSync(jsonlPath, 'utf8').split('\n').filter((line) => line.trim().length > 0)
   if (lines.length === 0) return { status: 'running' }
   let last: Record<string, unknown> = {}
+  let cancelledReceiptsOnly=false
   try {
-    last = JSON.parse(lines[lines.length - 1]!) as Record<string, unknown>
+    let index=lines.length-1
+    last = JSON.parse(lines[index]!) as Record<string, unknown>
+    // Older cancellations settled before tool teardown appended its abort
+    // receipt. Only that exact host error may trail a cancelled invocation;
+    // ordinary messages/results still mean a new or unfinished invocation.
+    while(index>0&&last.role==='user'&&last.origin==='system'&&Array.isArray(last.content)&&last.content.length>0
+      &&last.content.every((block:any)=>block.type==='tool_result'&&block.is_error===true&&block.content==='AGENT_CANCELLED')){
+      cancelledReceiptsOnly=true;last=JSON.parse(lines[--index]!) as Record<string,unknown>
+    }
   } catch {
     return { status: 'running' }
   }
   const settle = last[SETTLE_FIELD]
+  if(cancelledReceiptsOnly&&settle!=='cancelled')return{status:'running'}
   if (settle === 'completed' || settle === 'failed' || settle === 'cancelled') {
     return {
       status: settle,

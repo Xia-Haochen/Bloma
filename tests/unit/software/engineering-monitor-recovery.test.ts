@@ -19,20 +19,21 @@ let home:string,project:ReturnType<typeof createProject>,child:string,delegation
 const ctx=()=>({projectId:project.project_id,sessionId:parent,requestId:'new-run',signal:AbortSignal.timeout(60000),state:createToolState()})
 beforeEach(()=>{home=mkdtempSync(join(tmpdir(),'bloma-monitor-recovery-'));vi.stubEnv('PROMA_HOME',home);project=createProject({request_id:'r',mode:'quick'},{workflowVersion:'software-v1'});parent='monitor-'+randomUUID();child=randomUUID();delegation=randomUUID();writeFileSync(join(project.root_path,'app.js'),'original');recordSessionActivity(parent,project.project_id)})
 afterEach(async()=>{disposeParentDelegationState(parent);await settleParentDelegationRuns(parent);vi.unstubAllEnvs();rmSync(home,{recursive:true,force:true,maxRetries:5,retryDelay:100})})
-function attach(finished=true){
+function attach(finished=true,status:'completed'|'cancelled'='completed'){
   recordSessionActivity(child,project.project_id,{parentSessionId:parent,sourceDelegationId:delegation})
   appendSessionMessage(child,{role:'assistant',content:[{type:'text',text:'OLD_MONITOR_OBSERVATION: seed mismatch needs actual execution.'}],timestamp:Date.now()})
-  if(finished)appendDelegationSettle(child,'completed',{resultSummary:'prior observation'})
+  if(finished)appendDelegationSettle(child,status,{resultSummary:'prior observation'})
   recordEngineeringMonitor(ctx(),{delegation_id:delegation,child_session_id:child})
 }
 
-it('restores the same tool-capable Pi Agent and its native investigation context from disk',async()=>{
+it.each(['completed','cancelled'] as const)('restores the same tool-capable Pi Agent after %s and preserves its native investigation context',async status=>{
   const context=ctx(),first=createEngineeringWorkspaces(project.project_id,project.root_path,parent)
   const lease=first.prepare(child,{role:'research',task:'Observe',readOnly:true,independentWorkspace:true}),own=first.root(child)
   const initial:SDKQuery=async function*(){yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:'NATIVE_PRIOR_OBSERVATION: check the seed before changing tests.'}]}};yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}}
   await runWithProjectRootOverride(own,()=>runAgentLoop({projectId:project.project_id,sessionId:child,requestId:'prior-run',parentSessionId:parent,
     accountingRole:'research',delegationDepth:1,runtimeScope:'engineering-peer',executionScope:'test',system:'Independent observer',task:'Observe prior execution',tools:first.tools(child),query:initial,env:{},maxTokens:2048,maxTurns:4,signal:context.signal,permissionMode:'allow-all',publish:()=>{}}))
-  lease.release();attach()
+  lease.release();attach(true,status)
+  if(status==='cancelled')appendSessionMessage(child,{role:'user',origin:'system',content:[{type:'tool_result',tool_use_id:'late',content:'AGENT_CANCELLED',is_error:true}],timestamp:Date.now()})
   const work=createEngineeringWorkspaces(project.project_id,project.root_path,parent)
   const monitor=createEngineeringPartner(true,id=>work.has(id),{recover:recoverEngineeringMonitor,attached:recordEngineeringMonitor,history:recentProductionObservations,facts:()=>({phase:'implement',actual:'seed 100027; expected 777001'})})
   let calls=0;const sessions=new Set<string>()
@@ -59,6 +60,12 @@ it('restores the same tool-capable Pi Agent and its native investigation context
   expect(monitor.take(context)).toContain('种子不一致')
   monitor.suspend()
 },60000)
+
+it.each(['new-task','ordinary-result'])('does not recover a cancelled monitor with trailing %s',kind=>{
+  attach(true,'cancelled')
+  appendSessionMessage(child,{role:'user',origin:'system',content:kind==='new-task'?[{type:'text',text:'another invocation'}]:[{type:'tool_result',tool_use_id:'later',content:'ordinary result',is_error:false}],timestamp:Date.now()})
+  expect(()=>recoverEngineeringMonitor(ctx())).toThrow('RECOVERY_UNAVAILABLE')
+})
 
 it('rejects live or foreign research ownership and does not recover across a changed operation',()=>{
   attach(false);expect(()=>recoverEngineeringMonitor(ctx())).toThrow('RECOVERY_UNAVAILABLE')
