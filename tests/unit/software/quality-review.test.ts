@@ -385,11 +385,12 @@ it('recovers orphaned review records without accepting incomplete findings',asyn
  expect((await recovered.completionAction(ctx().signal)).next_tool).toBe('start_quality_review')
 })
 
-it('resumes an unchanged verified candidate through host review without waking the maker',async()=>{
+it.each([false,true])('resumes an unchanged verified candidate through host review without waking the maker (stale receipt=%s)',async stale=>{
  vi.stubEnv('BLOMA_ENGINEERING_PARTNER','1')
  const {enterDesktopLine}=await import('../../../main/desktop/desktop-route'),{findProject}=await import('../../../main/project/project-service')
  writeFileSync(join(project.root_path,'app.cjs'),'console.log(5)')
  expect((await verifySoftwareCandidate(project.project_id,'prior-request',ctx().signal)).status).toBe('passed')
+ if(stale){const verification=await import('../../../main/software/verification');vi.spyOn(verification,'recentSoftwareVerification').mockResolvedValueOnce(undefined)}
  let makerCalls=0,reviewCalls=0
  const query:SDKQuery=async function*(_prompt,options){
   if(!JSON.stringify(options.messages?.filter(m=>m.role==='system')).includes('独立只读代码/数据审阅C')){makerCalls++;throw Error('UNNECESSARY_MAKER_REQUEST')}

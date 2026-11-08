@@ -371,10 +371,16 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
         // New instructions, images or changed inputs still enter the maker loop.
         if(initial&&continuation&&!input.images?.length&&!input.observedSoftwareVersion){
           let verified=await recentSoftwareVerification(input.projectId,input.requestId,runSignal)
-          if(!verified&&recoveredTests){const checked=await verifySoftwareCandidate(input.projectId,input.requestId,runSignal);if(checked.status==='passed')verified=checked;else task+='\n'+JSON.stringify(verificationResponse(input.projectId,checked))}
+          if(!verified&&(recoveredTests||existsSync(brief.lean_brief.ui==='required'?guiSuitePath(input.projectId):cliSuitePath(input.projectId)))){
+            // A stale receipt is not a new implementation task. Observe the
+            // registered current candidate first; only an actual gap returns
+            // to the maker, including after a host/runtime upgrade.
+            const checked=await verifySoftwareCandidate(input.projectId,input.requestId,runSignal)
+            if(checked.status==='passed')verified=checked;else task+='\n'+JSON.stringify(verificationResponse(input.projectId,checked))
+          }
           if(verified){
           if(!input.initialMessagePersisted){appendSessionMessage(input.sessionId,{role:'user',origin:'user',content:[{type:'text',text:input.content}],timestamp:Date.now()});input.initialMessagePersisted=true}
-          const feedback=await advanceCloseout({projectId:input.projectId,sessionId:input.sessionId,requestId:input.requestId,signal:runSignal,state:createToolState()})
+          const feedback=await advanceCloseout({projectId:input.projectId,sessionId:input.sessionId,requestId:input.requestId,signal:runSignal,state:createToolState()},true)
           if(feedback)task+='\n'+feedback;else hostCompleted=true
           }
         }
