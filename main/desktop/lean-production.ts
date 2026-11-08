@@ -154,7 +154,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   const recoveredTests=await settleCorrections(signal)
   const brief = readPrdBackplane(input.projectId), scope = prdScopeFingerprint(brief)
   if(!isSoftwareProject(input.projectId))throw Error('SOFTWARE_WORKFLOW_REQUIRED')
-  const continuation=/^(?:继续|恢复|验收|重新验收|运行验收|按已确认目标制作|开始桌面交付流程)[。！!\s]*$/.test(input.content.trim())
+  const continuation=/^(?:继续(?:完成原任务)?|恢复|验收|重新验收|运行验收|按已确认目标制作|开始桌面交付流程)[。！!\s]*$/.test(input.content.trim())
   const originalSource=softwareVerificationFingerprint(project.root_path)
   const runId = randomUUID()
   let assignment: ReturnType<typeof beginProjectAssignment> | undefined

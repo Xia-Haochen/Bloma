@@ -396,7 +396,7 @@ it('resumes an unchanged verified candidate through host review without waking t
   const content=reviewCalls++===0?[{type:'tool_use' as const,id:'materials',name:'read_quality_review',input:{}},{type:'tool_use' as const,id:'source',name:'read_file',input:{path:'app.cjs'}},{type:'tool_use' as const,id:'submit',name:'submit_quality_findings',input:{findings:[],engineering:{status:'supported',evidence:'Read app.cjs: stateless addition and CLI input/output.',limitations:'Fixture'}}}]:[{type:'text' as const,text:'审阅已提交。'}]
   yield{type:'assistant',message:{role:'assistant',content}};yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
  }
- await enterDesktopLine({projectId:project.project_id,sessionId:parent,requestId:'resume-host',content:'继续',maxTokens:2048,signal:AbortSignal.timeout(90000)},query,{},
+ await enterDesktopLine({projectId:project.project_id,sessionId:parent,requestId:'resume-host',content:'继续完成原任务。',maxTokens:2048,signal:AbortSignal.timeout(90000)},query,{},
  {publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
  expect(makerCalls).toBe(0);expect(reviewCalls).toBe(1);expect(findProject(project.project_id).status).toBe('completed')
 },120000)
