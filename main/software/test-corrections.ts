@@ -92,7 +92,7 @@ export function pendingTestCorrectionInputs(id:string){
   return read(id).proposals.filter(p=>p.scope===scope(id)&&p.status==='pending').map(p=>({
     id:p.id,scope:p.scope,file:p.file,reason:p.reason,expected_sources:p.expected_sources,
     before:readTestContractFile(id,p.before.digest,p.file),after:{text:p.replacement,sha256:p.new_hash},
-    cases:p.before.cases,proposed_cases:p.after.cases,
+    cases:p.before.cases,proposed_cases:p.after.cases,native:p.after,
   }))
 }
 export function testCorrectionGate(id:string){

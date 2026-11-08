@@ -181,7 +181,15 @@ it('real browser: failed frozen expectation is retained, independently corrected
   const oldAttempt=readProjectStages(id).attempts[0],serverBefore=readFileSync(join(project.root_path,'server.cjs'),'utf8')
   registerNativeGuiTests(id,'acceptance.mjs')
   const a=proposeTestCorrection(id,{contract_digest:oldAttempt.native.digest,file:'acceptance.mjs',old_text:"toHaveText('current')",new_text:"toHaveText('created')",feature_ids:['F-001'],reason:'确认预期为created，失败证据实际也是created，current不符来源'})
-  decideTestCorrection(id,a.id,{verdict:'approve',reviewer:'independent_operator',reason:'独立核对确认来源与实际断言记录',expected_sources:{'F-001':'载入后显示created'},evidence:[{path:oldAttempt.report!,sha256:sha(readFileSync(oldAttempt.report!))}]})
+  const reviewQuery:import('../../../main/orchestration/stages/orchestration-contracts').SDKQuery=async function*(prompt){
+    const packet=JSON.parse(prompt)
+    expect(packet.proposed_execution).toMatchObject({product_verified:false,source_unchanged:true,result:{status:'passed'}})
+    expect(readFileSync(join(project.root_path,'acceptance.mjs'),'utf8')).toBe(original)
+    expect(readProjectStages(id).attempts.map(a=>a.status)).toEqual(['failed'])
+    yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify({verdict:'approve',reason:'对照确认预期和独立隔离执行',assessment:[{feature:'F-001',preserved:true,reason:'实际加载并检查创建时值，旧失败保留'}]})}]}}
+  }
+  await reviewPendingTestCorrections({projectId:id,sessionId:'s',query:reviewQuery,env:{},maxTokens:8192,signal:AbortSignal.timeout(60000)})
+  expect(testCorrectionView(id).proposals.find(row=>row.id===a.id)?.status).toBe('approved')
   await buildSoftwareVerifyTool(id,createSoftwareCollaborationPolicy(id,project.root_path,'s')).execute({},{projectId:id,sessionId:'s',requestId:'approved-recovery',signal:AbortSignal.timeout(60000),state:createToolState()})
   expect(readFileSync(join(project.root_path,'acceptance.mjs'),'utf8')).toContain("toHaveText('created')")
   expect(readProjectStages(id).attempts[0].status).toBe('failed')

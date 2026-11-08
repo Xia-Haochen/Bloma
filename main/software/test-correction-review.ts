@@ -8,6 +8,7 @@ import {ModelRequestRefusal} from '../platform/llm/model-request-refusal'
 import {readVerificationReport} from './verification-report'
 import {executionWindowFacts} from './execution-limits'
 import {decideTestCorrection,pendingTestCorrectionInputs} from './test-corrections'
+import {probeTestCorrection} from './test-correction-probe'
 
 const hash=(text:string)=>createHash('sha256').update(text).digest('hex')
 interface Decision {verdict:'approve'|'reject'|'defer';reason:string;assessment:Array<{feature:string;preserved:boolean;reason:string}>}
@@ -18,7 +19,10 @@ export async function reviewPendingTestCorrections(input:{projectId:string;sessi
     input.signal.throwIfAborted()
     let execution:unknown
     try{execution=readVerificationReport(input.projectId)}catch(error){if(!String(error).includes('VERIFICATION_REPORT_NOT_FOUND'))throw error;execution={available:false,reason:'尚无正式执行记录，不能假设执行成功或支持制作方解释。'}}
-    const packet={proposal,execution,resources:executionWindowFacts(),
+    let proposed_execution:unknown
+    try{proposed_execution=await probeTestCorrection(input.projectId,proposal,input.signal)}
+    catch(error){input.signal.throwIfAborted();proposed_execution={status:'unverified',error:String(error),product_verified:false}}
+    const packet={proposal,execution,proposed_execution,resources:executionWindowFacts(),
       boundary:'reason为制作方主张；执行记录可能来自旧版本。无执行证据不能声称验证了改动后的测试。'}
     const text=JSON.stringify(packet)
     if(Buffer.byteLength(text)>256*1024)throw new ModelRequestRefusal('TEST_CORRECTION_REVIEW_INPUT_TOO_LARGE')
