@@ -44,6 +44,32 @@ function tool(name: string, execute: AgentLoopTool['execute']): AgentLoopTool {
 function nativeFile() { return piSessionPath('test-project', 'test-session', 'desktop-implement:', process.cwd()) }
 
 describe('real upstream Pi AgentSession integration', () => {
+  it('lets an advisory Agent end quietly only after a successful complete response',async()=>{
+    let calls=0
+    const quiet:SDKQuery=async function*(){calls++;yield{...done,subtype:'success'}}
+    expect((await runAgentLoop(input(quiet,{allowSilentCompletion:true,runtimeScope:'engineering-peer',accountingRole:'research'}))).status).toBe('completed')
+    expect(calls).toBe(1)
+    const failed:SDKQuery=async function*(){yield{type:'result',subtype:'error'}}
+    await expect(runAgentLoop(input(failed,{allowSilentCompletion:true,sessionId:'failed-monitor'}))).rejects.toThrow('EMPTY_MODEL_STREAM')
+    const incomplete:SDKQuery=async function*(){}
+    await expect(runAgentLoop(input(incomplete,{allowSilentCompletion:true,sessionId:'incomplete-monitor'}))).rejects.toThrow('PI_TRANSPORT_INCOMPLETE')
+  })
+
+  it('observes public plans and exact execution results without private reasoning or changing a receipt on observer failure',async()=>{
+    const observed:unknown[]=[],order:string[]=[];let requests=0
+    const query:SDKQuery=async function*(_p,options){
+      if(requests++===0){yield{type:'thinking',thinking:'PRIVATE_REASONING'};yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:'PUBLIC_PLAN: use seed 777001'},{type:'tool_use',id:'probe',name:'probe',input:{seed:777001}}]}}}
+      else{expect(JSON.stringify(options.messages)).toContain('100027');expect(options.messages?.flatMap(m=>Array.isArray(m.content)?m.content:[]).find(b=>b.type==='tool_use'&&b.id==='probe')?.input).toEqual({seed:777001});yield text('Actual seed differs; inspect before changing the test.')}
+      yield done
+    }
+    const result=await runAgentLoop(input(query,{system:'PRIVATE_SYSTEM',publicMessageTiming:'response',
+      onAssistantMessage:message=>{order.push('public');observed.push(message)},
+      onToolObservation:value=>{order.push(value.phase==='started'?'requested':'result');observed.push(structuredClone(value));value.input.seed=0;throw Error('OBSERVER_FAILURE')},
+      tools:[tool('probe',async()=>{order.push('execute');return{output:'actual seed=100027; room=normal'}})]}))
+    expect(result.status).toBe('completed');expect(order.slice(0,4)).toEqual(['public','requested','execute','result'])
+    expect(observed).toContainEqual(expect.objectContaining({id:'probe',name:'probe',input:{seed:777001},output:'actual seed=100027; room=normal',isError:false}))
+    expect(JSON.stringify(observed)).not.toContain('PRIVATE_');expect(readFileSync(nativeFile(),'utf8')).toContain('actual seed=100027')
+  })
   it.each([true,false])('distinguishes changing static findings from shifted line numbers (progress=%s)',async progress=>{
     const q=scripted([[call('one','verify_app')],[call('two','verify_app')],[call('three','verify_app')],[text('continue after actual repairs')]])
     let checks=0

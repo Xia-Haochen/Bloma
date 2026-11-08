@@ -65,6 +65,8 @@ export function retainedDebugVersion(projectId: string, sessionId: string) {
   const snapshot = savedCheckpoint(projectId, sessionId)
   return snapshot?.source ? { source: snapshot.source, version: snapshot.version } : undefined
 }
+/** Read-only historical execution evidence; does not adopt a window or PID. */
+export function retainedDebugObservation(projectId:string,sessionId:string){return savedCheckpoint(projectId,sessionId)}
 function owned(projectId: string, sessionId: string, id: string): DebugSession {
   const session = sessions.get(id)
   if (!session) {

@@ -24,6 +24,7 @@ afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); if (previous === und
 it.each<{mode:'quick'|'longterm';peer:boolean;hold?:boolean}>([{mode:'quick',peer:false},{mode:'longterm',peer:false},{mode:'quick',peer:true},{mode:'quick',peer:true,hold:true}])('real Pi software loop builds, commits and delivers ($mode, peer=$peer, hold=$hold)', async ({mode,peer,hold}) => {
   vi.stubEnv('BLOMA_ENGINEERING_PARTNER',peer?'1':'0')
   let peerCalls=0,peerCancelled=false,pendingProbes=0,reviewWithActiveProbe=false
+  const peerSessions=new Set<string>(),peerInputs:string[]=[]
   if(hold){
     const execute=commandRuntime.executeSoftwareCommand
     vi.spyOn(commandRuntime,'executeSoftwareCommand').mockImplementation(args=>{
@@ -46,11 +47,12 @@ it.each<{mode:'quick'|'longterm';peer:boolean;hold?:boolean}>([{mode:'quick',pee
   const use = (id: string, name: string, input: Record<string, unknown>) => ({ type: 'tool_use' as const, id, name, input })
   const query: SDKQuery = async function* (_prompt, options) {
     if(options.accounting?.role==='research'){
+      peerSessions.add(options.sessionId);peerInputs.push(JSON.stringify(options.messages))
       if(hold){peerCalls++;yield{type:'assistant',message:{role:'assistant',content:peerCalls===1?[{type:'text',text:'PEER_PUBLIC_FINDING: validate the actual entry.'},use('peer-context','read_file',{path:'context.json'})]:[use('peer-hold','run_command',{command:['node','-e','advisory-probe-await-cancel']})]}};yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}};return}
 
       expect(JSON.stringify(options.messages?.filter(m=>m.role==='system'))).not.toContain('负责整个工程')
       expect(options.maxTokens).toBeLessThanOrEqual(16384)
-      yield {type:'assistant',message:{role:'assistant',content:++peerCalls%2===1?[use('peer-context','read_file',{path:'context.json'}),...(peerCalls===1?[use('peer-note','write_file',{path:'notes.md',content:'核对确认的命令行交付、实际入口与数据边界。'})]:[])]:[{type:'text',text:'独立核对：当前任务为无持久状态的命令行计算，验证实际构建入口及正常输入；仍以真实测试为依据。'}]}}
+      yield {type:'assistant',message:{role:'assistant',content:++peerCalls===1?[use('peer-context','read_file',{path:'context.json'}),use('peer-note','write_file',{path:'notes.md',content:'持续观察公开行动与实际执行结果。'})]:[]}}
       yield {type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}};return
     }
     calls.push(options)
@@ -83,10 +85,10 @@ it.each<{mode:'quick'|'longterm';peer:boolean;hold?:boolean}>([{mode:'quick',pee
     expect(events.some(event=>event.type==='user_decision_required'&&event.payload.kind==='longterm_milestone')).toBe(true)
     await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'user-confirm',content:'确认本阶段',maxTokens:4096,signal:AbortSignal.timeout(90000)},trackedQuery,{},deps)
   }
-  expect(findProject(project.project_id)).toMatchObject({ status: 'completed', desktop_phase: 'delivered' })
+  expect(findProject(project.project_id),JSON.stringify(findProject(project.project_id).desktop_blocked)).toMatchObject({ status: 'completed', desktop_phase: 'delivered' })
   expect(readFileSync(join(project.root_path, 'dist/app.cjs'), 'utf8')).toContain('console.log')
   expect(existsSync(join(project.root_path, 'app.py'))).toBe(false)
-  if(hold){expect(JSON.stringify(calls)).toContain('PEER_PUBLIC_FINDING');expect(reviewWithActiveProbe).toBe(true);expect(peerCancelled).toBe(true);expect(pendingProbes).toBe(0)}else if(peer){expect(peerCalls).toBe(2);expect(calls.length).toBeGreaterThanOrEqual(2);expect(calls.length).toBeLessThanOrEqual(4)}else expect(calls).toHaveLength(2)
+  if(hold){expect(JSON.stringify(calls)).toContain('PEER_PUBLIC_FINDING');expect(reviewWithActiveProbe).toBe(true);expect(peerCancelled).toBe(true);expect(pendingProbes).toBe(0)}else if(peer){expect(peerCalls).toBeGreaterThanOrEqual(2);expect(peerSessions.size).toBe(1);expect(peerInputs.join('\n')).toContain('assigned_observations');expect(peerInputs.join('\n')).toContain('built real source');expect(calls.length).toBeGreaterThanOrEqual(2);expect(calls.length).toBeLessThanOrEqual(4)}else expect(calls).toHaveLength(2)
   const evaluation=readFileSync(join(home,'harness-evaluation',project.project_id,'events.jsonl'),'utf8').trim().split('\n').map(line=>JSON.parse(line))
   const observed=evaluation.filter(e=>e.kind==='runtime_identity').map(e=>e.data.observation)
   expect(observed.some(o=>o.role==='orchestrator'&&o.runtime.packages['pi-coding-agent']==='1.4.0')).toBe(true)

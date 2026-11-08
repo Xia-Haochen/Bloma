@@ -132,6 +132,10 @@ export interface AgentLoopToolCallRecord {
   pending?: boolean
 }
 
+/** Public execution evidence only; no system prompt or reasoning blocks. */
+export type ToolObservation = {turn:number;id:string;name:string;input:Record<string,unknown>} &
+  ({phase:'started'}|{phase:'completed';output:string;isError:boolean;halted?:boolean})
+
 
 /** W1-E1（咨询 D3，2026-09-09）：竹节压缩观测信息——纯埋点零行为变更。
  *  编程编排层接 trackAnalytics('agent_loop_compact')；skipped=true 表示阈值满足但因
@@ -241,6 +245,11 @@ export interface AgentLoopInput {
   onTurn?: (info: AgentLoopTurnInfo) => void
   /** Public assistant text only; kept separate from numeric turn telemetry. */
   onAssistantMessage?: (message:{turn:number;text:string})=>void
+  /** Monitor channels may publish successful public text before lengthy tools. */
+  publicMessageTiming?: 'response'|'turn'
+  /** An advisory observer may end quietly; silence never means verification. */
+  allowSilentCompletion?: boolean
+  onToolObservation?: (observation:ToolObservation)=>void
   /** W1-E1 压缩观测回调（埋点 agent_loop_compact：压缩发生或首次跳过；不影响行为） */
   onCompaction?: (info: AgentLoopCompactionInfo) => void
   /** Host observation only; does not grant tools or alter execution policy. */

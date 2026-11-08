@@ -7,7 +7,7 @@ export { setChildRunContextProvider } from './child-run-context'
 /** 提示词纯函数 re-export（R7 拆出后保持既有 import 路径）。 */
 export { buildChildSystemPrompt, buildDelegationPrompt } from './child-run-context'
 import { appendDelegationSettle, loadChildSessionSnapshot, replayTurnsFrom } from './delegation-persistence'
-import { buildCompletedDelegation, registerChildWithHost } from './completed-delegation'
+import { buildCompletedDelegation, buildIndependentResearchDelegation, registerChildWithHost } from './completed-delegation'
 import { buildTaskHandoff, renderTaskHandoff, type TaskHandoff } from './task-handoff'
 import { refreshHandoffEvidence, assertDelegationRecovery } from './delegation-evidence'
 export { DelegationBudgetError } from './delegation-evidence'
@@ -112,6 +112,8 @@ export interface AskSignal {
 }
 
 export interface DelegationRecord {
+  /** Optional host label; detailed follow-up inputs remain in the transcript. */
+  title?: string
   assignment?: { writePaths?: string[]; readOnly?: boolean; experiment?: DelegateAgentArgs['experiment']; independentWorkspace?: boolean }
   workspaceLease?: { release: () => void; completionNote?: () => string; facts?:()=>unknown }
   workspaceFacts?:()=>unknown
@@ -214,7 +216,8 @@ export function startDelegation(parent: ToolContext, args: DelegateAgentArgs): S
   }
 
   const delegationId = randomUUID()
-  const goal = truncateText(task, DELEGATION_GOAL_CHAR_LIMIT)
+  const title=typeof args.title==='string'&&args.title.trim()?truncateText(args.title.trim(),80):undefined
+  const goal = truncateText(title??task, DELEGATION_GOAL_CHAR_LIMIT)
   const { completion, resolveCompletion } = createDelegationCompletion()
   const childSessionId = randomUUID()
 
@@ -225,6 +228,7 @@ export function startDelegation(parent: ToolContext, args: DelegateAgentArgs): S
     projectId: parent.projectId,
     role,
     goal,
+    ...(title?{title}:{}),
     status: 'running',
     startedAt: Date.now(),
     abort: new AbortController(),
@@ -255,7 +259,7 @@ export function startDelegation(parent: ToolContext, args: DelegateAgentArgs): S
 
   const prompt = buildDelegationPrompt({ role, task, expectedOutput: args.expectedOutput })
 
-  launchChildLoop({ parent, parentCtx, record, prompt, role })
+  launchChildLoop({ parent, parentCtx, record, prompt, rawTask:task, role })
 
   return { delegation_id: delegationId, child_session_id: childSessionId, role, goal, status: record.status }
 }
@@ -321,15 +325,18 @@ async function runChildLoop(opts: {
   role: DelegationRole
   /** continue 续跑重放的历史轮次（阶段 3）；startDelegation 全新会话不传 */
   replayTurns?: ConversationTurn[]
+  rawTask?: string
 }): Promise<AgentLoopResult> {
   const { parent, parentCtx, record, prompt, role } = opts
+  const childContext=parentCtx.childLoopContext?.(record.childSessionId,opts.rawTask??prompt)
   const runAbort = record.abort
   const childRequestId = randomUUID()
   const maxTurns = resolveDelegationTurns(parentCtx, role)
   let completedTurns=0
-  const liveContext=parentCtx.liveContext?()=>{
-    const facts=parentCtx.liveContext!()
+  const liveContext=parentCtx.liveContext||childContext?.liveContext?()=>{
+    const facts=parentCtx.liveContext?.()
     return{...(facts&&typeof facts==='object'&&!Array.isArray(facts)?facts:{context:facts}),
+      ...(childContext?.liveContext?{assigned_observations:childContext.liveContext()}:{}),
       delegation:{turn_limit:maxTurns,remaining_turns:Math.max(0,maxTurns-completedTurns)}}
   }:undefined
   // P1-06 收尾：子运行上下文（worktree 隔离）；provider 未注册/开关 off → 零变化
@@ -338,8 +345,8 @@ async function runChildLoop(opts: {
     ? '\n\n【隔离工作模式】你在独立分支的工作树上实现（改动不直接进项目主目录）；本会话不提供预览/测试/安全验证工具——验证由父会话在合并后统一执行，请专注于实现与逻辑自检。'
     : ''
   const invoke = (): Promise<AgentLoopResult> => runAgentLoop({
-    system: `${buildChildSystemPrompt(parentCtx.childSystemBuilder?.(role, record.childSessionId) ?? parentCtx.system, role)}${isolationNote}`,
-    task: parentCtx.delegationTurnLimits?.[role] ? prompt + '\n\n【执行预算】本轮上限 ' + maxTurns + ' 轮，每轮为一次模型请求。沿用历史中的已读事实，避免重复通读；保留最后约 1/4 轮数用于真实验证与交付收口。未完成时明确列出未落盘/未验证项，不得声称工作已完成。' : prompt,
+    system: `${childContext?.system??buildChildSystemPrompt(parentCtx.childSystemBuilder?.(role, record.childSessionId) ?? parentCtx.system, role)}${isolationNote}`,
+    task: childContext?.task??(parentCtx.delegationTurnLimits?.[role] ? prompt + '\n\n【执行预算】本轮上限 ' + maxTurns + ' 轮，每轮为一次模型请求。沿用历史中的已读事实，避免重复通读；保留最后约 1/4 轮数用于真实验证与交付收口。未完成时明确列出未落盘/未验证项，不得声称工作已完成。' : prompt),
     historyTurns: opts.replayTurns,
     materials: parentCtx.childMaterialsBuilder ? parentCtx.childMaterialsBuilder(record.childSessionId) : parentCtx.materials,
     tools: [...(parentCtx.childToolsBuilder ?? childToolsBuilder)(parent.projectId, role, parentCtx.editFormat, record.childSessionId), ...(parentCtx.childExtraTools ?? [])],
@@ -358,6 +365,9 @@ async function runChildLoop(opts: {
 
     liveContext,
     afterTools: parentCtx.childAfterTools?.(record.childSessionId),
+    beforeComplete: childContext?.beforeComplete,
+    publicMessageTiming: childContext?.publicMessageTiming,
+    allowSilentCompletion: childContext?.allowSilentCompletion,
     runtimeScope: parentCtx.childRuntimeScope?.(record.childSessionId) ?? parentCtx.runtimeScope,
     onRuntimeObservation: parentCtx.onRuntimeObservation,
     permissionMode: parentCtx.permissionMode,
@@ -478,6 +488,18 @@ export function restoreCompletedDelegation(parent: Pick<ToolContext, 'projectId'
   const record = buildCompletedDelegation(parent, delegationId, createDelegationCompletion(), createAskSignal())
   delegations.set(delegationId, record)
   return record
+}
+
+/** Only host-selected monitor records use this path; no model restoration tool. */
+export function restoreIndependentResearchDelegation(parent:Pick<ToolContext,'projectId'|'sessionId'>,delegationId:string):DelegationRecord{
+  const existing=findDelegation(parent.sessionId,delegationId)
+  if(existing){
+    if(existing.projectId!==parent.projectId||existing.role!=='research'||!existing.assignment?.independentWorkspace)throw Error('ENGINEERING_MONITOR_OWNER_MISMATCH')
+    if(existing.status==='running')throw Error('ENGINEERING_MONITOR_ALREADY_RUNNING')
+    return existing
+  }
+  const record=buildIndependentResearchDelegation(parent,delegationId,createDelegationCompletion(),createAskSignal())
+  delegations.set(delegationId,record);return record
 }
 
 function forEachRunningDelegation(fn: (record: DelegationRecord) => void): void {
@@ -703,7 +725,7 @@ export function continueDelegation(parent: ToolContext, delegationId: string, ta
   record.resolveCompletion = resolveCompletion
   record.askSignal = createAskSignal()
   // 续跑即新任务（审计 P2-6）：goal/startedAt 跟随本次 task，事件与渲染端不再显示旧 goal。
-  record.goal = truncateText(trimmedTask, DELEGATION_GOAL_CHAR_LIMIT)
+  record.goal = truncateText(record.title??trimmedTask, DELEGATION_GOAL_CHAR_LIMIT)
   record.startedAt = Date.now()
 
   let prompt = buildDelegationPrompt({ role: record.role, task: trimmedTask })
@@ -720,7 +742,7 @@ export function continueDelegation(parent: ToolContext, delegationId: string, ta
   } catch (error) {
     console.warn('[delegation-persistence] 续跑历史读回失败，退化为无历史续跑:', error)
   }
-  launchChildLoop({ parent, parentCtx, record, prompt, role: record.role, replayTurns })
+  launchChildLoop({ parent, parentCtx, record, prompt, rawTask:trimmedTask, role: record.role, replayTurns })
   publishDelegationEvent(parent.sessionId, 'delegation_started', record)
   return {
     delegation_id: record.delegationId,

@@ -26,6 +26,9 @@ export interface DelegationParentContext {
   childWorkspace?: (childSessionId:string)=>string|undefined
   childMaxTokens?: (childSessionId:string)=>number|undefined
   liveContext?: () => unknown
+  /** Domain-owned continuous observers can supply their own task framing and
+   * observation channel without changing identity, tools, budgets or authority. */
+  childLoopContext?: (childSessionId:string,task:string)=>Partial<Pick<AgentLoopInput,'system'|'task'|'liveContext'|'beforeComplete'|'publicMessageTiming'|'allowSilentCompletion'>>|undefined
   childRuntimeScope?: (childSessionId:string)=>string|undefined
   childAfterTools?: (childSessionId:string)=>AgentLoopInput['afterTools']
   runtimeScope?: string

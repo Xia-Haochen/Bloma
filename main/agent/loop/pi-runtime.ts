@@ -116,6 +116,7 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
         const toolSignal = signal ? AbortSignal.any([input.signal, signal]) : input.signal
         toolSignal.throwIfAborted()
         ctx.toolCallId = id
+        try{input.onToolObservation?.({phase:'started',turn:turns,id,name:tool.name,input:structuredClone(args) as Record<string,unknown>})}catch{/* Attempted action is not execution success. */}
         const outcome = await executeToolCall({ ...input, signal: toolSignal }, toolByName, budgetUsed,
           { name: tool.name, id, input: args as Record<string, unknown> }, { ...ctx, signal: toolSignal })
         let feedback = feedbackForTool(tool.name, outcome)
@@ -139,6 +140,7 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
         const assistantEntry = [...opened.manager.getBranch()].reverse().find(entry => entry.type === 'message' && entry.message.role === 'assistant')
         opened.manager.appendCustomEntry('bloma-tool-receipt', { id, assistantEntryId: assistantEntry?.id, name: tool.name, content,
           isError: outcome.isError === true || outcome.budgetExhausted === true })
+        try{input.onToolObservation?.({phase:'completed',turn:turns,id,name:tool.name,input:structuredClone(args) as Record<string,unknown>,output:content,isError:outcome.isError===true||outcome.budgetExhausted===true,halted:status!=='completed'})}catch{/* Observation cannot alter the execution receipt. */}
         return { content: [{ type: 'text' as const, text: content }, ...(outcome.images ?? []).map(piImage)],
           details: { ...outcome.detail, feedback, budgetExhausted: outcome.budgetExhausted } }
       },
@@ -273,6 +275,9 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
       } else if (event.type === 'message_end') {
         if (event.message.role === 'assistant') {
           finalText = event.message.content.filter(b => b.type === 'text').map(b => b.text).join('')
+          if(input.publicMessageTiming==='response'&&!compacting&&!input.signal.aborted&&!['error','aborted','length'].includes(event.message.stopReason)&&finalText.trim()){
+            try{input.onAssistantMessage?.({turn:turns,text:finalText})}catch{/* Advisory channel only. */}
+          }
           errorMessage = event.message.stopReason === 'error' ? event.message.errorMessage : undefined
           for (const text of filter.end()) input.publish('message_delta', { text })
           filter = createDsmlDisplayFilter()
@@ -316,7 +321,7 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
       } else if (event.type === 'turn_end') {
         const usage = [...turnsUsage].reverse().find(usage => usage.turn === turns)
         const failed=event.message.role==='assistant'&&['error','aborted','length'].includes(event.message.stopReason)
-        if(!failed&&!input.signal.aborted&&event.message.role==='assistant'&&input.onAssistantMessage){
+        if(input.publicMessageTiming!=='response'&&!compacting&&!failed&&!input.signal.aborted&&event.message.role==='assistant'&&input.onAssistantMessage){
           const text=event.message.content.filter(block=>block.type==='text').map(block=>block.text).join('')
           if(text.trim())try{input.onAssistantMessage({turn:turns,text})}catch{/* Advisory delivery never changes execution outcomes. */}
         }

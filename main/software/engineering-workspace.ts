@@ -1,6 +1,7 @@
 import {ENGINEERING_PARTNER_WORKFLOW} from './engineering-partner-guidance'
 import {buildSoftwareEnvironmentTool} from './environment-tool'
 import { buildQualityFindingsTool } from './quality-findings-tool'
+import {buildDelegationTools} from '../agent/delegation/delegation-tools'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync, copyFileSync, statSync, readdirSync, existsSync } from 'node:fs'
 import { join, dirname, resolve, relative } from 'node:path'
@@ -16,7 +17,9 @@ import { readPrdBackplane } from '../project/prd-store'
 import { prdScopeFingerprint } from '../project/requirement-contract'
 import { executeSoftwareCommand } from './command-runtime'
 import { redactSoftwareOutput } from './process-manager'
-import { activeDebugSessionId, readDebugSession } from './debug-sessions'
+import { activeDebugSessionId, readDebugSession,retainedDebugObservation } from './debug-sessions'
+import {findProject} from '../project/project-service'
+import {softwareVerificationFingerprint} from '../desktop/verification-fingerprint'
 import { buildSoftwareImageTool } from './image-tool'
 
 const hash=(bytes:Buffer)=>createHash('sha256').update(bytes).digest('hex')
@@ -24,9 +27,10 @@ const excluded=(path:string)=>path.startsWith('.bloma/skills/')||path.split('/')
 export function engineeringObservations(projectId:string,parent:string) {
   try {
     const id=activeDebugSessionId(projectId,parent)
-    if(!id)return{available:false}
-    const state=readDebugSession(projectId,parent,id)
-    return{available:true,source:state.source,version:state.version,stale:state.stale,
+    const state=id?readDebugSession(projectId,parent,id):retainedDebugObservation(projectId,parent)
+    if(!state)return{available:false}
+    return{available:true,source:state.source,version:state.version,historical:!id,recorded_state:state.state,stale:state.stale||state.source!==softwareVerificationFingerprint(findProject(projectId).root_path),
+      steps:state.steps.slice(-8).map(step=>{const actual=redactSoftwareOutput(JSON.stringify(step.actual)??'null');return{id:step.id,passed:step.passed,actual:actual.length<=6000?actual:actual.slice(0,3000)+'[中段省略]'+actual.slice(-3000),truncated:actual.length>6000}}),
       observations:state.observations.slice(-6).map(row=>({kind:row.kind,message:redactSoftwareOutput(row.message).slice(0,4000),truncated:row.message.length>4000})),
       image_included:false,authority:'执行观察，不是制作方结论或产品PASS；截图未附入此文字材料。'}
   }catch(error){return{available:false,error:redactSoftwareOutput(String(error))}}
@@ -132,7 +136,7 @@ export function createEngineeringWorkspaces(projectId:string,productRoot:string,
       .map(t=>({...t,execute:async(input:Record<string,unknown>,ctx:ToolContext)=>{check(ctx);return runWithProjectRootOverride(view.root,()=>t.execute(input,ctx))}}))
     const environment=buildSoftwareEnvironmentTool(projectId)
     const image=buildSoftwareImageTool(projectId)
-    return [...files,buildProductionContextTool(projectId),buildQualityFindingsTool(projectId,check),{...environment,execute:async(input:Record<string,unknown>,ctx:ToolContext)=>{check(ctx);return environment.execute(input,ctx)}},{...image,execute:async(input:Record<string,unknown>,ctx:ToolContext)=>{check(ctx);return runWithProjectRootOverride(view.root,()=>image.execute(input,ctx))}},{
+    return [...files,...buildDelegationTools('research'),buildProductionContextTool(projectId),buildQualityFindingsTool(projectId,check),{...environment,execute:async(input:Record<string,unknown>,ctx:ToolContext)=>{check(ctx);return environment.execute(input,ctx)}},{...image,execute:async(input:Record<string,unknown>,ctx:ToolContext)=>{check(ctx);return runWithProjectRootOverride(view.root,()=>image.execute(input,ctx))}},{
       name:'run_command',description:'在自己的工程研究工作区运行探针，数据使用独立目录；记录实际结果，不签发产品PASS。不要在sources副本或产品中做实验修改，先在本工作区创建探针副本。不是OS沙箱。',
       input_schema:{type:'object',additionalProperties:false,required:['command'],properties:{command:{type:'array',items:{type:'string'}},cwd:{type:'string'},timeout_ms:{type:'integer',minimum:100,maximum:60000}}},
       execute:async(input:Record<string,unknown>,ctx:ToolContext)=>{

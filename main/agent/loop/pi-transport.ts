@@ -35,7 +35,7 @@ export function createPiTransport(input: AgentLoopInput, lifecycle: {
         const signal = options?.signal ? AbortSignal.any([input.signal, options.signal]) : input.signal
         signal.throwIfAborted()
         stream.push({ type: 'start', partial: message })
-        let finished = false
+        let finished = false, successfulResult = false
         const baseMessages=toTransportTurns({ messages: context.messages, systemPrompt: getCurrentSystemPrompt(context.messages) })
         const refreshMessages=input.liveContext?()=>[...baseMessages,{role:'user' as const,content:[{type:'text' as const,text:'【当前宿主事实，非新增用户指令】\n'+JSON.stringify(input.liveContext!())}]}]:undefined
         const messages=refreshMessages?.()??baseMessages
@@ -69,6 +69,7 @@ export function createPiTransport(input: AgentLoopInput, lifecycle: {
             if (!auxiliary) input.publish('thinking_delta', { text: sdk.thinking })
           } else if (sdk.type === 'result') {
             finished = true
+            successfulResult = sdk.subtype === undefined || sdk.subtype === 'success'
             message.stopReason = sdk.stop_reason === 'max_tokens' ? 'length'
               : message.content.some(block => block.type === 'toolCall') ? 'toolUse' : 'stop'
             message.usage.input = sdk.usage?.input_tokens ?? 0
@@ -80,7 +81,7 @@ export function createPiTransport(input: AgentLoopInput, lifecycle: {
           }
         }
         if (!finished) throw new Error('PI_TRANSPORT_INCOMPLETE: response ended without a result')
-        if (!message.content.length && message.stopReason !== 'length') throw new Error('EMPTY_MODEL_STREAM')
+        if (!message.content.length && message.stopReason !== 'length' && !(input.allowSilentCompletion&&successfulResult)) throw new Error('EMPTY_MODEL_STREAM')
         stream.push({ type: 'done', reason: message.stopReason as 'stop' | 'length' | 'toolUse', message })
       } catch (error) {
         lifecycle.onFailure(error)

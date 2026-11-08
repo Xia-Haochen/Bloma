@@ -3,7 +3,8 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { beforeEach, afterEach, expect, it } from 'vitest'
 import { createProject } from '../../../main/project/project-service'
-import { createEngineeringWorkspaces } from '../../../main/software/engineering-workspace'
+import { createEngineeringWorkspaces,engineeringObservations } from '../../../main/software/engineering-workspace'
+import {debugWorkspace} from '../../../main/software/debug-workspace'
 import { createSoftwareCollaborationPolicy } from '../../../main/software/collaboration-policy'
 import { buildSoftwareAgentTools } from '../../../main/software/agent-tools'
 import { createToolState } from '../../../main/agent/loop/agent-loop'
@@ -15,6 +16,19 @@ beforeEach(()=>{old=process.env.PROMA_HOME;home=mkdtempSync(join(tmpdir(),'bloma
 afterEach(async()=>{disposeParentDelegationState('parent');await settleParentDelegationRuns('parent');if(old===undefined)delete process.env.PROMA_HOME;else process.env.PROMA_HOME=old;rmSync(home,{recursive:true,force:true,maxRetries:5,retryDelay:100})})
 const ctx=(sessionId='child')=>({projectId:project.project_id,sessionId,requestId:'r',signal:AbortSignal.timeout(30000),state:createToolState()})
 const args={task:'核对方案',role:'research' as const,readOnly:true,independentWorkspace:true}
+
+it('supplies actual retained probe steps after the window closes without making them current or leaking another owner',()=>{
+  const path=join(debugWorkspace(project.project_id,'parent'),'checkpoint.json')
+  const value={id:'old-debug',projectId:project.project_id,sessionId:'parent',state:'closed',version:2,source:'old-source',stale:false,
+    observations:[{kind:'script.completed',message:'Browser script exited 0'}],steps:[{id:'browser-script',passed:false,actual:{expected_seed:777001,actual_seed:100027,error:'api_key=PRIVATE_KEY'}}]}
+  writeFileSync(path,JSON.stringify(value));const before=readFileSync(path,'utf8')
+  const facts=engineeringObservations(project.project_id,'parent')
+  expect(facts).toMatchObject({available:true,historical:true,stale:true,recorded_state:'closed',steps:[{passed:false}]})
+  expect(JSON.stringify(facts)).toContain('100027');expect(JSON.stringify(facts)).not.toContain('PRIVATE_KEY')
+  expect(readFileSync(path,'utf8')).toBe(before)
+  writeFileSync(path,JSON.stringify({...value,projectId:'foreign-project'}))
+  expect(engineeringObservations(project.project_id,'parent')).toMatchObject({available:false})
+})
 
 it('recovers prior investigation artifacts across parents without inheriting private conversations or stale authority',async()=>{
   const first=createEngineeringWorkspaces(project.project_id,project.root_path,'old-parent'),lease=first.prepare('old-child',args),root=first.root('old-child')
