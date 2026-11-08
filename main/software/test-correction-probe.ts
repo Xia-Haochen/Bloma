@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto'
-import {readFileSync,writeFileSync} from 'node:fs'
+import {writeFileSync} from 'node:fs'
 import {join} from 'node:path'
 import {findProject} from '../project/project-service'
 import {runSecurityScan} from '../verification/security-scan'
@@ -12,11 +12,15 @@ import {pendingTestCorrectionInputs} from './test-corrections'
  * Its release manifest intentionally stays invalid: this is diagnosis, never
  * an accepted test registration or a publishable release. */
 export async function probeTestCorrection(projectId:string,proposal:ReturnType<typeof pendingTestCorrectionInputs>[number],signal:AbortSignal){
+  const sha=(text:string)=>createHash('sha256').update(text).digest('hex')
+  if(sha(proposal.before.text)!==proposal.before.sha256||sha(proposal.after.text)!==proposal.after.sha256)throw Error('TEST_CORRECTION_PROBE_INPUT_CHANGED')
   const root=findProject(projectId).root_path
   const candidate=await prepareSoftwareRelease(projectId,root,signal)
-  const sha=(text:string)=>createHash('sha256').update(text).digest('hex')
   const file=join(candidate.root,proposal.file)
-  if(sha(readFileSync(file,'utf8'))!==proposal.before.sha256||sha(proposal.after.text)!==proposal.after.sha256)throw Error('TEST_CORRECTION_PROBE_INPUT_CHANGED')
+  // The host proposal, not the maker's current editable test, owns probe input.
+  // Stage only the exact proposed bytes in the disposable candidate. Native
+  // execution still verifies every frozen dependency; application to the live
+  // tree remains separately gated by independent approval and byte identity.
   writeFileSync(file,proposal.after.text)
   const expected=await runtimeInventory(candidate.root,signal,candidate.dependencies)
   const security=runSecurityScan({project_id:projectId,root_path:candidate.root,profile:'local-software'})
