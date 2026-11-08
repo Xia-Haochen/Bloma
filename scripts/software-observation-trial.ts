@@ -3,7 +3,7 @@ import {createTrialWallet} from './trial-wallet'
 import {readPendingDecision} from '../main/guide/pending-decision'
 import {loadUserTestFiles} from './user-test-files'
 import { trialOutputCap } from './trial-output-cap'
-import {createTrialRequestRecorder} from './trial-request-recorder'
+import {createTrialRequestRecorder,serializeTrialRecord} from './trial-request-recorder'
 import {softwareVerificationFingerprint} from '../main/desktop/verification-fingerprint'
 import {readQualityLedger} from '../main/software/quality-ledger'
 import {ModelRequestRefusal} from '../main/platform/llm/model-request-refusal'
@@ -78,7 +78,7 @@ export async function main() {
   const generationMaxTokens = resolveGenerationMaxTokens({ max_tokens: binding.maxTokens })
   const key = binding.env.ANTHROPIC_AUTH_TOKEN ?? binding.env.ANTHROPIC_API_KEY
   if (!key) throw Error('KEY_UNAVAILABLE')
-  const safe = (v: unknown) => redactSoftwareOutput(JSON.stringify(v)).split(key).join('[REDACTED]')
+  const safe = (v: unknown) => serializeTrialRecord(v,text=>redactSoftwareOutput(text).split(key).join('[REDACTED]'))
   const get = async (path: string) => {
     const response = await fetch(`https://api.deepseek.com/${path}`, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(20000) })
     if (!response.ok) throw Error(`PREFLIGHT_HTTP_${response.status}`)

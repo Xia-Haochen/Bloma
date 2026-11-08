@@ -6,6 +6,8 @@
 
 操作者须实际查看草图再确认、实际操作产物再反馈；操作报告不代替 C/V 和发布证据。入口保留失败段，不直接改产品或冻结预期。离线验证：类型检查及 observation-launcher、observation-trial、simulated-user-recovery 共 43 项通过，日志 `run-artifacts/operator-trial-tests-20261108.log` 与 `run-artifacts/operator-trial-types-20261108.log`；不代表新客户端已完成实机验收。
 
+校园客户端实测暴露观察日志缺陷：对序列化后的 JSON 做正则脱敏会吞掉嵌套字符串的转义符。已改为逐字符串脱敏后再编码；继续加载旧记录时保留损坏原件，以 `unreadable_record` 标注证据缺口并保留编号，不伪造成功、不重置账本。冻结中的旧运行包保持原样，修复仅在后续准备的运行包生效。定向回归见 `run-artifacts/trial-json-redaction-20261108.log`。
+
 当前前置恢复：已授权外层窗口在公共运行入口对齐需求、草图与制作的内部执行额度，不清累计计数；制作入口不再持有独立的同步逻辑。草图决定由宿主标记 observation_required，未就绪时可执行恢复动作，真实视觉确认仍需当前画面。software-v1 草图使用已有宿主执行与取消窗口，不叠加固定四分钟阶段时限。运行中每30秒读取一次钱包余额并记录时间；余额变化、已报告用量和未知预留分别呈现，不伪造单请求费用、不清未知记录。最终余额读取失败不把旧快照当作结束时余额。
 
 本批恢复验证：84项定向回归通过；完整 `check:offline` 的类型、文档、构建与19文件171项回归通过。额外核对跨进程恢复的无图调整卡；未修改产品或冻结断言。日志：`run-artifacts/preparation-recovery-final-20261107.log`、`preparation-recovery-offline-20261107.log`、`preparation-decision-final-20261107.log`。钱包展示不再把责任预留称作实际消费。

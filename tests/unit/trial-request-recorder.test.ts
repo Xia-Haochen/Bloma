@@ -1,8 +1,32 @@
-import {mkdtempSync,readFileSync,rmSync} from 'node:fs'
+import {mkdtempSync,readFileSync,rmSync,mkdirSync,writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {expect,it} from 'vitest'
-import {createTrialRequestRecorder} from '../../scripts/trial-request-recorder'
+import {createTrialRequestRecorder,serializeTrialRecord} from '../../scripts/trial-request-recorder'
+import {redactSoftwareOutput} from '../../main/software/process-manager'
+it('redacts nested command text without breaking the enclosing JSON',()=>{
+  const input={trigger:JSON.stringify({result:{text:'COMMAND_REQUIRES_SEPARATE_AUTHORIZATION: refused'}}),message:'password="synthetic-secret"\ncookie: session=synthetic-cookie\nnext line',path:'C:\\test\\file'}
+  const raw=serializeTrialRecord(input,redactSoftwareOutput)
+  const parsed=JSON.parse(raw)
+  expect(parsed.path).toBe(input.path)
+  expect(parsed.trigger).toContain('[REDACTED]')
+  expect(raw).not.toContain('synthetic-secret');expect(raw).not.toContain('synthetic-cookie')
+  expect(parsed.message).toContain('next line')
+})
+it('retains unreadable old records and continues numbering with an explicit evidence gap',async()=>{
+  const root=mkdtempSync(join(tmpdir(),'trial-trace-damaged-'))
+  try{
+    mkdirSync(join(root,'requests'))
+    const damaged='{"trigger":"damaged [REDACTED]",\\"nested":true}'
+    writeFileSync(join(root,'requests/00007.json'),damaged)
+    const recorder=createTrialRequestRecorder(root,JSON.stringify,()=>({}))
+    const run=recorder.wrap(async function*(){yield{type:'result',subtype:'success'}},'interact')
+    for await(const _ of run('resume',{env:{},sessionId:'s',signal:new AbortController().signal})){}
+    expect(readFileSync(join(root,'requests/00007.json'),'utf8')).toBe(damaged)
+    expect(JSON.parse(readFileSync(join(root,'requests/00008.json'),'utf8')).sequence).toBe(8)
+    expect(readFileSync(join(root,'timeline.md'),'utf8')).toContain('unreadable_record')
+  }finally{rmSync(root,{recursive:true,force:true})}
+})
 it('records actual sends, associates tool IDs and excludes credentials and hidden reasoning',async()=>{
   const root=mkdtempSync(join(tmpdir(),'trial-trace-'))
   try{

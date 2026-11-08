@@ -5,12 +5,27 @@ import type {SDKQuery} from '../main/orchestration/stages/orchestration-contract
 import type {SDKMessage} from '../shared/types'
 
 const sha=(s:string)=>createHash('sha256').update(s).digest('hex')
+/** Redact string values before encoding: regexes must never consume JSON escapes. */
+export function serializeTrialRecord(value:unknown,redact:(text:string)=>string){
+  return JSON.stringify(value,(_key,item)=>typeof item==='string'?redact(item):item)
+}
 /** Trial-only observation. No admission, retries, prompts or product state are
  * changed. Explicit request/tool IDs replace timestamp-based attribution. */
 export function createTrialRequestRecorder(folder:string,redact:(value:unknown)=>string,snapshot:(session?:string)=>any,rates?:{input_rmb_per_million:number;output_rmb_per_million:number;cache_rmb_per_million:number}){
   mkdirSync(join(folder,'requests'),{recursive:true})
   const toolOwners=new Map<string,string>(),rows=new Map<string,any>()
-  for(const file of readdirSync(join(folder,'requests')).filter(n=>/^\d{5}\.json$/.test(n))){const row=JSON.parse(readFileSync(join(folder,'requests',file),'utf8'));rows.set(row.trace_id,row);for(const call of row.tool_calls??[])toolOwners.set(call.id,row.trace_id)}
+  for(const file of readdirSync(join(folder,'requests')).filter(n=>/^\d{5}\.json$/.test(n))){
+    let row:any
+    try{row=JSON.parse(readFileSync(join(folder,'requests',file),'utf8'))}
+    catch(error){
+      if(!(error instanceof SyntaxError))throw error
+      // Keep damaged historical bytes. A gap is visible, never fabricated as a
+      // successful request and never allowed to reset sequence/accounting.
+      const sequence=Number(file.slice(0,5))
+      row={sequence,trace_id:'unreadable-'+sequence,phase:'historical',role:'unknown',status:'unreadable_record',trigger:'Historical record cannot be parsed; original bytes retained.',transports:[],tool_calls:[]}
+    }
+    rows.set(row.trace_id,row);for(const call of row.tool_calls??[])toolOwners.set(call.id,row.trace_id)
+  }
   let sequence=Math.max(0,...[...rows.values()].map(r=>r.sequence))
   const clean=(value:any):any=>{
     if(Array.isArray(value))return value.filter(v=>!['thinking','redacted_thinking','reasoning'].includes(v?.type)).map(clean)
