@@ -312,6 +312,7 @@ export function nativeGuiObservations(suite: GuiAcceptanceSuite, reports: Array<
             throw Error('GUI_NATIVE_TRACE_INVALID');
         interactions += trace.interactions;
         assertions += trace.assertions;
+        const finishedCases = new Set<string>();
         for (const line of report.events.split(/\r?\n/).filter(Boolean)) {
             const event = JSON.parse(line);
             if (!['test:pass', 'test:fail'].includes(event.type))
@@ -330,6 +331,7 @@ export function nativeGuiObservations(suite: GuiAcceptanceSuite, reports: Array<
             if (event.type === 'test:fail')
                 failed = true;
             if (ids.length) {
+                finishedCases.add(event.name);
                 const row=case_results.find(row=>row.name===event.name)!
                 const counts=trace.cases.find((c:{name:string})=>c.name===event.name)
                 if(counts){row.assertions+=Number.isSafeInteger(counts.assertions)&&counts.assertions>=0?counts.assertions:0;row.interactions+=Number.isSafeInteger(counts.interactions)&&counts.interactions>=0?counts.interactions:0}
@@ -348,6 +350,15 @@ export function nativeGuiObservations(suite: GuiAcceptanceSuite, reports: Array<
                 }
                 steps.push({ id: `native-${steps.length + 1}`, passed, actual: { test: event.name, error: event.error, assertion: event.assertion } });
             }
+        }
+        // A trace row is written when the callback starts. Missing completion
+        // is interrupted execution, not a case that was never started.
+        for (const started of trace.cases) {
+            const row = case_results.find(row => row.name === started.name);
+            if (!row || finishedCases.has(started.name)) continue;
+            if (row.status !== 'failed') row.status = 'unverified';
+            row.assertions += Number.isSafeInteger(started.assertions) && started.assertions >= 0 ? started.assertions : 0;
+            row.interactions += Number.isSafeInteger(started.interactions) && started.interactions >= 0 ? started.interactions : 0;
         }
         if (!phasePassedCases) incompletePhase = true;
     }

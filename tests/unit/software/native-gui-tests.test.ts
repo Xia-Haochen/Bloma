@@ -38,7 +38,7 @@ it.each(['passed','failed'])('retains %s case evidence when a later case hits th
   expect(result.core?.host_gui?.status).toBe(first==='failed'?'failed':'unverified')
   expect(result.core?.host_gui?.case_results).toEqual(expect.arrayContaining([
     expect.objectContaining({name:'F-001 completed',status:first}),
-    expect.objectContaining({name:'F-002 interrupted',status:'not_run'}),
+    expect.objectContaining({name:'F-002 interrupted',status:'unverified'}),
   ]))
   expect(result.core?.host_gui?.error).toContain('GUI_NATIVE_EXECUTION_INCOMPLETE')
 },60000)
