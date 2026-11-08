@@ -2,6 +2,7 @@ import {applyApprovedNativeCorrections} from '../../../main/software/native-gui-
 import {guiSuitePath} from '../../../main/desktop/gui-acceptance'
 import {buildSoftwareVerifyTool} from '../../../main/software/verification-tool'
 import {applyApprovedTestCorrections} from '../../../main/software/test-corrections'
+import {reviewPendingTestCorrections} from '../../../main/software/test-correction-review'
 import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync} from 'node:fs'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
@@ -40,6 +41,33 @@ beforeEach(()=>{
 afterEach(()=>{if(old===undefined)delete process.env.PROMA_HOME;else process.env.PROMA_HOME=old;rmSync(home,{recursive:true,force:true})})
 const proposal=()=>proposeTestCorrection(p.project_id,{contract_digest:before.digest,file:'acceptance.mjs',old_text:"toHaveText('current')",new_text:"toHaveText('created')",feature_ids:['F-001'],reason:'独立原始记录显示创建时值，当前值不是需求预期'})
 function decision(id:string){const evidence=join(home,'independent.json');writeFileSync(evidence,'{"observed":"created","original_assertion":"current"}');return{verdict:'approve' as const,reviewer:'independent_operator' as const,reason:'核对确认需求和独立原始记录后裁定',expected_sources:{'F-001':'旧记录保留创建时信息'},evidence:[{path:evidence,sha256:sha(readFileSync(evidence))}]}}
+it('adjudicates with isolated frozen inputs, preserves failure, and leaves application to the existing host',async()=>{
+  proposal();let calls=0
+  const query:import('../../../main/orchestration/stages/orchestration-contracts').SDKQuery=async function*(prompt,options){
+    calls++;const packet=JSON.parse(prompt)
+    expect(packet.proposal.before.text).toBe(original)
+    expect(packet.proposal.after.text).toContain("toHaveText('created')")
+    expect(options.sessionId).toContain('-test-review-')
+    expect(options.history?.length??0).toBeLessThanOrEqual(1)
+    yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify({verdict:'approve',reason:'确认预期要求保留创建时信息，旧断言检查当前值不符',assessment:[{feature:'F-001',preserved:true,reason:'仍然实际加载原记录并断言创建时值'}]})}]}}
+  }
+  const input={projectId:p.project_id,sessionId:'maker',query,env:{},maxTokens:8192,signal:new AbortController().signal}
+  await reviewPendingTestCorrections(input);await reviewPendingTestCorrections(input)
+  expect(calls).toBe(1);expect(pendingTestCorrection(p.project_id)).toBe(false)
+  expect(testCorrectionView(p.project_id).proposals[0].decision?.reviewer).toBe('independent_model')
+  expect(readFileSync(join(p.root_path,'acceptance.mjs'),'utf8')).toBe(original)
+  expect(readProjectStages(p.project_id).attempts[0].status).toBe('failed')
+  applyApprovedTestCorrections(p.project_id)
+  expect(readFileSync(join(p.root_path,'acceptance.mjs'),'utf8')).toContain("toHaveText('created')")
+})
+it.each(['defer','invalid','approve-with-false','reject'])('fails closed or preserves rejection for %s without retrying the review',async mode=>{
+  proposal();let calls=0
+  const query:import('../../../main/orchestration/stages/orchestration-contracts').SDKQuery=async function*(){calls++;yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:mode==='invalid'?'invalid':JSON.stringify({verdict:mode==='approve-with-false'?'approve':mode,reason:'证据不足或违反业务预期',assessment:[{feature:'F-001',preserved:false,reason:'操作可达性未证实'}]})}]}}}
+  const action=reviewPendingTestCorrections({projectId:p.project_id,sessionId:'maker',query,env:{},maxTokens:8192,signal:new AbortController().signal})
+  if(mode==='reject'){await action;expect(testCorrectionView(p.project_id).proposals[0].status).toBe('rejected')}
+  else{await expect(action).rejects.toThrow('TEST_CORRECTION_REVIEW_REQUIRED');expect(pendingTestCorrection(p.project_id)).toBe(true)}
+  expect(calls).toBe(1);expect(readFileSync(join(p.root_path,'acceptance.mjs'),'utf8')).toBe(original)
+})
 it('preserves the original failure and archive; only exact independently approved bytes may pass contract admission',()=>{
   const a=proposal();expect(pendingTestCorrection(p.project_id)).toBe(true)
   expect(()=>applyTestCorrection(p.project_id,a.id)).toThrow('NOT_APPROVED')

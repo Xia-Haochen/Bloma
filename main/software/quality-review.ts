@@ -291,11 +291,12 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       return result
     }
   })), ...reviewProtocol(child?'code':undefined)]
-  const wrapQuery = (query: SDKQuery): SDKQuery => async function* (prompt, options) {
+  const wrapQuery = (query: SDKQuery, settleCorrections?: (signal:AbortSignal)=>Promise<void>): SDKQuery => async function* (prompt, options) {
     const route = routeIdentity(options.env,options.providerType)
     activeRoute = route
     let ledger = readQualityLedger(projectId)
     if (options.sessionId === parent) {
+      if(pendingTestCorrection(projectId)&&settleCorrections)await settleCorrections(options.signal)
       if(pendingTestCorrection(projectId))throw new ModelRequestRefusal('TEST_CORRECTION_REVIEW_REQUIRED: 已保存提案，独立裁定前停止模型调用；制作方不能自行批准。')
       const active = ledger.reviews.filter(r => r.child && children.has(r.child) && r.delegation).map(r => findDelegation(parent, r.delegation!)).filter(r => r?.status === 'running' && !r.pendingQuestion)
       if (active.length) { await withAbort(Promise.all(active.map(r => r!.completion)), options.signal); ledger = readQualityLedger(projectId) }

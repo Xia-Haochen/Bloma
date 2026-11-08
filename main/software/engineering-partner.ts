@@ -24,7 +24,7 @@ export function createEngineeringPartner(enabled:boolean,version:()=>string=()=>
   return{
     begin(ctx:ToolContext){
       if(!enabled||activated)return
-      activated=true;pending='从当前工作状态找最影响下一步的工程问题，按需调查或做最小实验；已有足够依据就交接并结束本次咨询。';dispatch(ctx)
+      activated=true;pending='先核对context.json中的当前阻断、质量发现及既有调查，围绕尚缺的证据调查；缺关键事实时先交接缺口，不猜阻断原因。没有待解问题则结束。';dispatch(ctx)
     },
     receive(session:string,message:{turn:number;text:string;truncated:boolean},facts?:()=>unknown){
       if(!(knownChild?knownChild(session):activated&&session===child)||!message.text.trim())return

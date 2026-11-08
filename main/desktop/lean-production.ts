@@ -6,6 +6,8 @@ import { checkpointProjectHistory } from '../coding/project-git'
 import { locallyVerifiedSoftware } from '../software/verification'
 import {ModelRequestRefusal} from '../platform/llm/model-request-refusal'
 import {applyApprovedNativeCorrections} from '../software/native-gui-registration'
+import {reviewPendingTestCorrections} from '../software/test-correction-review'
+import {pendingTestCorrection,testCorrectionView} from '../software/test-corrections'
 import {executionWindowFacts} from '../software/execution-limits'
 import { productDesignPolicy } from '../project/product-design-policy'
 import { beginProjectAssignment } from '../software/task-assignment'
@@ -141,7 +143,12 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   const historyBase = await checkpointProjectHistory(project.root_path, { kind: 'production_base', summary: '制作前的实际工程基线' }, signal)
   signal.throwIfAborted()
   recordEvaluationEvent(input.projectId, 'project_history', { ...historyBase, boundary: 'before_implementation' })
-  const recoveredTests=applyApprovedNativeCorrections(input.projectId,signal)
+  const correctionQuery=leanBudget(input.projectId,'desktop-implement').wrap(input.query)
+  const settleCorrections=async(reviewSignal:AbortSignal)=>{
+    await reviewPendingTestCorrections({projectId:input.projectId,sessionId:input.sessionId,query:correctionQuery,env:input.env,maxTokens:input.maxTokens,signal:reviewSignal})
+    return applyApprovedNativeCorrections(input.projectId,reviewSignal)
+  }
+  const recoveredTests=await settleCorrections(signal)
   const brief = readPrdBackplane(input.projectId), scope = prdScopeFingerprint(brief)
   if(!isSoftwareProject(input.projectId))throw Error('SOFTWARE_WORKFLOW_REQUIRED')
   const continuation=/^(?:继续|恢复|验收|重新验收|运行验收|按已确认目标制作|开始桌面交付流程)[。！!\s]*$/.test(input.content.trim())
@@ -239,7 +246,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     } }) }
     catch (error) { if (monetaryStopMessage(error)) monetaryFailure = error; throw error }
   }
-  const query=quality.wrapQuery(pairedEngineering?serializeModelQueries(guardedQuery):guardedQuery)
+  const query=quality.wrapQuery(pairedEngineering?serializeModelQueries(guardedQuery):guardedQuery,async signal=>{await settleCorrections(signal)})
   const baseTools = buildSoftwareAgentTools(input.projectId, 'parent', collaboration,
     url => emit('software_preview_changed', { preview_url: url ?? null }), () => emit('software_suggestions_changed', {}),()=>emit('longterm_changed',{summary:findProject(input.projectId).longterm_summary}))
   let scopePending = false
@@ -248,7 +255,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     buildLeanScopeTool(input.projectId, input.content, emit, () => { scopePending = true }),
     brief.lean_brief.ui === 'required' ? buildLeanGuiTool(input.projectId) : buildLeanCliTool(input.projectId)])
   const executionFacts=()=>({delivery:{form:brief.lean_brief?.delivery,ui:brief.lean_brief?.ui,distribution:brief.lean_brief?.distribution??'local'},declared_entry:declaredEntryFacts(project.root_path),resources:executionWindowFacts()})
-  const liveContext=()=>{const advice=partner.latest();return{...executionFacts(),...(advice?{engineering_advice:advice}:{})}}
+  const liveContext=()=>{const advice=partner.latest();return{...executionFacts(),test_corrections:testCorrectionView(input.projectId).proposals.map(p=>({id:p.id,status:p.status,applied_at:p.applied_at,decision:p.decision})),...(advice?{engineering_advice:advice}:{})}}
   const system = [
     SOFTWARE_ENGINEERING_INSTRUCTIONS,
     `宿主恢复检查点：${JSON.stringify(historyBase)}。这是版本恢复事实，不是工程提交或通过判定；由你检查产品仓库、处理可恢复问题并管理有意义的提交。`,
@@ -316,6 +323,11 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     return [waiting,partner.take(ctx)].filter(Boolean).join('\n')||undefined
   }
   const advanceCloseout = async (ctx: import('../agent/loop/agent-loop').ToolContext, locallyChecked = false) => {
+    if(pendingTestCorrection(input.projectId)){
+      await settleCorrections(ctx.signal)
+      const checked=await verifySoftwareCandidate(input.projectId,input.requestId,ctx.signal)
+      if(checked.status!=='passed')return JSON.stringify(verificationResponse(input.projectId,checked))
+    }
     const waiting = await waitForProductionChildren(ctx)
     if (waiting) return waiting
     partner.closeout(ctx)

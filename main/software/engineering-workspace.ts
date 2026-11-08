@@ -2,7 +2,7 @@ import {ENGINEERING_PARTNER_WORKFLOW} from './engineering-partner-guidance'
 import {buildSoftwareEnvironmentTool} from './environment-tool'
 import { buildQualityFindingsTool } from './quality-findings-tool'
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, writeFileSync, copyFileSync, statSync, readdirSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync, copyFileSync, statSync, readdirSync, existsSync } from 'node:fs'
 import { join, dirname, resolve, relative } from 'node:path'
 import { getPromaHome } from '../../storage/config-paths'
 import { runWithProjectRootOverride } from '../../shared/project-root-override'
@@ -32,7 +32,7 @@ export function engineeringObservations(projectId:string,parent:string) {
   }catch(error){return{available:false,error:redactSoftwareOutput(String(error))}}
 }
 export const engineeringObservationVersion=(projectId:string,parent:string)=>hash(Buffer.from(JSON.stringify(engineeringObservations(projectId,parent))))
-interface View { root:string; snapshot:string; files:Array<{path:string;sha256:string}>; active:boolean; target:string; contextHash:string; executions:Array<Record<string,unknown>>; executionCount:number; factProvider?:()=>unknown }
+interface View { root:string; snapshot:string; files:Array<{path:string;sha256:string}>; inherited?:Array<{path:string;sha256:string}>; active:boolean; target:string; contextHash:string; executions:Array<Record<string,unknown>>; executionCount:number; factProvider?:()=>unknown }
 export function engineeringSourceVersion(root:string) {
   const files=repositoryFiles(root).filter(path=>!excluded(path))
   if(files.length>2048||files.reduce((bytes,path)=>bytes+statSync(join(root,path)).size,0)>32*1024*1024)throw Error('ENGINEERING_WORKSPACE_SOURCE_LIMIT')
@@ -62,8 +62,38 @@ export function createEngineeringWorkspaces(projectId:string,productRoot:string,
     mkdirSync(root,{recursive:true})
     const brief=readPrdBackplane(projectId),view:View={root,snapshot,files:manifest,active:true,target:prdScopeFingerprint(brief),contextHash:'',executions:[] as Array<Record<string,unknown>>,executionCount:0}
     if(changed(view))throw Error('ENGINEERING_WORKSPACE_SOURCE_CHANGED')
+    // Resume factual investigation artifacts across process/session boundaries.
+    // Copy notes/probes/receipts, never private conversations or C/V material.
+    const previous=readdirSync(dirname(root),{withFileTypes:true}).filter(e=>e.isDirectory()&&join(dirname(root),e.name)!==root)
+      .map(e=>{const path=join(dirname(root),e.name);try{return{path,context:JSON.parse(readFileSync(join(path,'context.json'),'utf8'))}}catch{return undefined}})
+      .filter((v):v is {path:string;context:any}=>Boolean(v&&v.context.projectId===projectId&&v.context.facts?.scope_hash===view.target))
+      .sort((a,b)=>String(b.context.at).localeCompare(String(a.context.at))).slice(0,3)
+    const inherited:Array<{path:string;sha256:string}>=[],prior:Array<Record<string,unknown>>=[]
+    let inheritedBytes=0
+    for(const [index,entry] of previous.entries()){
+      const destination='history/'+snapshot.split('/')[1]+'/'+index
+      let omitted=0
+      const copy=(directory:string,prefix='')=>{
+        for(const file of readdirSync(directory,{withFileTypes:true})){
+          const path=prefix+file.name
+          if(file.isSymbolicLink()||['sources','history','.data','node_modules','.git','.venv','venv'].includes(file.name)||excluded(path))continue
+          if(file.isDirectory()){copy(join(directory,file.name),path+'/');continue}
+          if(!file.isFile())continue
+          const bytes=statSync(join(directory,file.name)).size
+          if(inherited.length>=256||inheritedBytes+bytes>2*1024*1024){omitted++;continue}
+          const target=join(root,destination,path);mkdirSync(dirname(target),{recursive:true});copyFileSync(join(directory,file.name),target)
+          inheritedBytes+=bytes;inherited.push({path:destination+'/'+path,sha256:hash(readFileSync(target))})
+        }
+      }
+      copy(entry.path)
+      prior.push({path:destination,origin:entry.path,at:entry.context.at,snapshot:entry.context.snapshot,
+        same_source:JSON.stringify(entry.context.files)===JSON.stringify(manifest),omitted_files:omitted,
+        authority:'历史调查材料，只供接续；与当前源版本的适用性须核对，不是当前验证凭据。'})
+    }
+    view.inherited=inherited
     const context=JSON.stringify({projectId,parent,child,at:new Date().toISOString(),snapshot,
       goal:brief.positioning,facts:softwareWorkingContext(projectId),development_observations:engineeringObservations(projectId,parent),
+      prior_investigations:prior,
       quality_findings:{tool:'read_quality_findings',note:'读取当前问题原文与证据；编号和历史失败摘要不足以推断具体错因。'},
       host_responsibilities:'宿主维护副本完整性、版本、预算准入和执行回执；它们不是重复调查的待办。',
       requirements:brief.requirements,acceptance:brief.acceptance,constraints:brief.constraints,
@@ -89,6 +119,7 @@ export function createEngineeringWorkspaces(projectId:string,productRoot:string,
     try{return (!view.active||hash(readFileSync(join(view.root,'context.json')))===view.contextHash)
       &&hash(readFileSync(join(view.root,view.snapshot+'.context.json')))===view.contextHash
       &&exactTree(join(view.root,view.snapshot))
+      &&(view.inherited??[]).every(file=>existsSync(join(view.root,file.path))&&hash(readFileSync(join(view.root,file.path)))===file.sha256)
       &&view.files.every(file=>hash(readFileSync(join(view.root,view.snapshot,file.path)))===file.sha256)}catch{return false}
   }
   const tools=(child:string)=>{
@@ -96,7 +127,7 @@ export function createEngineeringWorkspaces(projectId:string,productRoot:string,
     const check=(ctx:ToolContext)=>{ctx.signal.throwIfAborted();if(ctx.projectId!==projectId||ctx.sessionId!==child||get(child)!==view)throw Error('ENGINEERING_WORKSPACE_OWNER_MISMATCH');if(!intact(view))throw Error('ENGINEERING_INPUT_CHANGED: 输入副本被改变，需要负责人刷新咨询，不能据此报告原版本结论。')}
     const files=buildAgentTools({projectId,role:'implement',realFullstackVariant:true,software:true,assertFileWrite:(path,ctx)=>{
       check(ctx);const p=relative(view.root,resolve(view.root,path)).replaceAll('\\','/').toLowerCase()
-      if(p==='context.json'||p==='sources'||p.startsWith('sources/')||p==='runs'||p.startsWith('runs/'))throw Error('ENGINEERING_SNAPSHOT_READ_ONLY')
+      if(p==='context.json'||p==='sources'||p.startsWith('sources/')||p==='history'||p.startsWith('history/')||p==='runs'||p.startsWith('runs/'))throw Error('ENGINEERING_SNAPSHOT_READ_ONLY')
     }}).filter(t=>['read_file','write_file','edit_file','list_files','find','grep','web_fetch'].includes(t.name))
       .map(t=>({...t,execute:async(input:Record<string,unknown>,ctx:ToolContext)=>{check(ctx);return runWithProjectRootOverride(view.root,()=>t.execute(input,ctx))}}))
     const environment=buildSoftwareEnvironmentTool(projectId)

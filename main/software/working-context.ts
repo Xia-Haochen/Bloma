@@ -14,6 +14,8 @@ import { activeSoftwareCommands, redactSoftwareOutput } from './process-manager'
 import { toolFailureKey } from '../agent/loop/work-progress'
 import { leanBudget } from '../desktop/lean-budget'
 import {readVerificationReport} from './verification-report'
+import { applicableQualityLedger } from './quality-ledger'
+import { importantFinding } from './quality-closeout'
 
 function recentTools(sessionId?: string) {
   if (!sessionId || !/^[A-Za-z0-9_-]+$/.test(sessionId)) return { available: false, tools: [] }
@@ -45,6 +47,14 @@ export function softwareWorkingContext(projectId: string, busy = true) {
   const project = findProject(projectId), brief = readPrdBackplane(projectId), state = readSoftwareRunState(projectId)
   const current = state?.operationId === project.lean_operation_id ? state : undefined
   const source = softwareVerificationFingerprint(project.root_path)
+  // Existing findings remain the authority. Include their actual trigger, not
+  // just an error code from which an investigator would have to guess a cause.
+  const findings = applicableQualityLedger(projectId).findings.filter(f => importantFinding(f) && !['superseded','suggestion','disputed'].includes(f.disposition))
+  const quality = { verification:'not_issued', count:findings.length,
+    problems:findings.slice(-3).map(f=>({id:f.id,requirement:f.requirement,disposition:f.disposition,
+      trigger:f.trigger.slice(0,300),evidence:f.evidence.slice(0,500),reproduction:f.reproduction.slice(0,300),
+      identity:f.identity,reviewed:f.reviewed,last_check:f.checks.at(-1)})),
+    details:{tool:'read_quality_findings'},note:'保留的发现及后续记录；是否仍阻断以当前质量门为准，代码修改或旧审阅不等于当前执行复测。' }
   let budget: { requests?: number; output?: number; accounting_available: boolean; error?: string }
   try { const live = leanBudget(projectId, 'desktop-implement').snapshot(); budget = { requests: live.requests, output: live.output, accounting_available: true } }
   catch { budget = { accounting_available: false, error: '当前计量记录不可读；以请求/金额准入保护为准，不从旧索引推断剩余额度。' } }
@@ -71,7 +81,7 @@ export function softwareWorkingContext(projectId: string, busy = true) {
     source_changed_since_checkpoint: source && current?.source ? source !== current.source : undefined,
     pending_commands: activeSoftwareCommands(projectId, current?.sessionId ?? project.last_session_id ?? ''),
     current_error: current?.error, historical_failure: current?.last_failure,
-    budget,verification,
+    budget,verification,quality,
     recent: recentTools(current?.sessionId ?? project.last_session_id),
     instruction: '这是宿主现场索引，不是新需求或通过凭据。最近检查与失败均有对应版本；先核对当前版本和已有工具回执，未决命令用read_process接续，不重复安装、写入或其它副作用。完整目标用features/overview读取；继续不清零账本。' }
 }
@@ -92,6 +102,7 @@ export function renderWorkingFacts(facts:ReturnType<typeof softwareWorkingContex
     pending_commands:facts.pending_commands.slice(0,8).map(row=>({process_id:row.process_id,state:row.state})),pending_command_count:facts.pending_commands.length,
     budget:facts.budget,execution_window:facts.execution_window,delivery:facts.delivery,declared_entry:facts.declared_entry,verification:facts.verification,confirmed:facts.confirmed,omitted_sections:omitted,
     verification_details:{tool:'read_production_context',arguments:{topic:'verification-report'}},
+    quality:{count:facts.quality.count,details:facts.quality.details,problems:facts.quality.problems.map(f=>({id:f.id,requirement:f.requirement,trigger:f.trigger.slice(0,180),evidence:f.evidence.slice(0,240),disposition:f.disposition}))},
     instruction:'状态是宿主导航，不是当前通过凭据。先处理current_error和未完成进程；历史通过需重新核对。omitted_sections所列依据尚未包含，必要时读取，不猜测、不重放副作用。'}
   if(facts.pending_commands.length>8)omit('pending_commands')
   for(const [field,value,topic]of [['goal_excerpt',facts.goal_excerpt,'overview'],['feature_ids',facts.feature_ids,'features'],['intent',facts.intent,'features'],['recent',facts.recent,'working-state']] as const){

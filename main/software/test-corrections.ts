@@ -14,7 +14,7 @@ const hash=(v:string|Buffer)=>createHash('sha256').update(v).digest('hex')
 const pathOf=(n:NativeGuiTests,p:string)=>n.layout==='project'?p:n.directory+'/'+p
 interface Proposal {id:string;scope:string;before:NativeGuiTests;after:NativeGuiTests;file:string;old_hash:string;new_hash:string;replacement:string;reason:string;
   expected_sources:Record<string,string>;status:'pending'|'approved'|'rejected';at:string;applied_at?:string;
-  decision?:{reviewer:'independent_operator';reason:string;at:string;evidence:Array<{path:string;sha256:string}>}}
+  decision?:{reviewer:'independent_operator'|'independent_model';reason:string;at:string;evidence:Array<{path:string;sha256:string}>}}
 interface State{version:1;proposals:Proposal[]}
 function base(id:string){if(!/^[A-Za-z0-9_-]+$/.test(id))throw Error('TEST_CORRECTION_PROJECT_INVALID');return join(getPromaHome(),'software-test-corrections',id)}
 function scope(id:string){const b=readPrdBackplane(id);if(!b.user_confirmed_at)throw Error('TEST_CORRECTION_SCOPE_UNCONFIRMED');return prdScopeFingerprint(b)}
@@ -87,6 +87,14 @@ export function testCorrectionView(id:string){
     proposals:read(id).proposals.filter(p=>p.scope===current).map(({replacement,before,after,...p})=>({...p,contract_digest:before.digest,replacement_digest:after.digest})),verification:'not_issued'}
 }
 export function pendingTestCorrection(id:string){return read(id).proposals.some(p=>p.scope===scope(id)&&p.status==='pending')}
+/** Exact, host-owned inputs for a separate adjudication. No maker conversation. */
+export function pendingTestCorrectionInputs(id:string){
+  return read(id).proposals.filter(p=>p.scope===scope(id)&&p.status==='pending').map(p=>({
+    id:p.id,scope:p.scope,file:p.file,reason:p.reason,expected_sources:p.expected_sources,
+    before:readTestContractFile(id,p.before.digest,p.file),after:{text:p.replacement,sha256:p.new_hash},
+    cases:p.before.cases,proposed_cases:p.after.cases,
+  }))
+}
 export function testCorrectionGate(id:string){
   if(pendingTestCorrection(id))return 'TEST_CORRECTION_REVIEW_REQUIRED'
   if(approved(id).some(p=>!p.applied_at))return 'TEST_CORRECTION_APPLY_REQUIRED'
@@ -98,11 +106,11 @@ export function testCorrectionVersion(id:string){
 }
 /** Host-only independent decision. Not exposed in model tools. Evidence is
  * immutable by hash; approval permits exact test bytes, never product PASS. */
-export function decideTestCorrection(id:string,proposalId:string,input:{verdict:'approve'|'reject';reviewer:'independent_operator';reason:string;expected_sources:Record<string,string>;evidence:Array<{path:string;sha256:string}>}){
+export function decideTestCorrection(id:string,proposalId:string,input:{verdict:'approve'|'reject';reviewer:'independent_operator'|'independent_model';reason:string;expected_sources:Record<string,string>;evidence:Array<{path:string;sha256:string}>}){
   return mutate(id,state=>{
     const p=state.proposals.find(p=>p.id===proposalId)
     if(!p||p.status!=='pending'||p.scope!==scope(id))throw Error('TEST_CORRECTION_DECISION_STALE')
-    if(input.reviewer!=='independent_operator'||!input.reason?.trim()||!['approve','reject'].includes(input.verdict)||!Array.isArray(input.evidence)||!input.evidence.length
+    if(!['independent_operator','independent_model'].includes(input.reviewer)||!input.reason?.trim()||!['approve','reject'].includes(input.verdict)||!Array.isArray(input.evidence)||!input.evidence.length
       ||!input.expected_sources||Object.keys(input.expected_sources).length!==Object.keys(p.expected_sources).length||Object.entries(p.expected_sources).some(([k,v])=>input.expected_sources[k]!==v))throw Error('TEST_CORRECTION_INDEPENDENT_EVIDENCE_REQUIRED')
     for(const e of input.evidence)if(!isAbsolute(e.path)||hash(readFileSync(e.path))!==e.sha256)throw Error('TEST_CORRECTION_EVIDENCE_CHANGED')
     if(input.verdict==='approve'&&state.proposals.some(q=>q.id!==p.id&&q.scope===p.scope&&q.status==='approved'&&q.file===p.file&&q.old_hash===p.old_hash))throw Error('TEST_CORRECTION_CONFLICT')
@@ -110,7 +118,7 @@ export function decideTestCorrection(id:string,proposalId:string,input:{verdict:
   })
 }
 function approved(id:string){return read(id).proposals.filter(p=>p.scope===scope(id)&&p.status==='approved').map(p=>{
-  if(!p.decision||p.decision.reviewer!=='independent_operator'||hash(p.replacement)!==p.new_hash)throw Error('TEST_CORRECTION_APPROVAL_INVALID')
+  if(!p.decision||!['independent_operator','independent_model'].includes(p.decision.reviewer)||hash(p.replacement)!==p.new_hash)throw Error('TEST_CORRECTION_APPROVAL_INVALID')
   for(const e of p.decision.evidence)if(hash(readFileSync(e.path))!==e.sha256)throw Error('TEST_CORRECTION_EVIDENCE_CHANGED')
   frozenNativeGuiVersion(id,p.before);frozenNativeGuiVersion(id,p.after);return p
 })}

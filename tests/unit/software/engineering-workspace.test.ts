@@ -16,6 +16,23 @@ afterEach(async()=>{disposeParentDelegationState('parent');await settleParentDel
 const ctx=(sessionId='child')=>({projectId:project.project_id,sessionId,requestId:'r',signal:AbortSignal.timeout(30000),state:createToolState()})
 const args={task:'核对方案',role:'research' as const,readOnly:true,independentWorkspace:true}
 
+it('recovers prior investigation artifacts across parents without inheriting private conversations or stale authority',async()=>{
+  const first=createEngineeringWorkspaces(project.project_id,project.root_path,'old-parent'),lease=first.prepare('old-child',args),root=first.root('old-child')
+  writeFileSync(join(root,'findings.md'),'已验证地图连通；仍需验证首领返回。')
+  lease.release();writeFileSync(join(project.root_path,'app.js'),'changed product')
+  const next=createEngineeringWorkspaces(project.project_id,project.root_path,'new-parent'),current=next.prepare('child',args)
+  const context=JSON.parse(readFileSync(join(next.root('child'),'context.json'),'utf8'))
+  expect(context.prior_investigations).toHaveLength(1)
+  expect(context.prior_investigations[0].same_source).toBe(false)
+  const path=context.prior_investigations[0].path+'/findings.md'
+  expect(readFileSync(join(next.root('child'),path),'utf8')).toContain('首领返回')
+  const contextForTools=ctx(),tools=next.tools('child')
+  await tools.find(t=>t.name==='read_file')!.execute({path},contextForTools)
+  await expect(tools.find(t=>t.name==='write_file')!.execute({path,content:'overwrite'},contextForTools)).rejects.toThrow('ENGINEERING_SNAPSHOT_READ_ONLY')
+  expect(current.facts()).toMatchObject({input_intact:true})
+  current.release()
+})
+
 it('keeps independent notes, immutable versioned source views, and reports changed evidence on continuation',async()=>{
   mkdirSync(join(project.root_path,'data'));writeFileSync(join(project.root_path,'data/private.json'),'private');writeFileSync(join(project.root_path,'.env'),'SECRET')
   const work=createEngineeringWorkspaces(project.project_id,project.root_path,'parent'),lease=work.prepare('child',args),root=work.root('child')
