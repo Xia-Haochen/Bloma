@@ -41,7 +41,7 @@ export function claimSimulatedRun(root:string,identity:unknown,validate:()=>void
   return release
 }
 export function requireObservationPhase(phase:string){
-  if(!['preflight','run','simulate'].includes(phase))throw Error('OBSERVATION_PHASE_REFUSED')
+  if(!['preflight','run','simulate','interact'].includes(phase))throw Error('OBSERVATION_PHASE_REFUSED')
 }
 export function observationAttemptSuffix(){const id=process.env.BLOMA_OBSERVATION_RETEST??'';if(id&&!/^[a-z0-9-]{1,40}$/.test(id))throw Error('RETEST_ID_INVALID');return id?'-'+id:''}
 export function assertSimulatedContinuation(root:string,thinking:string,runtimeTree:string){
@@ -59,7 +59,7 @@ export function assertSimulatedContinuation(root:string,thinking:string,runtimeT
   if(suffix){
     if(m.attempt!==suffix||!m.boundary||JSON.stringify(continuationBoundary(root,report,{resumeProduction:m.boundary.resume_production===true}))!==JSON.stringify(m.boundary))throw Error('SIMULATED_USER_BOUNDARY_CHANGED')
   }else if(report.status!=='awaiting_user')throw Error('SIMULATED_USER_BOUNDARY_REQUIRED')
-  return suffix?{...report,...m.boundary,status:'awaiting_user',retest_of:m.report}:report
+  return {...(suffix?{...report,...m.boundary,status:'awaiting_user',retest_of:m.report}:report),operator_reply:m.operator_reply}
 }
 export function assertFrozenObservation(root:string,runtimeHash:string,thinking:string,runtimeTree:string){
   const manifest=JSON.parse(readFileSync(join(root,'manifest.json'),'utf8'))

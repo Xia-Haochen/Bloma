@@ -38,6 +38,11 @@ export async function prepareObservation(root,compile,userAuthorization){
     migration={authorization:userAuthorization,attempt:suffix,boundary,previous_runtime_digest:manifest.runtime_tree_sha256,
       manifest_sha256:sha(join(root,'manifest.json')),policy_sha256:sha(join(root,'monetary-policy.json')),
       report:join(task,reports[0]),report_sha256:sha(join(folder,reports[0])),project_sha256:sha(join(folder,'project.json'))}
+    if(process.env.BLOMA_OBSERVATION_REPLY_FILE){
+      const reply=JSON.parse(readFileSync(resolve(process.env.BLOMA_OBSERVATION_REPLY_FILE),'utf8'))
+      if(!reply||Object.keys(reply).some(key=>!['text','selected'].includes(key))||typeof reply.text!=='string'||!reply.text.trim()||reply.text.length>16000||reply.selected!==undefined&&typeof reply.selected!=='string')throw Error('OPERATOR_REPLY_INVALID')
+      migration.operator_reply=reply
+    }
   }
   mkdirSync(root,{recursive:true})
   const runtime=join(repo,'run-artifacts/observation-runtime',randomUUID(),'main')
@@ -55,14 +60,16 @@ export function readObservationRuntime(root,userMode=false){
 }
 async function main(){
   const phase=process.argv[2],root=process.env.BLOMA_OBSERVATION_ROOT
-  if(!root||!['prepare','preflight','run','prepare-user','simulate'].includes(phase))throw Error('Usage: set BLOMA_OBSERVATION_ROOT; node scripts/software-observation-trial.mjs prepare|preflight|run|prepare-user|simulate')
+  if(!root||!['prepare','preflight','run','prepare-user','simulate','interact'].includes(phase))throw Error('Usage: set BLOMA_OBSERVATION_ROOT; node scripts/software-observation-trial.mjs prepare|preflight|run|prepare-user|simulate|interact')
   if(phase==='prepare'||phase==='prepare-user'){
     if(process.versions.electron)throw Error('PREPARE_REQUIRES_NODE')
-    const authorization=phase==='prepare-user'?process.env.BLOMA_SIMULATED_USER_AUTHORIZATION_TEXT:undefined
+    const authorization=phase==='prepare-user'?(process.env.BLOMA_OBSERVATION_OPERATOR_AUTHORIZATION_TEXT??process.env.BLOMA_SIMULATED_USER_AUTHORIZATION_TEXT):undefined
     if(phase==='prepare-user'&&!authorization?.trim())throw Error('SIMULATED_USER_AUTHORIZATION_REQUIRED')
     const {build}=await import('esbuild');console.log(JSON.stringify(await prepareObservation(resolve(root),build,authorization)));return
   }
-  const frozen=readObservationRuntime(resolve(root),phase==='simulate')
+  const frozen=readObservationRuntime(resolve(root),['simulate','interact'].includes(phase))
+  if(phase==='interact'&&!frozen.migration?.operator_reply)throw Error('OPERATOR_REPLY_REQUIRED')
+  if(phase==='simulate'&&frozen.migration?.operator_reply)throw Error('OPERATOR_REPLY_REQUIRES_INTERACT')
   process.env.BLOMA_OBSERVATION_PHASE=phase
   process.env.BLOMA_OBSERVATION_RUNTIME_DIGEST=frozen.digest
   if(!process.versions.electron){

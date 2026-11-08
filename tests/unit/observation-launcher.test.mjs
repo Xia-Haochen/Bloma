@@ -52,3 +52,23 @@ it('records an explicit preview-failure retest without resetting old spend or at
   try{await prepareObservation(root,async options=>writeFileSync(options.outfile,'// test'),'测试新版本');expect(readObservationRuntime(root,true).migration.boundary.project_id).toBe('p');expect(readFileSync(join(root,'user-run-claimed.json'),'utf8')).toBe('old claim');expect(readFileSync(join(root,'monetary-policy.json.state.json'),'utf8')).toContain('385620')}
   finally{if(previous===undefined)delete process.env.BLOMA_OBSERVATION_RETEST;else process.env.BLOMA_OBSERVATION_RETEST=previous}
 })
+it('freezes an operator reply without a simulated-user request or resetting the ledger',async()=>{
+  const {mkdirSync}=await import('node:fs');mkdirSync(join(root,'task'))
+  writeFileSync(join(root,'manifest.json'),JSON.stringify({tasks:{task:{}},runtime_tree_sha256:'old'}))
+  writeFileSync(join(root,'monetary-policy.json'),'original policy')
+  writeFileSync(join(root,'monetary-policy.json.state.json'),'original ledger')
+  writeFileSync(join(root,'task/project.json'),'original project')
+  writeFileSync(join(root,'task/run-first.json'),JSON.stringify({status:'awaiting_user'}))
+  const replyPath=join(root,'reply.json'),previous=process.env.BLOMA_OBSERVATION_REPLY_FILE
+  process.env.BLOMA_OBSERVATION_REPLY_FILE=replyPath
+  try{
+    writeFileSync(replyPath,JSON.stringify({text:'确认',selected:'confirm',script:'not allowed'}))
+    await expect(prepareObservation(root,async()=>{},'直接操作')).rejects.toThrow('OPERATOR_REPLY_INVALID')
+    writeFileSync(replyPath,JSON.stringify({text:'确认',selected:'confirm'}))
+    await prepareObservation(root,async options=>writeFileSync(options.outfile,'// test'),'直接操作')
+    writeFileSync(replyPath,JSON.stringify({text:'later change'}))
+    expect(readObservationRuntime(root,true).migration.operator_reply).toEqual({text:'确认',selected:'confirm'})
+    expect(readFileSync(join(root,'monetary-policy.json.state.json'),'utf8')).toBe('original ledger')
+    expect(()=>execFileSync(process.execPath,['scripts/software-observation-trial.mjs','simulate'],{env:{...process.env,BLOMA_OBSERVATION_ROOT:root},stdio:'pipe'})).toThrow()
+  }finally{if(previous===undefined)delete process.env.BLOMA_OBSERVATION_REPLY_FILE;else process.env.BLOMA_OBSERVATION_REPLY_FILE=previous}
+})

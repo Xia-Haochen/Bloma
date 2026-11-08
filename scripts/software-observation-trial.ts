@@ -58,9 +58,9 @@ export async function main() {
   const thinking=process.env.BLOMA_OBSERVATION_THINKING??'low'
   const runtimeTree=process.env.BLOMA_OBSERVATION_RUNTIME_DIGEST
   if(!runtimeTree)throw Error('OBSERVATION_PREPARED_RUNTIME_REQUIRED')
-  const continuation=phase==='simulate'?assertSimulatedContinuation(root,thinking,runtimeTree):undefined
+  const continuation=['simulate','interact'].includes(phase)?assertSimulatedContinuation(root,thinking,runtimeTree):undefined
   if(phase==='run')assertFrozenObservation(root,runtimeHash,thinking,runtimeTree)
-  else if(phase!=='simulate'&&(existsSync(join(root,'home'))||existsSync(join(root,'manifest.json'))))throw Error('OBSERVATION_ROOT_NOT_FRESH')
+  else if(!continuation&&(existsSync(join(root,'home'))||existsSync(join(root,'manifest.json'))))throw Error('OBSERVATION_ROOT_NOT_FRESH')
   const task = tasks[which as keyof typeof tasks], home = join(root, 'home'), profile = join(root, 'electron-profile')
   mkdirSync(home, { recursive: true }); mkdirSync(profile, { recursive: true })
   process.env.PROMA_HOME = home; process.env.BLOMA_DISPATCH_EXPERIMENT = '0'; delete process.env.BLOMA_EXPERIMENT_UNLIMITED_MONETARY
@@ -200,7 +200,25 @@ export async function main() {
   try {
     await wallet.sample()
     save(true)
-    if(continuation){
+    if(phase==='interact'){
+      const reply=continuation.operator_reply
+      if(!reply?.text?.trim())throw Error('OPERATOR_REPLY_REQUIRED')
+      report.method='operator';report.operator_reply=reply
+      const pending=readPendingDecision(project.project_id,sid)
+      appendSessionMessage(sid,{role:'user',origin:'user',content:[{type:'text',text:reply.text}],timestamp:Date.now()})
+      report.turn=await observeOneTurn(async record=>{
+        if(pending){
+          const message={project_id:project.project_id,session_id:sid,request_id:randomUUID(),mode:'quick' as const,current_stage:findProject(project.project_id).current_stage,content:reply.text,
+            ...(reply.selected?{metadata:{source:'card_option' as const,selected_option_id:reply.selected}}:{})}
+          await handleGuideMessage(message,record,model)
+          if(['ux_adjust','lean_adjust'].includes(reply.selected??'')&&!['有要调整的','再调整一次','补充或修改'].includes(reply.text.trim()))
+            await handleGuideMessage({...message,request_id:randomUUID(),metadata:{source:'chat'}},record,model)
+        }else await enterDesktopLine({projectId:project.project_id,sessionId:sid,requestId:randomUUID(),content:reply.text,initialMessagePersisted:true,maxTokens:requestMaxTokens,signal},query,binding.env,
+          {publish:(_target,type,payload)=>record({event_id:randomUUID(),session_id:sid,project_id:project.project_id,created_at:new Date().toISOString(),type,payload}),persistAssistant:(_sid,text)=>model.persistAssistant(text),persistSystem:()=>{},complete:()=>{}})
+      },event,signal)
+      report.pending_decision=readPendingDecision(project.project_id,sid)
+      report.public_reply=publicReplyText
+    }else if(continuation){
       const userSid=`simulated-user-${randomUUID()}`;recordSessionActivity(userSid,project.project_id)
       const surface=new SimulatedUserSurface(project.project_id,join(taskDir,'simulated-user'),userSid,userFiles)
       if(continuation.resume_production){

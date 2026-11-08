@@ -1,5 +1,11 @@
 # Agent模拟用户与制作效果测试
 
+## 直接操作者模式（2026-11-08）
+
+用户要求由 Codex 亲自确认和操作时，使用 `interact`，不运行模拟用户模型。初始 `prepare/preflight/run` 不变；每次公开回复写入 JSON（`text`，可选 `selected`），通过 `BLOMA_OBSERVATION_REPLY_FILE` 在 `prepare-user` 时冻结进运行描述。授权读取 `BLOMA_OBSERVATION_OPERATOR_AUTHORIZATION_TEXT`。随后 `interact` 只提交这一次普通用户输入，经原需求或制作入口运行到下一个边界。后续回复使用新的 `BLOMA_OBSERVATION_RETEST`，继续原项目、会话、金额策略、累计账本和独占锁。模拟模式拒绝加载带操作者回复的运行描述，避免意外启动额外用户模型。
+
+操作者须实际查看草图再确认、实际操作产物再反馈；操作报告不代替 C/V 和发布证据。入口保留失败段，不直接改产品或冻结预期。离线验证：类型检查及 observation-launcher、observation-trial、simulated-user-recovery 共 43 项通过，日志 `run-artifacts/operator-trial-tests-20261108.log` 与 `run-artifacts/operator-trial-types-20261108.log`；不代表新客户端已完成实机验收。
+
 当前前置恢复：已授权外层窗口在公共运行入口对齐需求、草图与制作的内部执行额度，不清累计计数；制作入口不再持有独立的同步逻辑。草图决定由宿主标记 observation_required，未就绪时可执行恢复动作，真实视觉确认仍需当前画面。software-v1 草图使用已有宿主执行与取消窗口，不叠加固定四分钟阶段时限。运行中每30秒读取一次钱包余额并记录时间；余额变化、已报告用量和未知预留分别呈现，不伪造单请求费用、不清未知记录。最终余额读取失败不把旧快照当作结束时余额。
 
 本批恢复验证：84项定向回归通过；完整 `check:offline` 的类型、文档、构建与19文件171项回归通过。额外核对跨进程恢复的无图调整卡；未修改产品或冻结断言。日志：`run-artifacts/preparation-recovery-final-20261107.log`、`preparation-recovery-offline-20261107.log`、`preparation-decision-final-20261107.log`。钱包展示不再把责任预留称作实际消费。
