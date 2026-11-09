@@ -1,7 +1,7 @@
 import type {DeliveryBlock} from './delivery-qualification'
 import { guiFindingOutcome, cliCaseOutcome } from './verification-evidence'
 import type { SoftwareVerification } from './verification'
-import { completedQualityReview, qualityFailureBaseline, sameIdentity, type Identity, type Ledger, type QualityFinding } from './quality-ledger'
+import { qualityHash, completedQualityReview, qualityFailureBaseline, sameIdentity, type Identity, type Ledger, type QualityFinding } from './quality-ledger'
 
 export const importantFinding = (f: QualityFinding) => ['critical','high'].includes(f.severity) || f.review_kind === 'visual' && f.severity === 'medium'
 export const sameQualityScope = (a: Identity, b: Identity) => a.target === b.target && a.environment === b.environment
@@ -88,4 +88,25 @@ export function observedQualityFinding(result: SoftwareVerification, finding: Qu
   const cli = result.core?.host_cli?.cases.filter(c => c.name === caseName && c.covers.includes(finding.requirement))
   if (cli?.length === 1) return cliCaseOutcome(cli[0])
   return 'unverified'
+}
+
+/** Only host-produced typed execution facts request a fresh independent judgment. */
+export function currentEngineeringFailures(advice:unknown){
+ const updates=(advice as {updates?:unknown[]}|undefined)?.updates
+ if(!Array.isArray(updates))return []
+ const failures=updates.flatMap(value=>{
+  const facts=(value as {workspace_facts?:any})?.workspace_facts
+  if(facts?.input_intact!==true||facts?.source_changed!==false||facts?.target_changed!==false||!Array.isArray(facts.recent_runs))return []
+  return facts.recent_runs.filter((r:any)=>r.input_intact===true&&Number.isInteger(r.exit_code)&&r.exit_code!==0&&/^[a-f0-9]{64}$/.test(r.record_sha256)).map((r:any)=>({record_sha256:r.record_sha256 as string,exit_code:r.exit_code as number}))
+ })
+ return [...new Map(failures.map(f=>[f.record_sha256,f])).values()].sort((a,b)=>a.record_sha256.localeCompare(b.record_sha256))
+}
+export function unreviewedNegativeObservation(ledger:Ledger,observation:Ledger['reviews'][number]['observation']){
+ const negative=(value:NonNullable<typeof observation>)=>({source:value.source,execution_failed:Boolean(value.execution_failed),engineering_failures:value.engineering_failures??[],
+  steps:value.steps.filter(s=>(s as {passed?:boolean})?.passed===false),logs:value.logs.filter(l=>['renderer.error','renderer.startup_error','script.failed','action.failed','state.save_failed'].includes(String((l as {kind?:string})?.kind)))})
+ if(!observation)return false
+ const facts=negative(observation)
+ if(!facts.execution_failed&&!facts.engineering_failures.length&&!facts.steps.length&&!facts.logs.length)return false
+ const latest=ledger.reviews.filter(r=>(r.kind??'code')==='code'&&(r.purpose??'candidate')==='candidate').at(-1)
+ return latest?.status!=='complete'||!latest.observation||qualityHash(negative(latest.observation))!==qualityHash(facts)
 }

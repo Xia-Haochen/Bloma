@@ -12,10 +12,10 @@ import { reviewReadIdentity, compactReviewManifest, reviewChangeContext, repeate
 import { canonicalFindingReference } from './quality-reference'
 import { validateIntentObservations, bindIntentFindings } from './intent-review'
 import { productDesignPolicy } from '../project/product-design-policy'
-import { findingNeedsClosure, findingNeedsInvestigation, sameQualityScope, qualityCloseout, qualityWorkQueue, observedQualityFinding } from './quality-closeout'
+import { currentEngineeringFailures, unreviewedNegativeObservation, findingNeedsClosure, findingNeedsInvestigation, sameQualityScope, qualityCloseout, qualityWorkQueue, observedQualityFinding } from './quality-closeout'
 import { visualReviewChecklist, visualCoverageComplete } from './visual-review-checklist'
 import { createHash, randomUUID } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentLoopTool, ToolContext, AgentLoopInput } from '../agent/loop/agent-loop'
 import { startDelegation, findDelegation, isProjectDelegationRunning } from '../agent/delegation/agent-collaboration'
@@ -27,7 +27,7 @@ import { trustedAcceptance } from '../project/requirement-contract'
 import { verifySoftwareCandidate } from './verification'
 import type { createSoftwareCollaborationPolicy } from './collaboration-policy'
 import { activeSoftwareCommands, redactSoftwareOutput, stopSoftwareSession } from './process-manager'
-import { activeDebugSessionId, readDebugSession, closeDebugSessions } from './debug-sessions'
+import { retainedDebugObservation, activeDebugSessionId, readDebugSession, closeDebugSessions } from './debug-sessions'
 import { captureVisualMaterial, readVisualMaterial, grantVisualImage, validateVisualGrant, assertVisualRequest } from './visual-review-material'
 import type { VisualMaterial } from './visual-review-material'
 import type { SDKQuery } from '../orchestration/stages/orchestration-contracts'
@@ -56,13 +56,15 @@ export function createQualityReview(projectId: string, parent: string, policy: R
   const imagesRequested = new Set<string>()
   let pending: Review | undefined
   const currentObservation = () => {
-    const id=activeDebugSessionId(projectId,parent)
-    if(!id)return
-    const snapshot=readDebugSession(projectId,parent,id)
-    if(snapshot.state!=='ready'||snapshot.stale||snapshot.source!==softwareVerificationFingerprint(findProject(projectId).root_path))return
-    const ui=snapshot.ui,steps=snapshot.steps.slice(-16).map(({passed,actual})=>({passed,actual})),logs=snapshot.observations.slice(-16).map(({kind,message,method,url,status})=>({kind,message,method,url,status}))
-    const image_hash=snapshot.screenshot&&!snapshot.screenshot_error?createHash('sha256').update(readFileSync(snapshot.screenshot)).digest('hex'):undefined
-    return {digest:hash([snapshot.source,ui,steps,logs,image_hash]),image_hash,ui,steps,logs}
+    const id=activeDebugSessionId(projectId,parent),source=softwareVerificationFingerprint(findProject(projectId).root_path)
+    const stored=id?readDebugSession(projectId,parent,id):retainedDebugObservation(projectId,parent)
+    const snapshot=stored&&!stored.stale&&stored.source===source&&(!id||stored.state==='ready')?stored:undefined
+    const engineering_failures=currentEngineeringFailures(engineeringAdvice?.())
+    if(!snapshot&&!engineering_failures.length)return
+    const ui=snapshot?.ui,steps=snapshot?.steps.slice(-16).map(({passed,actual})=>({passed,actual}))??[],logs=snapshot?.observations.filter(o=>o.kind!=='page.closed').slice(-16).map(({kind,message,method,url,status})=>({kind,message,method,url,status}))??[]
+    const image_hash=snapshot?.screenshot&&!snapshot.screenshot_error&&existsSync(snapshot.screenshot)?createHash('sha256').update(readFileSync(snapshot.screenshot)).digest('hex'):undefined
+    const execution_failed=snapshot?.state==='failed'
+    return {source,digest:hash([source,ui,steps,logs,image_hash,engineering_failures,execution_failed]),image_hash,ui,steps,logs,engineering_failures,execution_failed}
   }
   const routeIdentity=(env:Record<string,string>,providerType?:string)=>hash([env.ANTHROPIC_BASE_URL,env.ANTHROPIC_MODEL,env.ANTHROPIC_PROVIDER_TYPE,providerType])
   let activeRoute: string | undefined = initialEnv ? routeIdentity(initialEnv) : undefined
@@ -114,6 +116,7 @@ export function createQualityReview(projectId: string, parent: string, policy: R
         return { delegation_id: previous.delegation!, child_session_id: previous.child!, review_id: previous.id, already_reviewed: true }
       }
     }
+    const observation=currentObservation()
     let visual: VisualMaterial | undefined
     try {
       if (kind === 'visual') {
@@ -125,7 +128,7 @@ export function createQualityReview(projectId: string, parent: string, policy: R
     if (!same(binding, await identity(projectId, ctx.signal))) throw Error('QUALITY_CAPTURE_CANDIDATE_CHANGED')
     const inventory = kind === 'code' ? await runtimeInventory(findProject(projectId).root_path, ctx.signal) : undefined
     if (inventory && inventory.digest !== binding.source) throw Error('QUALITY_CAPTURE_CANDIDATE_CHANGED')
-    const review: Review = { id, kind, purpose, rules:purpose==='coverage'?qualityCoverageRulesVersion(projectId):rulesVersion(projectId), observation:currentObservation(), run_id: ctx.requestId, identity: binding, visual, ...(inventory ? { source_manifest: compactReviewManifest(inventory) } : {}), status: 'pending', at: new Date().toISOString() }
+    const review: Review = { id, kind, purpose, rules:purpose==='coverage'?qualityCoverageRulesVersion(projectId):rulesVersion(projectId), observation, run_id: ctx.requestId, identity: binding, visual, ...(inventory ? { source_manifest: compactReviewManifest(inventory) } : {}), status: 'pending', at: new Date().toISOString() }
     ledger.reviews.push(review); save(ledger)
     pending = review
     try {
@@ -303,7 +306,8 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       current.findings[index] = finding; save(current)
       return { output: JSON.stringify({ finding, status: result.status, summary: result.summary }), isError: finding.disposition !== 'closed' }
     }) }
-  const gate = (signal?: AbortSignal) => deliveryQualityGate(projectId, signal, activeRoute)
+  const observationGap=()=>unreviewedNegativeObservation(readQualityLedger(projectId),currentObservation())?'QUALITY_NEW_EXECUTION_REVIEW_REQUIRED: 当前版本出现新的负面执行事实，须独立判断，旧C不能覆盖。':undefined
+  const gate = async(signal?: AbortSignal) => await deliveryQualityGate(projectId, signal, activeRoute)??observationGap()
   const parentTools: AgentLoopTool[] = [{name:'inspect_collaboration_plan',description:'只读核对当前候选相对已验证发布基线的宿主协作选择、实际差异及理由；不是PASS，不能传入低风险/跳过角色。B授权、重要缺陷和原交付检查不因此绕过。需要时仍可显式请求额外C/V审阅。',input_schema:{type:'object',additionalProperties:false,properties:{}},execute:async(input,ctx)=>{assertParent(ctx);if(Object.keys(input).length)throw Error('COLLABORATION_SELECTION_HOST_ONLY');return{output:JSON.stringify(await selectQualityCollaboration(projectId,await identity(projectId,ctx.signal),ctx.signal))}}}, {name:'challenge_independent_case',description:'提出B案例的业务预期/范围争议，须给具体理由和证据。只保留待核对主张并使旧PASS失效，不删除案例、不改冻结断言、不关闭已确认缺陷，也不自动重发B。需要用户澄清或新的确认设计才能解除；不要为适配器缺失擅自新增功能。',
     input_schema:{type:'object',additionalProperties:false,required:['case_id','reason','evidence'],properties:{case_id:{type:'string'},reason:{type:'string',maxLength:2000},evidence:{type:'string',maxLength:2000}}},
     execute:async(input,ctx)=>{assertParent(ctx);return{output:JSON.stringify({finding:await challengeIndependentCase(projectId,input,ctx.signal),verification:'unverified'})}}}, { name: 'start_quality_review', description: '冻结稳定候选，启动独立只读C审阅；继承当前Pi模型、共享预算及两并发限制。等待期间不能写文件或执行命令。修改后须重新审阅。', input_schema: { type: 'object', additionalProperties: false, properties: {} }, execute: async (_input, ctx) => ({ output: JSON.stringify(await begin(ctx)) }) },
@@ -381,7 +385,7 @@ export function createQualityReview(projectId: string, parent: string, policy: R
     if(calls.some(c=>c.status!=='ok'||c.pending)||!calls.some(c=>c.name==='submit_quality_findings'))return
     if(readQualityLedger(projectId).reviews.some(r=>r.child===child&&r.status==='complete'))return{complete:true}
   }
-  return { prepare, system, gate, begin, ensureCoverage, childAfterTools, acceptedHandoff:(delegation:string,child:string)=>readQualityLedger(projectId).reviews.some(r=>r.delegation===delegation&&r.child===child&&r.status==='complete'), completionAction: async (signal?: AbortSignal) => { const reason = await deliveryQualityBlock(projectId,signal,activeRoute), current = await identity(projectId, signal); const ledger=applicableQualityLedger(projectId);return {...qualityCloseout(ledger,current,reason,rulesVersion(projectId),independentDesignVersion(projectId),currentObservation()?.digest),feedback:JSON.stringify(qualityWorkQueue(ledger,current,reason,rulesVersion(projectId),independentDesignVersion(projectId)))} }, parentTools, reviewTools, wrapQuery, isQualityChild: (child: string) => children.has(child),
+  return { prepare, system, gate, begin, ensureCoverage, childAfterTools, acceptedHandoff:(delegation:string,child:string)=>readQualityLedger(projectId).reviews.some(r=>r.delegation===delegation&&r.child===child&&r.status==='complete'), completionAction: async (signal?: AbortSignal) => { const existing=await deliveryQualityBlock(projectId,signal,activeRoute),observedGap=observationGap(),reason=existing??(observedGap?{code:'code_review' as const,message:observedGap}:undefined), current = await identity(projectId, signal); const ledger=applicableQualityLedger(projectId);return {...qualityCloseout(ledger,current,reason,rulesVersion(projectId),independentDesignVersion(projectId),currentObservation()?.digest),feedback:JSON.stringify(qualityWorkQueue(ledger,current,reason,rulesVersion(projectId),independentDesignVersion(projectId)))} }, parentTools, reviewTools, wrapQuery, isQualityChild: (child: string) => children.has(child),
     // The role-only tool builder cannot know the child ID until execute. Protocol
     // tools authenticate the actual session, including against parent forgeries.
     childProtocol }

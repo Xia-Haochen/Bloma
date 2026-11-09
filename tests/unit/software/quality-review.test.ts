@@ -482,3 +482,20 @@ it('reads exact frozen test contracts through review-owned file keys and refuses
  expect(readQualityLedger(project.project_id).reviews.at(-1)?.status).toBe('complete')
  await expect(quality.childProtocol[0].execute({test_file:'cli'},ctx())).rejects.toThrow('DENIED')
 },60000)
+
+it('routes a late current-version partner execution failure to C without promoting prose or replaying the same judgment',async()=>{
+ let advice:any
+ quality=createQualityReview(project.project_id,parent,policy,undefined,()=>advice)
+ await review([]);expect(await quality.gate()).toBeUndefined()
+ advice={updates:[{text:'Optional documentation suggestion'}]};expect(await quality.gate()).toBeUndefined()
+ const run={input_intact:true,exit_code:1,record_sha256:'a'.repeat(64)}
+ advice={updates:[{workspace_facts:{input_intact:true,source_changed:false,target_changed:false,recent_runs:[run]}}]}
+ expect(await quality.gate()).toContain('NEW_EXECUTION_REVIEW_REQUIRED')
+ expect(await quality.completionAction()).toMatchObject({next_tool:'start_quality_review',purpose:'candidate'})
+ await review([])
+ expect(readQualityLedger(project.project_id).reviews.at(-1)?.observation?.engineering_failures).toEqual([{record_sha256:run.record_sha256,exit_code:1}])
+ expect(await quality.gate()).toBeUndefined()
+ advice.updates.push(advice.updates[0]);expect(await quality.gate()).toBeUndefined()
+ advice.updates[0].workspace_facts.recent_runs=[{...run,record_sha256:'b'.repeat(64)}]
+ expect(await quality.gate()).toContain('NEW_EXECUTION_REVIEW_REQUIRED')
+},120000)

@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { findingNeedsClosure, qualityCloseout, qualityWorkQueue, observedQualityFinding } from '../../../main/software/quality-closeout'
+import { currentEngineeringFailures, unreviewedNegativeObservation, findingNeedsClosure, qualityCloseout, qualityWorkQueue, observedQualityFinding } from '../../../main/software/quality-closeout'
 import { visualCoverageComplete } from '../../../main/software/visual-review-checklist'
 import type { Identity, Ledger, QualityFinding } from '../../../main/software/quality-ledger'
 import replay from '../../fixtures/quality-convergence-replay-20261104.json'
@@ -108,4 +108,17 @@ it('accepts typed static correction only for static findings and never closes an
  expect(qualityCloseout(ledger([finding({requires_execution:true,reviewed:correction})]),identity,undefined,'rules').required_investigation).toEqual(['f'])
  const failed=finding({...staticFinding,disposition:'confirmed',checks:[{at:'',identity,rules:'rules',case_name:'target',grounded:true,outcome:'failed',observation:'observed assertion'}]})
  expect(qualityCloseout(ledger([failed]),identity,undefined,'rules').must_fix).toEqual(['f'])
+})
+
+it('requires a new independent judgment for new typed failure facts, not ordinary advice or lifecycle noise',()=>{
+ const obs={source:'source',digest:'first',ui:{},steps:[{passed:false,actual:'assertion mismatch'}],logs:[]}
+ const facts=ledger([]);expect(unreviewedNegativeObservation(facts,{...obs,steps:[]})).toBe(false)
+ expect(unreviewedNegativeObservation(facts,obs)).toBe(true)
+ facts.reviews.push({id:'ack',kind:'code',identity,status:'complete',at:'',observation:obs})
+ expect(unreviewedNegativeObservation(facts,{...obs,digest:'changed screenshot',logs:[{kind:'page.closed'}]})).toBe(false)
+ expect(unreviewedNegativeObservation(facts,{...obs,steps:[{passed:false,actual:'new mismatch'}]})).toBe(true)
+ const host={input_intact:true,source_changed:false,target_changed:false,recent_runs:[{input_intact:true,exit_code:1,record_sha256:'a'.repeat(64)}]}
+ expect(currentEngineeringFailures({updates:[{text:'ordinary suggestion'}]})).toEqual([])
+ expect(currentEngineeringFailures({updates:[{workspace_facts:host},{workspace_facts:host}]})).toHaveLength(1)
+ expect(currentEngineeringFailures({updates:[{workspace_facts:{...host,source_changed:true}}]})).toEqual([])
 })

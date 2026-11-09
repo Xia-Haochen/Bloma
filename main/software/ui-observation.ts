@@ -12,6 +12,7 @@ export async function captureDiagnosticScreenshot(page: Page, path: string, sign
 /** A bounded DOM observation, never injected business logic or a PASS script.
  * Prefer editable controls before long lists, as in Proma observation policy. */
 export async function observeSoftwareUi(page: Page) {
+  await page.waitForFunction(()=>document.readyState!=='loading'&&document.body!==null,undefined,{timeout:10000})
   return page.evaluate(() => {
     const controls: Array<{ selector: string; has_text?: string; name: string; value?: string }> = []
     const nodes = [...new Set([...document.querySelectorAll('input,textarea,select'), ...document.querySelectorAll('button,a,[role],[data-testid]')])]

@@ -21,7 +21,7 @@ export type ReviewPurpose = 'candidate' | 'binding' | 'coverage'
 export type ReviewKind = 'code' | 'visual'
 export interface Review { purpose?: ReviewPurpose; rules?: string; id: string; kind?: ReviewKind; identity: Identity; status: 'pending' | 'submitted' | 'complete' | 'interrupted'; child?: string; delegation?: string; at: string
   engineering?: import('./engineering-design').EngineeringReview
-  observation?: {digest:string;image_hash?:string;ui:unknown;steps:unknown[];logs:unknown[]}
+  observation?: {digest:string;source?:string;image_hash?:string;execution_failed?:boolean;engineering_failures?:Array<{record_sha256:string;exit_code:number}>;ui:unknown;steps:unknown[];logs:unknown[]}
   resolutions?: Array<{finding_id:string;evidence:string;case_name?:string;basis?:'static_misread'|'not_applicable'}>
   run_id?: string; failure_code?: string
   source_manifest?: import('./quality-review-context').ReviewSourceManifest
