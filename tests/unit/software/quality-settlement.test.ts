@@ -1,10 +1,22 @@
 import {beforeEach,expect,it,vi} from 'vitest'
 import {settleObservedQuality} from '../../../main/software/quality-settlement'
+import campus from '../../fixtures/delivery-convergence-20261109.json'
 const state=vi.hoisted(()=>({ledger:{version:1,reviews:[],findings:[]} as any,save:vi.fn()}))
 vi.mock('../../../main/software/quality-ledger',()=>({applicableQualityLedger:()=>state.ledger,qualityFailureBaseline:(f:any)=>f.checks.filter((c:any)=>c.outcome==='failed'&&(f.independent||c.grounded)).at(-1),qualityIdentity:async()=>({source:'new',target:'goal',environment:'env'}),qualityRulesVersion:()=> 'rules',readQualityLedger:()=>state.ledger,saveQualityLedger:state.save,sameIdentity:(a:any,b:any)=>JSON.stringify(a)===JSON.stringify(b)}))
 vi.mock('../../../main/software/process-manager',()=>({redactSoftwareOutput:(s:string)=>s}))
 const result=()=>({status:'passed',candidate:{id:'candidate',source:{digest:'new'}},core:{host_cli:{cases:[{name:'sum',covers:['F-001'],passed:true,exit_code:0}]}}} as any)
 beforeEach(()=>{state.save.mockClear();state.ledger={version:1,reviews:[],findings:[{id:'finding',requirement:'F-001',disposition:'confirmed',checks:[{identity:{source:'old',target:'goal',environment:'env'},rules:'rules',case_name:'sum',grounded:true,outcome:'failed'}]}]}})
+it('preserves real campus suspicions when the old registered suite passes without a scenario binding',async()=>{
+ state.ledger.findings=structuredClone(campus.findings)
+ const before=JSON.stringify(state.ledger)
+ await settleObservedQuality('p',result())
+ expect(JSON.stringify(state.ledger)).toBe(before)
+ expect(state.ledger.findings.filter((f:any)=>f.severity==='high').map((f:any)=>f.checks.length)).toEqual([0,0])
+ expect(state.save).not.toHaveBeenCalled()
+ expect(campus.requests.find(r=>r.sequence===121)?.tools).toEqual(expect.arrayContaining([expect.objectContaining({feedback:expect.objectContaining({verification:'passed'})})]))
+ expect(campus.requests.filter(r=>[124,128].includes(r.sequence)).every(r=>r.partner_handoff)).toBe(true)
+ expect(campus.requests.filter(r=>[194,195].includes(r.sequence)).map(r=>r.physical_started)).toEqual([0,0])
+})
 it.each(['rules','unbound','missing','duplicate','incomplete','independent','disputed'])('does not settle %s evidence',async kind=>{
  const f=state.ledger.findings[0],r=result()
  if(kind==='rules')f.checks[0].rules='changed'

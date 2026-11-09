@@ -280,3 +280,9 @@ Get-FileHash "$closeoutTrial\monetary-policy.json.state.json"
 前批参考：[运行时/事务/证据离线修复与复验记录](session-handoff-engineering-repair-20261109.md)、[软件工程基线](../03_ARCHITECTURE/software-engineering-baseline.md)、[观察方法](observation-only-testing-20261105.md)。历史成功游戏与失败校园分别保留，不以任一结论覆盖另一个。
 
 本交接提交只修改计划和入口；未实现P0–P6，未修改产品、冻结预期、质量台账或费用，未发送付费请求。文档验证与提交结果以本次实际工具输出为准。
+
+## 11 本轮实施记录（2026-11-09）
+
+接手 HEAD 25ca096，保护文件 hash-object 53c7abb3aef8497d8b0522b8aab806c82b2ec164。新旧费用账本和测试纠正文件 SHA256 与第2节一致；新轮 pause-generation 保留。无付费请求、未修改真实产品或原台账。
+
+P0 首批：新增 tests/fixtures/delivery-convergence-20261109.json，只读白名单提取第121/124/128/145/168/190/194/195条请求的时序、发送数、用量、工具反馈与原始文件哈希，以及原finding触发/未知/checks。全量输入、配置和隐藏推理未复制。quality-settlement 回放确认旧套件通过不会结算两条无绑定 high 疑点，原 checks 仍为空。quality-settlement / quality-closeout / engineering-partner 定向测试36项通过。该批仅固化证据和结算反例；P0的真实Pi优先级反例、遥测量化及期限/恢复组合仍待完成，不能据此宣布P0全部退出。
