@@ -15,7 +15,7 @@ import { beginProjectAssignment } from '../software/task-assignment'
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SDKQuery } from '../orchestration/stages/orchestration-contracts'
-import { runAgentLoop } from '../agent/loop/agent-loop'
+import { runAgentLoop, withAbort } from '../agent/loop/agent-loop'
 import { registerParentLoopContext, disposeParentDelegationState, stopDelegations, settleParentDelegationRuns } from '../agent/delegation/agent-collaboration'
 import { findProject, updateProject } from '../project/project-service'
 import { readPrdBackplane } from '../project/prd-store'
@@ -147,7 +147,9 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   const pairedEngineering=process.env.BLOMA_ENGINEERING_PARTNER==='1'
   // Maker, peer and isolated adjudication use the same transport queue, so an
   // in-flight peer reservation is not mistaken for permanently exhausted funds.
-  const executionQuery=pairedEngineering?serializeModelQueries(input.query,options=>options.sessionId===input.sessionId||options.sessionId?.startsWith(input.sessionId+'-test-review-')?0:1):input.query
+  let admitQueued: (options: import('../orchestration/stages/orchestration-contracts').SDKQueryOptions)=>void=()=>{}
+  let optionalSession=(session:string)=>false
+  const executionQuery=pairedEngineering?serializeModelQueries(input.query,options=>optionalSession(options.sessionId)?1:0,options=>admitQueued(options)):input.query
   const correctionQuery=leanBudget(input.projectId,'desktop-implement').wrap(executionQuery)
   const settleCorrections=async(reviewSignal:AbortSignal)=>{
     await reviewPendingTestCorrections({projectId:input.projectId,sessionId:input.sessionId,query:correctionQuery,env:input.env,maxTokens:input.maxTokens,signal:reviewSignal})
@@ -171,6 +173,8 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     facts:()=>({current_request:{text:publicRequest.length<=4000?publicRequest:publicRequest.slice(0,2000)+'[中段省略]'+publicRequest.slice(-2000),truncated:publicRequest.length>4000},working_state:renderSoftwareWorkingContext(input.projectId),development:engineeringObservations(input.projectId,input.sessionId)}),
     recover:recoverEngineeringMonitor,attached:recordEngineeringMonitor,history:recentProductionObservations,
   })
+  optionalSession=session=>partner.isMonitor(session)
+  admitQueued=options=>{if(partner.isMonitor(options.sessionId)&&!partner.isObserving())throw new ModelRequestRefusal('ENGINEERING_MONITOR_IDLE')}
   const quality = createQualityReview(input.projectId, input.sessionId, collaboration, input.env, ()=>partner.latest())
   const observeRuntime = (observation: import('../agent/loop/runtime-observation').RuntimeObservation) => {
     const review = readQualityLedger(input.projectId).reviews.find(r => r.child === observation.session_id)
@@ -355,6 +359,8 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     // verifier/repair loop observe failures before purchasing any review.
     if (!locallyChecked && !await recentSoftwareVerification(input.projectId, input.requestId, ctx.signal)) return
     partner.suspend()
+    await withAbort(partner.drain(),ctx.signal)
+    recordEvaluationEvent(input.projectId,'closeout_entered',{run_id:runId,request_id:input.requestId,source:softwareVerificationFingerprint(project.root_path)})
     const waiting = await waitForProductionChildren(ctx)
     if (waiting) return waiting
     const attemptedReviews=new Set<string>()

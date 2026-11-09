@@ -2,7 +2,7 @@ import type { SDKQuery, SDKQueryOptions } from '../../orchestration/stages/orche
 
 /** A single reservation is the conservative budget fallback. Priority only
  * orders waiting requests; it never cancels an owner or grants extra money. */
-export function serializeModelQueries(query:SDKQuery,priority:(options:SDKQueryOptions)=>number=()=>0):SDKQuery {
+export function serializeModelQueries(query:SDKQuery,priority:(options:SDKQueryOptions)=>number=()=>0, admit:(options:SDKQueryOptions)=>void=()=>{}):SDKQuery {
   let busy=false,sequence=0
   const waiting:Array<{rank:number;sequence:number;grant:()=>void}>=[]
   const dispatch=()=>{if(busy||!waiting.length)return;waiting.sort((a,b)=>a.rank-b.rank||a.sequence-b.sequence);busy=true;waiting.shift()!.grant()}
@@ -16,6 +16,7 @@ export function serializeModelQueries(query:SDKQuery,priority:(options:SDKQueryO
     })
     try{
       options.signal.throwIfAborted()
+      admit(options) // Recheck eligibility after waiting, before any physical send.
       const {refreshMessages,...rest}=options
       yield* query(prompt,refreshMessages?{...rest,messages:refreshMessages()}:rest)
     }finally{if(acquired){busy=false;dispatch()}}

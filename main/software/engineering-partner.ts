@@ -89,6 +89,7 @@ export function createEngineeringPartner(enabled:boolean,knownChild?:(session:st
     observed(session:string,turn:AgentLoopTurnInfo){if(session===child&&!turn.failed){seen=Math.max(seen,prepared);if(seen>=sequence)pending=undefined}},
     beforeComplete(session:string){return async()=>session===child&&active&&pending&&sequence>prepared?'【新的制作过程观察】\n'+JSON.stringify(input()):undefined},
     suspend(){active=false;pending=undefined},
+    async drain(){await current()?.completion},
     receive(session:string,message:{turn:number;text:string;truncated:boolean},viewFacts?:()=>unknown){
       if(!(session===child||knownChild?.(session))||!message.text.trim())return
       if(updates.at(-1)?.session_id===session&&updates.at(-1)?.text===message.text)return

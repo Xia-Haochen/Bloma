@@ -106,3 +106,14 @@ it('does not resume for duplicate evidence, but does for a changed source or out
  peer.observeTool(event('duplicate'));expect(h.resume).toHaveBeenCalledTimes(1)
  source='two';peer.observeTool(event('new-source'));expect(h.resume).toHaveBeenCalledTimes(2)
 })
+
+it('drains the original invocation after parking and retains its late evidence without waking another run',async()=>{
+ let finish!:()=>void;h.record.completion=new Promise<void>(resolve=>{finish=resolve})
+ const peer=createEngineeringPartner(true);peer.begin(ctx());peer.suspend()
+ let settled=false;const draining=peer.drain().then(()=>{settled=true})
+ await Promise.resolve();expect(settled).toBe(false)
+ peer.receive('child',{turn:1,text:'Current observed failure remains evidence',truncated:false})
+ finish();await draining
+ expect(peer.latest()).toMatchObject({updates:[{text:'Current observed failure remains evidence'}]})
+ expect(h.resume).not.toHaveBeenCalled()
+})

@@ -61,3 +61,13 @@ it('prioritizes waiting maker and necessary review requests without stealing the
  const peer=drain(query,'peer'),maker=drain(query,'maker',{...options(),sessionId:'maker'})
  expect(calls).toEqual(['active']);release.resolve();await Promise.all([active,peer,maker]);expect(calls).toEqual(['active','maker','peer'])
 })
+
+it('rechecks optional eligibility after queue acquisition while allowing the sent owner to settle',async()=>{
+ const entered=latch(),release=latch(),calls:string[]=[];let optional=true
+ const query=serializeModelQueries(async function*(prompt){calls.push(prompt);if(prompt==='sent'){entered.resolve();await release.promise}yield{type:'result',subtype:'success'}},()=>0,opt=>{if(opt.sessionId==='peer'&&!optional)throw Error('PARKED')})
+ const owner=drain(query,'sent');await entered.promise
+ const parked=drain(query,'queued',{...options(),sessionId:'peer'}).catch(e=>e)
+ const mandatory=drain(query,'review');optional=false;release.resolve()
+ await owner;expect(await parked).toMatchObject({message:'PARKED'});await mandatory
+ expect(calls).toEqual(['sent','review'])
+})
