@@ -1,3 +1,5 @@
+import {proposeTestTransaction,applyApprovedTestCorrections} from '../../../main/software/test-corrections'
+import {reviewPendingTestCorrections} from '../../../main/software/test-correction-review'
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -10,7 +12,7 @@ import { readPrdBackplane, markPrdUserConfirmed } from '../../../main/project/pr
 import { parseLeanBrief } from '../../../main/guide/lean-brief';
 import { syncDocuments } from '../../../main/project/document-sync';
 import { prdScopeFingerprint } from '../../../main/project/requirement-contract';
-import { registerNativeGuiTests } from '../../../main/software/native-gui-registration';
+import { registerNativeGuiTests,applyApprovedNativeCorrections } from '../../../main/software/native-gui-registration';
 import { guiSuitePath } from '../../../main/desktop/gui-acceptance';
 import { verifySoftwareCandidate, recentSoftwareVerification } from '../../../main/software/verification';
 import { closeAllDebugSessions } from '../../../main/software/debug-sessions';
@@ -366,22 +368,40 @@ it.skipIf(process.platform!=='win32'||!existsSync(resolve('node_modules/electron
  el('login').onclick=()=>{access=el('password').value;load()};el('logout').onclick=()=>{access='';el('list').textContent='';el('status').textContent='logged out'};el('new-window').onclick=()=>window.open(location.href);el('refresh').onclick=load;
  el('save').onclick=async()=>{const r=await fetch('/names',{method:'POST',headers:{'x-access-code':access},body:el('name').value});el('status').textContent=await r.text();if(r.ok)load()};</script>`)
  writeFileSync(join(root,'LAUNCH.json'),JSON.stringify({schema_version:2,ui:'electron',command:['npx','electron','.'],window_title:'Names'}))
- writeFileSync(join(root,'tests/acceptance.mjs'),`import fs from 'node:fs';import path from 'node:path';
+ writeFileSync(join(root,'tests/support.mjs'),`export const decode=value=>{throw Error('broken test helper')}`)
+ writeFileSync(join(root,'tests/fixture.mjs'),`import {decode} from './support.mjs';export const fixture=()=>decode('missing fixture')`)
+ writeFileSync(join(root,'tests/acceptance.mjs'),`import fs from 'node:fs';import path from 'node:path';import {fixture} from './fixture.mjs';
  export default async({test,page,expect,assert,app,phase,dataDir})=>{
  const login=async window=>{await window.locator('#password').fill(await window.locator('#code').innerText());await window.locator('#login').click();await expect(window.locator('#status')).toHaveText('ready')};
  await test('F-001 save and reopen',async()=>{
- assert.equal(app.origin,new URL(page.url()).origin);assert.match(app.origin,/^http:\\/\\/127[.]0[.]0[.]1:/);assert.equal(app.readProductFile('README.md'),'candidate document version two');
+ assert.equal(fixture(),'resource-ready');assert.equal(app.origin,new URL(page.url()).origin);assert.match(app.origin,/^http:\\/\\/127[.]0[.]0[.]1:/);assert.equal(app.readProductFile('README.md'),'candidate document version two');
  const current=await page.locator('#code').innerText(),record=path.join(dataDir,'previous-code');
  if(phase==='reopened'){assert.notEqual(current,fs.readFileSync(record,'utf8'));await login(page);await expect(page.locator('#list')).toHaveText('Alice');return}
  fs.writeFileSync(record,current);await login(page);await page.locator('#name').fill('Alice');await page.locator('#save').click();await expect(page.locator('#list')).toHaveText('Alice');
  const second=await app.waitForWindow(()=>page.locator('#new-window').click());await login(second);await expect(second.locator('#list')).toHaveText('Alice');await second.locator('#logout').click();await expect(second.locator('#status')).toHaveText('logged out');await second.close();
  await page.reload();await login(page);await expect(page.locator('#list')).toHaveText('Alice');});
  await test('F-002 reject blank',async()=>{await page.locator('#name').fill('');await page.locator('#save').click();await expect(page.locator('#status')).toHaveText('required');await expect(page.locator('#list')).toHaveText('Alice')});}`)
- registerNativeGuiTests(project.project_id,'tests/acceptance.mjs',true)
+ const baseline=registerNativeGuiTests(project.project_id,'tests/acceptance.mjs',true).native_tests!
+ const support='export const decode=value=>value.trim()'
+ writeFileSync(join(root,'tests/support.mjs'),support)
+ writeFileSync(join(root,'tests/fixture.mjs'),`import fs from 'node:fs';import {decode} from './support.mjs';export const fixture=()=>decode(fs.readFileSync(new URL('./fixture.txt',import.meta.url),'utf8'))`)
+ writeFileSync(join(root,'tests/fixture.txt'),'resource-ready')
+ proposeTestTransaction(project.project_id,{contract_digest:baseline.digest,script:'tests/acceptance.mjs',reason:'修复两处测试助手并补齐资源，保留全部原案例及重开要求'})
+ writeFileSync(join(root,'tests/support.mjs'),`export const decode=()=> 'conflicting edit'`)
+ const query:import('../../../main/orchestration/stages/orchestration-contracts').SDKQuery=async function*(prompt){const packet=JSON.parse(prompt)
+   expect(packet.proposed_execution).toMatchObject({product_verified:false,source_unchanged:true,result:{status:'passed'}})
+   yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify({verdict:'approve',reason:'受控独立裁定：原案例正文保持，仅修复助手和资源；隔离执行完整观察',assessment:Object.keys(packet.proposal.expected_sources).map(feature=>({feature,preserved:true,reason:'原业务断言、重开要求和正常入口保留'}))})}]}}
+ }
+ await reviewPendingTestCorrections({projectId:project.project_id,sessionId:'combined-review',query,env:{},maxTokens:4096,signal:AbortSignal.timeout(150000)})
+ expect(()=>applyApprovedTestCorrections(project.project_id)).toThrow('WORKING_BYTES_CHANGED')
+ writeFileSync(join(root,'tests/support.mjs'),support)
+ applyApprovedTestCorrections(project.project_id)
+ expect(applyApprovedNativeCorrections(project.project_id)).toBe(true)
+ expect(applyApprovedNativeCorrections(project.project_id)).toBe(false)
  const checked=await verifySoftwareCandidate(project.project_id,'combined-native',AbortSignal.timeout(150000))
  expect(checked.status,JSON.stringify({summary:checked.summary,gui:checked.core?.host_gui})).toBe('passed')
  expect(checked.core?.host_gui?.native_evidence?.interactions_attempted).toBeGreaterThan(0)
-},180000)
+},240000)
 it('rejects missing host bindings before freezing rather than calling a scope error a product failure',()=>{
  writeFileSync(join(project.root_path,'tests/acceptance.mjs'),`const helper=()=>context.newPage();export default async({test,page,expect})=>{await test('F-001 missing',async()=>{helper();await expect(page.locator('#list')).toHaveText('Alice')});await test('F-002 blank',async()=>{await page.click('#save');await expect(page.locator('#status')).toHaveText('required')})}`)
  expect(()=>registerNativeGuiTests(project.project_id,'tests/acceptance.mjs')).toThrow('GUI_NATIVE_BINDING_UNDEFINED')

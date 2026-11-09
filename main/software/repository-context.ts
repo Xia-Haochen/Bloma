@@ -1,3 +1,4 @@
+import { serializeRedactedJson } from '../../shared/redacted-json'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -57,13 +58,13 @@ export function buildRepositoryContextTool(projectId: string): AgentLoopTool {
       try {
         if (ctx.projectId !== projectId) throw Error('REPOSITORY_PROJECT_MISMATCH')
         const root = resolveProjectRoot(projectId, () => findProject(projectId).root_path)
-        if (input.mode === 'changes') return { output: redactSoftwareOutput(JSON.stringify(await importedProjectChanges(projectId, root, ctx.signal))) }
+        if (input.mode === 'changes') return { output: serializeRedactedJson(await importedProjectChanges(projectId, root, ctx.signal),redactSoftwareOutput) }
         if (input.mode === 'file') {
           if (typeof input.path !== 'string' || !input.path) throw Error('REPOSITORY_FILE_REQUIRED')
-          return { output: redactSoftwareOutput(JSON.stringify(repositoryFileFacts(projectId, root, input.path))) }
+          return { output: serializeRedactedJson(repositoryFileFacts(projectId, root, input.path),redactSoftwareOutput) }
         }
         let files = repositoryFiles(root)
-        if(input.mode==='impact')return{output:redactSoftwareOutput(JSON.stringify(changeImpact(root,files,input.paths as string[],ctx.signal)))}
+        if(input.mode==='impact')return{output:serializeRedactedJson(changeImpact(root,files,input.paths as string[],ctx.signal),redactSoftwareOutput)}
         if (input.mode === 'search' && typeof input.path === 'string' && input.path) {
           const directory = realpathSync(resolve(root, input.path)), rel = relative(realpathSync(root), directory)
           if (isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) throw Error('REPOSITORY_SEARCH_OUTSIDE_PROJECT')
@@ -81,8 +82,8 @@ export function buildRepositoryContextTool(projectId: string): AgentLoopTool {
             manifests: files.filter(file => /(?:^|\/)(?:package.json|package-lock.json|pnpm-lock.yaml|yarn.lock|pyproject.toml|uv.lock|requirements.txt|Cargo.toml|go.mod)$/.test(file)).slice(0, 60),
             tests: files.filter(file => /(^|\/)(tests?|__tests__)\/|[.](test|spec)[.]/.test(file)).slice(0, 30),
             imported: importedProjectContext(projectId), note: '先复用现有脚本和入口；清单仅定位，不执行测试或证明依赖可用。' }
-          const output = JSON.stringify(overview)
-          return { output: redactSoftwareOutput(output.length <= 14000 ? output : JSON.stringify({ files: files.length, scripts, overview_truncated: true, note: '清单过大，按目录用find/grep或inspect_repository file/search继续定位；未将截断JSON当作完整索引。' })) }
+          const output = serializeRedactedJson(overview,redactSoftwareOutput)
+          return { output: output.length <= 14000 ? output : serializeRedactedJson({ files: files.length, scripts, overview_truncated: true, note: '清单过大，按目录用find/grep或inspect_repository file/search继续定位；未将截断JSON当作完整索引。' },redactSoftwareOutput) }
         }
         if (input.mode !== 'search' || typeof input.query !== 'string' || !input.query.trim() || input.query.length > 120) throw Error('REPOSITORY_SEARCH_QUERY_REQUIRED')
         const query = input.query.toLowerCase(), hits: Array<{ path: string; line: number; text: string }> = []; let skipped = 0, scanned = 0

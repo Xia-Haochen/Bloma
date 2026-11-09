@@ -1,3 +1,4 @@
+import { serializeRedactedJson } from '../../shared/redacted-json'
 import {ENGINEERING_PARTNER_WORKFLOW} from './engineering-partner-guidance'
 import {buildSoftwareEnvironmentTool} from './environment-tool'
 import { buildQualityFindingsTool } from './quality-findings-tool'
@@ -30,7 +31,7 @@ export function engineeringObservations(projectId:string,parent:string) {
     const state=id?readDebugSession(projectId,parent,id):retainedDebugObservation(projectId,parent)
     if(!state)return{available:false}
     return{available:true,source:state.source,version:state.version,historical:!id,recorded_state:state.state,stale:state.stale||state.source!==softwareVerificationFingerprint(findProject(projectId).root_path),
-      steps:state.steps.slice(-8).map(step=>{const actual=redactSoftwareOutput(JSON.stringify(step.actual)??'null');return{id:step.id,passed:step.passed,actual:actual.length<=6000?actual:actual.slice(0,3000)+'[中段省略]'+actual.slice(-3000),truncated:actual.length>6000}}),
+      steps:state.steps.slice(-8).map(step=>{const actual=serializeRedactedJson(step.actual,redactSoftwareOutput);return{id:step.id,passed:step.passed,actual:actual.length<=6000?actual:actual.slice(0,3000)+'[中段省略]'+actual.slice(-3000),truncated:actual.length>6000}}),
       observations:state.observations.slice(-6).map(row=>({kind:row.kind,message:redactSoftwareOutput(row.message).slice(0,4000),truncated:row.message.length>4000})),
       image_included:false,authority:'执行观察，不是制作方结论或产品PASS；截图未附入此文字材料。'}
   }catch(error){return{available:false,error:redactSoftwareOutput(String(error))}}
@@ -152,7 +153,7 @@ export function createEngineeringWorkspaces(projectId:string,productRoot:string,
         const inputIntact=intact(view)
         const record={started,cwd:input.cwd??'.',timeout_ms:timeout,command:input.command,...result,source_snapshot:view.snapshot,input_intact:inputIntact,...(!inputIntact?{code:'ENGINEERING_INPUT_CHANGED'}:{}),product_verified:false}
         const path=join(view.root,'runs',randomUUID()+'.json');mkdirSync(dirname(path),{recursive:true});writeFileSync(path,JSON.stringify(record))
-        view.executionCount++;view.executions.push({record:path,record_sha256:hash(Buffer.from(JSON.stringify(record))),command:redactSoftwareOutput(JSON.stringify(input.command)).slice(0,500),exit_code:result.exit_code,code:record.code,input_intact:inputIntact,stdout:String(result.stdout??'').slice(-800),stdout_truncated:result.stdout_truncated||String(result.stdout??'').length>800,stderr_truncated:result.stderr_truncated||String(result.stderr??result.error??'').length>500,stderr:String(result.stderr??result.error??'').slice(-500),product_verified:false});view.executions=view.executions.slice(-3)
+        view.executionCount++;view.executions.push({record:path,record_sha256:hash(Buffer.from(JSON.stringify(record))),command:serializeRedactedJson(input.command,redactSoftwareOutput).slice(0,500),exit_code:result.exit_code,code:record.code,input_intact:inputIntact,stdout:String(result.stdout??'').slice(-800),stdout_truncated:result.stdout_truncated||String(result.stdout??'').length>800,stderr_truncated:result.stderr_truncated||String(result.stderr??result.error??'').length>500,stderr:String(result.stderr??result.error??'').slice(-500),product_verified:false});view.executions=view.executions.slice(-3)
         return{output:JSON.stringify(record),isError:result.exit_code!==0||!inputIntact}
       },
     }]

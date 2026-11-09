@@ -3,7 +3,7 @@ import {createHash,randomUUID} from 'node:crypto'
 import {existsSync,readFileSync,writeFileSync,mkdirSync,openSync,closeSync,unlinkSync,realpathSync,lstatSync} from 'node:fs'
 import {join,dirname,resolve,relative,isAbsolute} from 'node:path'
 import {getPromaHome} from '../../storage/config-paths'
-import {writeTextFileAtomic} from '../../storage/json-store'
+import {writeTextFileAtomic,writeFileAtomic} from '../../storage/json-store'
 import {findProject} from '../project/project-service'
 import {readPrdBackplane} from '../project/prd-store'
 import {prdScopeFingerprint,trustedAcceptance} from '../project/requirement-contract'
@@ -56,7 +56,9 @@ function contract(id:string,digest:string){
   return entry.native
 }
 export function readTestContractFile(id:string,digest:string,path:string){
-  const n=contract(id,digest),file=n.files.find(f=>pathOf(n,f.path)===path);if(!file)throw Error('TEST_CORRECTION_FILE_NOT_IN_CONTRACT')
+  const n=registeredContracts(id).get(digest)?.native??read(id).proposals.find(p=>p.scope===scope(id)&&p.after.digest===digest)?.after
+  if(!n)throw Error('TEST_CONTRACT_NOT_REGISTERED_IN_CURRENT_SCOPE')
+  const file=n.files.find(f=>pathOf(n,f.path)===path);if(!file)throw Error('TEST_CORRECTION_FILE_NOT_IN_CONTRACT')
   frozenNativeGuiVersion(id,n)
   return{contract_digest:digest,file:path,sha256:file.sha256,text:readFileSync(join(getPromaHome(),'gui-native-tests',id,n.digest,file.path),'utf8'),source:'host_frozen_test',verification:'not_issued'}
 }
@@ -132,17 +134,18 @@ function applyTransaction(id:string,p:Proposal){
   // Preflight every path and conflict before touching any file. On an IO failure,
   // roll back this invocation; an interrupted process remains unapplied and is
   // recoverable from either exact baseline or exact approved bytes.
-  for(const file of new Set([...p.before.files.map(f=>pathOf(p.before,f.path)),...p.after.files.map(f=>pathOf(p.after,f.path))])){const target=safeWorkingPath(root,file),live=existsSync(target)?hash(readFileSync(target)):undefined,a=p.before.files.find(f=>pathOf(p.before,f.path)===file),b=p.after.files.find(f=>pathOf(p.after,f.path)===file);if(live!==a?.sha256&&live!==b?.sha256)throw Error('TEST_CORRECTION_WORKING_BYTES_CHANGED')}
-  const originals=changes.map(c=>{const path=safeWorkingPath(root,c.file),bytes=existsSync(path)?readFileSync(path):undefined,live=bytes&&hash(bytes)
+  for(const file of new Set(p.after.files.map(f=>pathOf(p.after,f.path)))){const target=safeWorkingPath(root,file),live=existsSync(target)?hash(readFileSync(target)):undefined,a=p.before.files.find(f=>pathOf(p.before,f.path)===file),b=p.after.files.find(f=>pathOf(p.after,f.path)===file);if(live!==a?.sha256&&live!==b?.sha256)throw Error('TEST_CORRECTION_WORKING_BYTES_CHANGED')}
+  // Removal from the test input set is not permission to delete a product file.
+  const originals=changes.filter(c=>c.after!==undefined).map(c=>{const path=safeWorkingPath(root,c.file),bytes=existsSync(path)?readFileSync(path):undefined,live=bytes&&hash(bytes)
     if(live!==c.before&&live!==c.after)throw Error('TEST_CORRECTION_WORKING_BYTES_CHANGED')
     return{path,bytes,change:c}
   })
-  try{for(const {path,change:c} of originals){if(c.after===undefined){if(existsSync(path))unlinkSync(path)}else{
+  try{for(const {path,change:c} of originals){
     const f=files.find(f=>f.file===c.file);if(!f||f.sha256!==c.after)throw Error('TEST_CORRECTION_APPROVAL_INVALID')
-    mkdirSync(dirname(path),{recursive:true});writeFileSync(path,Buffer.from(f.text,f.encoding as BufferEncoding))
-  }}
+    mkdirSync(dirname(path),{recursive:true});writeFileAtomic(path,Buffer.from(f.text,f.encoding as BufferEncoding))
+  }
     if(freezeNativeGuiTests(id,root,pathOf(p.after,p.after.entry),Object.keys(p.expected_sources),p.after.restart).digest!==p.after.digest)throw Error('TEST_CORRECTION_WORKING_BYTES_CHANGED')
-  }catch(error){for(const {path,bytes} of originals){if(bytes)writeFileSync(path,bytes);else if(existsSync(path))unlinkSync(path)}throw error}
+  }catch(error){for(const {path,bytes} of originals){if(bytes)writeFileAtomic(path,bytes);else if(existsSync(path))unlinkSync(path)}throw error}
 }
 export function testCorrectionView(id:string){
   const current=scope(id),contracts=registeredContracts(id)
@@ -247,5 +250,5 @@ export function testCorrectionRejectionFeedback(id:string):ToolFeedback|undefine
  const latest=read(id).proposals.filter(p=>p.scope===scope(id)).at(-1)
  if(latest?.status!=='rejected')return
  return{schema_version:1,execution:'completed',verification:'failed',source:'host',scope:'test_correction',category:'verification_harness',reason:'TEST_CORRECTION_REJECTED',
-   fingerprint:hash(JSON.stringify([latest.scope,latest.before.digest,latest.after.digest])),recovery:'repair_verifier'}
+   fingerprint:hash(JSON.stringify([latest.scope,latest.before.contract,latest.after.contract])),recovery:'repair_verifier'}
 }

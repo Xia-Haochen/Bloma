@@ -1,3 +1,4 @@
+import { serializeRedactedJson } from '../../shared/redacted-json'
 import { readEngineeringDesign, ENGINEERING_GUIDANCE, ENGINEERING_REVIEW_SCHEMA, parseEngineeringReview } from './engineering-design'
 import { buildQualityFindingsTool } from './quality-findings-tool'
 import {softwareVerificationFingerprint} from '../desktop/verification-fingerprint'
@@ -256,8 +257,8 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       }
       const outcome = observedQualityFinding(result, finding, input.case_name)
       finding.checks.push({ grounded:Boolean(rebound), at: new Date().toISOString(), identity: before, case_name: input.case_name, rules, outcome, report: result.report_path, candidate: result.candidate?.id,
-        observation: redactSoftwareOutput(JSON.stringify({ status: result.status, summary: result.summary, original_review_source: finding.identity.source, current_candidate_only: !baseline && !same(finding.identity,before),
-          gui: result.core?.host_gui?.case_results?.filter(c => c.name === input.case_name), cli: result.core?.host_cli?.cases.filter(c => c.name === input.case_name) })) })
+        observation: serializeRedactedJson({ status: result.status, summary: result.summary, original_review_source: finding.identity.source, current_candidate_only: !baseline && !same(finding.identity,before),
+          gui: result.core?.host_gui?.case_results?.filter(c => c.name === input.case_name), cli: result.core?.host_cli?.cases.filter(c => c.name === input.case_name) },redactSoftwareOutput) })
       finding.disposition = outcome === 'failed' && rebound ? 'confirmed' : outcome === 'passed' && baseline && result.status === 'passed' ? 'closed'
         : baseline ? 'confirmed' : outcome==='passed'&&rebound&&result.status==='passed'?'not_reproduced':'suspected'
       // Read again after asynchronous execution; no other writer may be erased.

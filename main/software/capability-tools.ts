@@ -1,3 +1,4 @@
+import { serializeRedactedJson } from '../../shared/redacted-json'
 import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, relative } from 'node:path'
@@ -128,7 +129,7 @@ export function buildCapabilityTools(projectId:string,policy:ReturnType<typeof c
     execute:async(input,ctx)=>{try{if(ctx.projectId!==projectId)throw Error('CAPABILITY_PROJECT_MISMATCH');if(Object.keys(input).some(key=>key!=='capability')||input.capability!==undefined&&!CAPABILITY_NAMES.includes(String(input.capability)))throw Error('CAPABILITY_ARGUMENTS_INVALID');
       const root=findProject(projectId).root_path
       const result=integrationCapability(input.capability)?await inspectIntegrationCapability(projectId,root,input.capability,ctx.signal):await(input.capability==='documents'?inspectDocumentCapability:inspectSoftwareCapabilities)(projectId,root,ctx.signal)
-      return{output:redactSoftwareOutput(JSON.stringify(result))}}catch(error){return{output:redactSoftwareOutput(String(error)),isError:true}}}}
+      return{output:serializeRedactedJson(result,redactSoftwareOutput)}}catch(error){return{output:redactSoftwareOutput(String(error)),isError:true}}}}
   const prepare:AgentLoopTool={name:'prepare_software_capability',description:'按schema选择并物化成熟组件：设置/数据/任务/HTTP工作流/文件/多模态/查询/工作台/分发/对照；旧ai/vision/speech/documents/ocr/http保持兼容。保护已有代码，公开路由可修改但不含明文Key；不调用模型或签发PASS。',
     input_schema:{type:'object',additionalProperties:false,required:['capability'],properties:{capability:{type:'string',enum:CAPABILITY_NAMES},install_dependencies:{type:'boolean'},download_models:{type:'boolean'},language:{type:'string',maxLength:40}}},
     execute:async(input,ctx)=>{
@@ -137,13 +138,13 @@ export function buildCapabilityTools(projectId:string,policy:ReturnType<typeof c
           if(input.install_dependencies!==undefined||input.download_models!==undefined)throw Error('INTEGRATION_NO_DOWNLOAD_OPTIONS')
           for(const path of INTEGRATION_COMPONENTS[input.capability])policy.assertFileWrite(path,ctx)
           const result=await prepareIntegrationCapability(projectId,findProject(projectId).root_path,input.capability,ctx.signal,input.language as string|undefined)
-          return{output:redactSoftwareOutput(JSON.stringify(result)),isError:result.status!=='prepared'}
+          return{output:serializeRedactedJson(result,redactSoftwareOutput),isError:result.status!=='prepared'}
         }
         if(input.capability==='documents'){
           if(input.download_models!==undefined)throw Error('DOCUMENT_DOWNLOAD_MODELS_UNSUPPORTED')
           for(const path of [DOCUMENT_COMPONENT,'package.json','package-lock.json'])policy.assertFileWrite(path,ctx)
           const result=await prepareDocumentCapability(projectId,findProject(projectId).root_path,ctx.signal,input.install_dependencies===true)
-          return{output:redactSoftwareOutput(JSON.stringify(result)),isError:result.status!=='prepared'}
+          return{output:serializeRedactedJson(result,redactSoftwareOutput),isError:result.status!=='prepared'}
         }
         // assertCommand above authorizes the integrator's fixed venv/pip setup.
         // Generic file/delegation tools must continue protecting all of .venv.

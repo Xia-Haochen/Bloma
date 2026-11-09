@@ -1,3 +1,4 @@
+import { serializeRedactedJson } from '../../shared/redacted-json'
 import { redactSoftwareOutput } from './process-manager'
 import { applicableQualityLedger, qualityFailureBaseline, qualityIdentity, qualityRulesVersion, readQualityLedger, saveQualityLedger, sameIdentity } from './quality-ledger'
 import { observedQualityFinding, sameQualityScope } from './quality-closeout'
@@ -23,9 +24,9 @@ export async function settleObservedQuality(projectId: string, result: SoftwareV
     if (last?.candidate === result.candidate.id && last.outcome === outcome && sameIdentity(last.identity, current)) continue
     finding.checks.push({ grounded:Boolean(finding.retest&&binding===finding.retest || baseline?.grounded), at: new Date().toISOString(), identity: current, rules, case_name: binding.case_name,
       outcome, candidate: result.candidate.id, report: result.report_path,
-      observation: redactSoftwareOutput(JSON.stringify({ source: 'host_verification', status: result.status, case_name: binding.case_name, outcome,
+      observation: serializeRedactedJson({ source: 'host_verification', status: result.status, case_name: binding.case_name, outcome,
         gui: result.core?.host_gui?.case_results?.filter(c => c.name === binding.case_name),
-        cli: result.core?.host_cli?.cases.filter(c => c.name === binding.case_name) })) })
+        cli: result.core?.host_cli?.cases.filter(c => c.name === binding.case_name) },redactSoftwareOutput) })
     const grounded=finding.checks.at(-1)?.grounded
     finding.disposition = outcome === 'failed' && grounded ? 'confirmed' : baseline ? 'closed' : outcome==='passed'&&grounded?'not_reproduced':'suspected'
     changed = true

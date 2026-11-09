@@ -1,3 +1,4 @@
+import { serializeRedactedJson } from '../../shared/redacted-json'
 import type {ToolContext} from '../agent/loop/agent-loop'
 import {restoreIndependentResearchDelegation} from '../agent/delegation/agent-collaboration'
 import {readProjectActivity,recordProjectActivity} from './project-activity'
@@ -34,7 +35,7 @@ export function recentProductionObservations(ctx:ToolContext){
   const entries=result.messages.flatMap(message=>(message.content??[]).flatMap(block=>{
     const steer=message.role==='user'&&message.origin==='user'&&block.type==='text'&&block.text?.startsWith(STEER_WRAP_PREFIX)
     if(!(steer||message.role==='assistant'&&['text','tool_use'].includes(block.type)||block.type==='tool_result'))return[]
-    const text=redactSoftwareOutput(JSON.stringify(block))
+    const text=serializeRedactedJson(block,redactSoftwareOutput)
     return[{at:message.timestamp,role:message.role,type:block.type,text:text.length<=5000?text:text.slice(0,2500)+'[中段省略]'+text.slice(-2500),truncated:text.length>5000}]
   })).slice(-12)
   return{available:true,source:'parent_public_transcript',historical:true,entries,truncated:result.truncated}

@@ -1,3 +1,4 @@
+import { serializeRedactedJson } from '../../shared/redacted-json'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -47,7 +48,7 @@ export function saveSoftwareRunState(input: { projectId: string; sessionId: stri
  * single run; changed results get another attempt within the SAME budget. */
 export function recordSoftwareRepair(input: { projectId: string; sessionId: string; runId: string; source?: string; candidateId?: string; error: string; observations?: unknown; category?:string; failureFingerprint?: string }) {
   const previous = readSoftwareRunState(input.projectId), operation = findProject(input.projectId).lean_operation_id
-  const normalized = redactSoftwareOutput(JSON.stringify({ error: input.error, observations: input.observations ?? null }))
+  const normalized = serializeRedactedJson({ error: input.error, observations: input.observations ?? null },redactSoftwareOutput)
     .split(input.candidateId ?? '[no-candidate]').join('[candidate]')
   const signature = createHash('sha256').update(input.failureFingerprint ?? normalized).digest('hex')
   const prior = previous && previous.operationId === operation ? previous.failure : undefined

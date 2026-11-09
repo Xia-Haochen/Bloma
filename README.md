@@ -2,7 +2,7 @@
 
 Windows Electron 软件生成平台，使用 Pi 执行持续制作与委派。
 
-当前接手入口（2026-11-09）：[工程执行与验收职责收敛交接](docs/05_PROJECT_PLAN/session-handoff-engineering-repair-20261109.md)、[计划与实施索引](docs/05_PROJECT_PLAN/README.md)。下一会话先完成运行时、测试修正事务、证据和伙伴调度的离线工程修复；校园客户端尚未发布，付费试验按用户要求保持暂停。新项目使用 `software-v1`；代码与验证证据优先于历史设计。
+当前接手入口（2026-11-09）：[工程执行与验收职责收敛交接](docs/05_PROJECT_PLAN/session-handoff-engineering-repair-20261109.md)、[计划与实施索引](docs/05_PROJECT_PLAN/README.md)。运行时、测试修正事务、执行上下文、证据和伙伴调度的离线工程修复及组合验证已完成（详见交接第10节）；校园客户端尚未发布，付费试验按用户要求保持暂停。新项目使用 `software-v1`；代码与验证证据优先于历史设计。
 
 - [软件工程基线](docs/03_ARCHITECTURE/software-engineering-baseline.md)：负责人 Agent 工程工作循环、产品 Git 管理、恢复检查点及有依据的工程审阅；历史产品问题和实际验证边界在同一入口保留。
 

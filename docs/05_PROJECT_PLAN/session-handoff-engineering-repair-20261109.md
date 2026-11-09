@@ -1,6 +1,6 @@
 # Bloma 工程执行与验收职责收敛会话交接
 
-日期：2026-11-09，Asia/Shanghai。下一会话目标是完成本文件的修复方案：统一运行时、测试修正事务、执行身份、证据读取与伙伴调度，再验证完整修复链路。**完整方案尚未实施；已有局部修复不等于方案完成。**
+日期：2026-11-09，Asia/Shanghai。**本文件要求的离线工程修复与组合验证已完成，最终结果见第10节。校园项目正式付费验收、C/V与发布仍暂停，未宣称产品交付。** 运行时、完整测试候选事务、执行上下文、证据和伙伴调度均沿原software-v1实现；后续不得重放已完成批次或自动恢复付费。
 
 本文件是该任务唯一接手主入口。沿现有 `software-v1` 改造，复用制作者、完整 Pi 伙伴、独立审查、C/V、发布门禁、执行记录与费用账本。减少模型必须掌握的内部协议，不以增加提示词、工具数量或平行状态机替代职责收敛。
 
@@ -14,7 +14,7 @@
 - 只在当前Codex仓库推进，不改Proma、旧副本、SYNC-MANIFEST.json或持久记忆。相关批次验证后提交，不push；无需另建聊天或工作树。
 - 保留用户原有 `production-workflow-v2-20261020.md` 两行未提交修改；hash-object应为 `53c7abb3aef8497d8b0522b8aab806c82b2ec164`，不得纳入本批提交。
 
-## 2 当前快照
+## 2 接手时快照（历史；最新离线结果见第10节）
 
 | 项目 | 交接核对值 |
 | --- | --- |
@@ -36,7 +36,7 @@
 
 398条已回报请求曾按核对后的官方适用时段追加计价凭据：16.529858元校准为8.265020元。原策略与entries的JSON值未改，unknown保留。凭据为 `reported-pricing-proof.json`、`reported-pricing-result.json`、`ledger-before-pricing.json`、`pricing-weekend-reviewed.html`。旧时段价目证据不能直接作为新请求准入依据。
 
-## 3 已完成的局部修复
+## 3 接手前的局部修复（原证据保留）
 
 | 提交 | 内容 | 验证边界 |
 | --- | --- | --- |
@@ -48,9 +48,9 @@
 
 日志位于平台 `run-artifacts/`：`operator-trial-*20261108.log`、`trial-json-redaction-*20261108.log`、`correction-probe-*20261108.log`、`monitor-cancel-recovery-*20261108.log`。重叠批次不能相加。旧故障注入的5秒等待在修改前也失败，见 `monitor-cancel-fault-baseline-20261108.log`；最终改为有界等待实际收尾，失败断言未放宽。
 
-以上尚未解决完整事务提交、Electron项目绑定、诊断耦合和伙伴重复调查。不要重做这些局部修复，也不要把它们宣称为整体方案完成。
+接手时，以上局部修复尚未解决完整事务、Electron绑定、诊断耦合和伙伴重复调查。本轮后续修复及证据见第10节；这些历史提交仍只代表其原验证范围。
 
-## 4 根因及源码地图
+## 4 接手前根因及源码地图
 
 | 根因 | 已核对事实 | 主要文件 |
 | --- | --- | --- |
@@ -139,10 +139,10 @@ Electron的旧设计有明确意图：[2026-10-28说明](harness-runtime-reliabi
 
 旧游戏已由用户确认基本可玩并交付；校园失败不能改写其结论。不要重开旧涂鸦/静音、FX或UI重设计任务来替代当前目标。
 
-## 8 下一会话开始步骤
+## 8 后续接续边界
 
 1. 读本文件、[软件工程基线](../03_ARCHITECTURE/software-engineering-baseline.md)、[观察方法](observation-only-testing-20261105.md)，核对Git、保护文档、暂停标记、项目和账本，不发模型请求。
-2. 按第6节分批实施离线工程，明确删除/合并哪些重复职责，避免保留矛盾路径。先以隔离fixture及当前失败材料证明运行时、完整修正事务和证据归属可用。
+2. 先核对第10节的完成状态、提交和证据。离线批次已完成，不无变化重跑；若出现新回归，保留反例后只修复受影响部分。
 3. 在本文件维护批次状态与验证结果，不另造重复主方案。相关批次验证后提交，不push，不触碰用户保护文件。
 4. 付费部分仍停；用户明确恢复后，先核对未决提案、项目和当前候选、实时余额/费率/原累计账本与guard，再冻结新运行包沿原项目接续。不能把pending/rejected手改成approved。
 
@@ -163,9 +163,9 @@ Get-Content "$repairTrialRoot\monetary-policy.json.state.json" -Raw | ConvertFro
 
 本次交接仅修改主交接文档及仓库/计划/架构入口；未改运行代码、生成产品、试验账本或持久记忆，未发送付费请求。交接校验为 `npm run docs:check` 和 `git diff --check`；此前工程测试结果仅按第3节的原批次范围引用。
 
-## 9 本轮离线实施进度（2026-11-09）
+## 9 首次接手的离线子项（历史记录）
 
-完整方案仍未完成；付费试验继续暂停。以下是可独立回滚的子批次，不能作为第6节全部退出条件已满足的证明。
+本节记录首次接手结束时的子批次及当时未结项；后续完成状态以第10节为准。原失败日志和验证范围仍保留。
 
 ### 1a 显式 Electron 绑定与完整目录校验
 
@@ -195,7 +195,7 @@ Get-Content "$repairTrialRoot\monetary-policy.json.state.json" -Raw | ConvertFro
 
 - npm run check:offline的类型、文档、renderer/main构建通过；标准回归19文件/179项中178项通过，1项旧原生Electron夹具因依赖隐式宿主回退而失败。保留完整原日志run-artifacts/engineering-repair-offline-20261109.log，不宣称此次命令退出成功。
 - 该夹具改为声明实际版本并调用prepareSoftwareRuntime显式准备；原案例、GUI断言及正式verifySoftwareCandidate通过要求不变。定向真实Electron正式验收复验通过，见engineering-repair-native-electron-20261109.log（1通过、25未选中）。其后类型检查通过，见engineering-repair-types-closeout-20261109.log。没有重复整套标准回归；178项原通过与该项复验分别保留。
-- 当前完成的是1a运行时绑定和3a可读诊断子项。第1批完整实例上下文、第2批多文件修正事务、第3批独立裁定/失败分布/动作计数/静态扫描、第4批伙伴调度与进展治理、第5批校园组合反例复现均未完成，不能关闭本次工程修复任务。
+- 首次接手结束时完成的是1a运行时绑定和3a可读诊断子项。第1批完整实例上下文、第2批多文件修正事务、第3批独立裁定/失败分布/动作计数/静态扫描、第4批伙伴调度与进展治理、第5批校园组合反例复现均未完成，不能关闭本次工程修复任务。
 - 暂停标记仍在；账本读取仍430 reported、1 unknown；未发送付费模型请求，未改原失败/提案/冻结预期/费用记录，未push。保护文档hash-object仍为53c7abb3aef8497d8b0522b8aab806c82b2ec164。
 
 ## 10 接续修复（2026-11-09）
@@ -233,3 +233,30 @@ Get-Content "$repairTrialRoot\monetary-policy.json.state.json" -Raw | ConvertFro
 校园原冻结测试d8c288fe4d02165b55e3435838268fff247dd8333aa337ffe0f38321b1e73e4d共46643字节。在临时副本复现作用域错误，将测试助手归入入口闭包并补context绑定后检查通过；原案例正文完整保留，新增资源可封存，案例集合一致。真实项目提案及费用账本前后字节完全一致。证据engineering-repair-campus-candidate-20261109.log；这不是原校园产品整体验收，原提案未被批准或重写。
 
 真实浏览器另证明助手修正获批后仍可暴露产品断言失败：正式复验继续failed，无发布指针，旧失败保持；不能把“修正获准”当作产品PASS。证据engineering-repair-contract-product-separation-20261109.log。完整校园真实模型/C/V/发布/独立手测仍属于用户明确恢复付费后的阶段。
+
+### 批次2/3收尾：共用原子写入和结构化脱敏
+
+多文件事务的二进制/文本落盘统一复用storage/json-store的writeFileAtomic及既有Windows rename重试，不另建第二套原子IO。移出冻结输入集合只改变输入归属，不删除或覆盖当前产品文件；README当前版本保留、原冻结版本仍可读。待审候选可按摘要只读，不能当作获准基线。拒绝指纹绑定语义契约，普通无关写入不能清除它。
+
+报告、仓库概览/变更、能力工具、伙伴观察、活动记录及质量/运行证据中的JSON均先脱敏字符串再编码。原Cookie/转义换行反例确实产生损坏JSON，修复后工具JSON与活动记录完整保留后续字段；旧损坏证据不重写。开发模式的验收实现摘要同时包含main、shared、storage，避免共享脱敏或原子IO更新后复用旧PASS。
+
+凭据扫描补齐参数默认值、解构默认值、类属性、枚举及JSX属性，防止缩小误报时遗漏实际绑定。原反例保留在engineering-repair-credential-counterexample-20261109.log；随后安全与PCM反例25项通过。原PCM一次并发采样为零的失败未改写，也没有降低音量断言或改旧产品，独立复验及最终全套均通过。
+
+### 最终退出状态与证据
+
+| 批次 | 离线退出状态 | 证据范围 |
+| --- | --- | --- |
+| 1 运行时和实例 | 完成 | 兼容完整发行目录私有复用、版本/资源拒绝、快照；真实Electron动态origin、随机凭据、多窗口、刷新、退出、重开 |
+| 2 修正事务 | 完成 | 完整多文件/二进制资源、固定候选、冲突拒绝、原子写入、分段恢复；原预期和原失败不变 |
+| 3 验收与证据 | 完成 | 准入坏时可读、完整失败分布、尝试/完成分离、结构化JSON、有限范围凭据分类；批准修正不签发产品PASS |
+| 4 伙伴与生命周期 | 完成（受控Pi） | 同一会话恢复、迟到取消回执边界、事实去重、共用费用队列和原无进展守卫；不宣称OS强只读沙箱 |
+| 5 组合验证 | 离线部分完成 | 校园原冻结脚本隔离反例及适配修复；真实Electron同一用例中的多助手修复、新资源、隔离试跑、冲突、分段恢复和正式重开验证 |
+| 真实校园续跑 | 按用户指令暂停 | 正式真实模型/C/V/发布/完整独立手测待明确恢复；不把上述离线结果当作校园交付 |
+
+最终运行代码的npm run check:offline完整通过：类型、文档、renderer/main构建、19文件/189项回归，日志run-artifacts/engineering-repair-offline-verified-20261109.log。此前187项全绿及188通过/1个PCM采样失败的完整原日志均保留，不把多轮重叠相加。
+
+额外受影响路径8文件/65项通过（engineering-repair-closeout-targeted-20261109.log）；安全与PCM3文件/25项通过（engineering-repair-final-counterexamples-20261109.log）。之后仅扩展测试：真实Pi用一次read_file、两次write_file和一次propose_test_correction提交完整候选，未使用old_text/new_text审批协议；该1项通过（engineering-repair-agent-protocol-final-20261109.log）。首次受控脚本未读即写被原R-FILE-01拒绝，原失败保留，修正测试使用方式后通过，未放宽防盲覆盖。
+
+同一个真实Electron组合用例再扩展为“两处助手修复＋新资源＋隔离试跑＋工作区冲突拒绝＋先应用后恢复正式绑定＋正常多窗口/随机凭据/刷新/退出/重开”，完整通过（engineering-repair-complete-chain-20261109.log）。这是受控独立裁定及真实本机执行，不是付费模型质量证明。扩展测试后的类型检查通过（engineering-repair-final-source-types-20261109.log）。
+
+最终只读核对：真实项目仍active / generating_mvp / desktop-implement，software_release_id为空；8 rejected、1 pending；费用仍430 reported、1 unknown，pause-generation存在。原项目、冻结预期、历史拒绝及账本未改，无真实付费模型请求，无push。保护文档hash-object仍53c7abb3aef8497d8b0522b8aab806c82b2ec164。

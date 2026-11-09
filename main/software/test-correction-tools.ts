@@ -23,7 +23,7 @@ export function buildTestCorrectionTools(id:string,policy:ReturnType<typeof crea
     tool('propose_test_correction','提交当前工作版本的完整测试修正：宿主封存入口、依赖和声明资源，计算与冻结基线的差异并独立裁定。提交不批准、不签发PASS；后续工作区修改不会改变待审候选。',
       {contract_digest:{type:'string'},script:{type:'string'},working_digest:{type:'string'},reason:{type:'string',maxLength:3000}},
       ['contract_digest','script','reason'],input=>proposeTestTransaction(id,input)),
-    tool('apply_test_correction','仅应用已经独立宿主批准的精确测试修改；模型不能批准。若工作文件另被修改，先从read_test_contract恢复原字节。应用不等于通过，随后重跑保留案例。',
+    tool('apply_test_correction','仅应用已经独立宿主批准的精确测试修改；模型不能批准。工作区存在冲突编辑时拒绝覆盖；可从read_test_contract读取冻结基线或待审候选核对差异。应用不等于通过，随后重跑保留案例。',
       {proposal_id:{type:'string'}},['proposal_id'],input=>applyTestCorrection(id,input.proposal_id)),
   ]
 }

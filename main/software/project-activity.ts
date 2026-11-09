@@ -1,3 +1,4 @@
+import { serializeRedactedJson } from '../../shared/redacted-json'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
@@ -30,7 +31,7 @@ export function recordProjectActivity(id: string, kind: string, data: unknown, a
     if (project.workflow_version !== 'software-v1') return false
     const state = readProjectActivity(id)
     if (state.events.length >= 20000) throw Error('PROJECT_ACTIVITY_LIMIT')
-    const text = redactSoftwareOutput(JSON.stringify(data))
+    const text = serializeRedactedJson(data,redactSoftwareOutput)
     const safe = text.length <= 24000 ? JSON.parse(text) : { truncated: true, content_sha256: hash(data) }
     state.events.push({ seq: ++state.revision, at, kind, operation: project.lean_operation_id ?? 'initial', scope: prdScopeFingerprint(readPrdBackplane(id)), data: safe })
     const encoded = JSON.stringify({ ...state, checksum: hash(state) })

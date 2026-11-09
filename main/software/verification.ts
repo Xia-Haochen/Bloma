@@ -74,6 +74,12 @@ export async function verificationInputs(projectId: string, requestId: string, s
   const host = mainRootDir(), implementation: unknown[] = []
   if (existsSync(join(host, 'desktop/core-verification.ts'))) {
     implementation.push((await runtimeInventory(host, signal, {}, false)).digest)
+    // Development imports these host authorities directly. Their changes must
+    // invalidate receipts just as changes included in the packaged bundle do.
+    for(const name of ['shared','storage']){
+      const directory=join(dirname(host),name)
+      if(existsSync(directory))implementation.push({name,digest:(await runtimeInventory(directory,signal,{},false)).digest})
+    }
   } else {
     implementation.push(await fileDigest(fileURLToPath(import.meta.url), signal))
     implementation.push((await runtimeInventory(join(host, 'templates/tools'), signal, {}, false)).digest)

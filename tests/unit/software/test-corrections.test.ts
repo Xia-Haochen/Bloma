@@ -1,3 +1,8 @@
+import {runAgentLoop} from '../../../main/agent/loop/agent-loop'
+import {buildSoftwareAgentTools} from '../../../main/software/agent-tools'
+import {testCorrectionRejectionFeedback} from '../../../main/software/test-corrections'
+import {createProtocolFailureGuard,toolFailureKey} from '../../../main/agent/loop/work-progress'
+import {formatToolFeedback} from '../../../shared/tool-feedback'
 import {proposeTestTransaction,pendingTestCorrectionInputs,stageTestCorrectionCandidate} from '../../../main/software/test-corrections'
 import {applyApprovedNativeCorrections} from '../../../main/software/native-gui-registration'
 import {guiSuitePath} from '../../../main/desktop/gui-acceptance'
@@ -260,3 +265,82 @@ it('rejects stale working versions and replacing the registered entry',()=>{
   expect(()=>proposeTestTransaction(p.project_id,{contract_digest:before.digest,script:'acceptance.mjs',working_digest:before.digest,reason:'repair'})).toThrow('WORKING_BYTES_CHANGED')
   expect(()=>proposeTestTransaction(p.project_id,{contract_digest:before.digest,script:'different.mjs',reason:'replace'})).toThrow('PROPOSAL_INVALID')
 })
+
+it('approves a helper-only repair that exposes a product failure, retains the failure and never issues product PASS',async()=>{
+ const project=createProject({request_id:'product-failure',mode:'longterm'},{workflowVersion:'software-v1'}),id=project.project_id,root=project.root_path
+ const parsed=parseLeanBrief(JSON.stringify({action:'brief',goal:'载入记录',ui:'required',delivery:'browser',requirements:[{description:'载入记录',expected:'载入后显示current'}],project_plan:{version:1,current:'first',stages:[{id:'first',title:'载入',feature_ids:['F-001']}]}}),{projectId:id,sessionId:'s',source:'载入后显示current',previous:readPrdBackplane(id),software:true})!
+ if(parsed.action!=='brief')throw Error('fixture');parsed.brief.lean_brief!.preview='skip'
+ syncDocuments({request_id:'confirm',project_id:id,session_id:'s',checkpoint:'requirement_confirmed'},parsed.brief)
+ const brief=markPrdUserConfirmed(id)!,scope=prdScopeFingerprint(brief);updateProject(id,{ux_confirmation:{prd_fingerprint:scope,design_hash:scope,html_hash:null}})
+ const listener=createServer();await new Promise<void>(r=>listener.listen(0,'127.0.0.1',r));const port=(listener.address() as {port:number}).port;await new Promise<void>(r=>listener.close(()=>r()))
+ writeFileSync(join(root,'server.cjs'),`require('http').createServer((q,s)=>{s.setHeader('content-type','text/html');s.end('<button id="load">Load</button><p id="version">wrong product value</p>')}).listen(${port},'127.0.0.1')`)
+ writeFileSync(join(root,'LAUNCH.json'),JSON.stringify({schema_version:2,ui:'browser',command:['node','server.cjs'],url:`http://127.0.0.1:${port}`}))
+ writeFileSync(join(root,'helper.mjs'),`export const prepare=()=>{throw Error('broken test helper')}`)
+ writeFileSync(join(root,'acceptance.mjs'),"import {prepare} from './helper.mjs';\n"+original.replace("await page.click('#load');","prepare();await page.click('#load');"))
+ const first=await verifyProjectStage(id,'first','acceptance.mjs',AbortSignal.timeout(60000));expect(first.status).not.toBe('passed')
+ const baseline=readProjectStages(id).attempts[0]
+ writeFileSync(join(root,'helper.mjs'),'export const prepare=()=>{}')
+ const proposed=proposeTestTransaction(id,{contract_digest:baseline.native.digest,script:'acceptance.mjs',reason:'修复测试助手抛错；保留原业务输入和断言'})
+ const query:import('../../../main/orchestration/stages/orchestration-contracts').SDKQuery=async function*(prompt){const packet=JSON.parse(prompt)
+   expect(packet.proposed_execution).toMatchObject({product_verified:false,result:{status:'failed',failure_kind:'assertion'}})
+   yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify({verdict:'approve',reason:'助手修正保持原契约；实际断言仍揭示产品失败，不能发布',assessment:[{feature:'F-001',preserved:true,reason:'原加载行为和current断言未变'}]})}]}}
+ }
+ await reviewPendingTestCorrections({projectId:id,sessionId:'s',query,env:{},maxTokens:8192,signal:AbortSignal.timeout(60000)})
+ expect(testCorrectionView(id).proposals.find(row=>row.id===proposed.id)?.status).toBe('approved')
+ applyApprovedTestCorrections(id)
+ const result=await verifyProjectStage(id,'first','acceptance.mjs',AbortSignal.timeout(60000))
+ expect(result.status).toBe('failed');expect(readProjectStages(id).attempts[0].status).toBe(first.status)
+ expect((await import('../../../main/project/project-service')).findProject(id).software_release_id).toBeUndefined()
+},180000)
+
+it('feeds rejected semantic corrections into the existing guard despite unrelated successful writes',()=>{
+ const a=proposal();decideTestCorrection(p.project_id,a.id,{...decision(a.id),verdict:'reject'})
+ const feedback=testCorrectionRejectionFeedback(p.project_id)!,guard=createProtocolFailureGuard()
+ const call={name:'__host_after_tools_verification',turn:1,status:'error' as const,failureKey:toolFailureKey('host',formatToolFeedback(feedback,''))}
+ expect(guard([call])).toBeUndefined();expect(guard([{name:'write_file',turn:2,status:'ok'}])).toBeUndefined()
+ expect(guard([call])).toBeUndefined();expect(guard([call])).toMatchObject({count:3})
+})
+it('makes a pending complete candidate readable without treating it as an approved baseline',()=>{
+ writeFileSync(join(p.root_path,'acceptance.mjs'),original+'\n// candidate')
+ const a=proposeTestTransaction(p.project_id,{contract_digest:before.digest,script:'acceptance.mjs',reason:'prepare correction'})
+ const candidate=pendingTestCorrectionInputs(p.project_id)[0]
+ expect(readTestContractFile(p.project_id,candidate.native.digest,'acceptance.mjs').text).toContain('// candidate')
+ expect(()=>proposeTestTransaction(p.project_id,{contract_digest:candidate.native.digest,script:'acceptance.mjs',reason:'unapproved baseline'})).toThrow('NOT_REGISTERED')
+ expect(()=>applyTestCorrection(p.project_id,a.id)).toThrow('NOT_APPROVED')
+})
+
+it('removes a document from frozen inputs without deleting or overwriting the current product document',()=>{
+ const root=p.root_path,stateFile=join(home,'software-stage-checks',p.project_id,'state.json')
+ writeFileSync(join(root,'README.md'),'old product document');writeFileSync(join(root,'native-inputs.json'),JSON.stringify({files:['README.md']}))
+ before=freezeNativeGuiTests(p.project_id,root,'acceptance.mjs',['F-001'])
+ const {checksum,...state}=JSON.parse(readFileSync(stateFile,'utf8'));state.attempts[0].native=before;writeFileSync(stateFile,JSON.stringify({...state,checksum:sha(JSON.stringify(state))}))
+ writeFileSync(join(root,'README.md'),'current product document');writeFileSync(join(root,'native-inputs.json'),JSON.stringify({files:[]}))
+ const a=proposeTestTransaction(p.project_id,{contract_digest:before.digest,script:'acceptance.mjs',reason:'产品文档从当前候选读取，不再当冻结测试夹具'})
+ decideTestCorrection(p.project_id,a.id,decision(a.id));applyTestCorrection(p.project_id,a.id)
+ expect(readFileSync(join(root,'README.md'),'utf8')).toBe('current product document')
+ expect(readTestContractFile(p.project_id,before.digest,'README.md').text).toBe('old product document')
+})
+it('publishes approved binary resources through the shared atomic file writer',()=>{
+ const root=p.root_path,bytes=Buffer.from([0,255,9,42])
+ writeFileSync(join(root,'binary.fixture'),bytes);writeFileSync(join(root,'native-inputs.json'),JSON.stringify({files:['binary.fixture']}))
+ const a=proposeTestTransaction(p.project_id,{contract_digest:before.digest,script:'acceptance.mjs',reason:'补齐冻结二进制输入，不改业务案例'})
+ decideTestCorrection(p.project_id,a.id,decision(a.id));rmSync(join(root,'binary.fixture'));applyTestCorrection(p.project_id,a.id)
+ expect(readFileSync(join(root,'binary.fixture')).equals(bytes)).toBe(true)
+})
+
+it('a real Pi session submits two edited files as one complete correction without a manual patch protocol',async()=>{
+ const policy=createSoftwareCollaborationPolicy(p.project_id,p.root_path,'s'),tools=buildSoftwareAgentTools(p.project_id,'parent',policy),observed:string[]=[],outputs:string[]=[];let calls=0
+ const query:import('../../../main/orchestration/stages/orchestration-contracts').SDKQuery=async function*(){
+  calls++
+  const content:any[]=calls===1?[
+   {type:'tool_use',id:'read',name:'read_file',input:{path:'acceptance.mjs'}},
+   {type:'tool_use',id:'helper',name:'write_file',input:{path:'helper.mjs',content:'export const helper=()=>42'}},
+   {type:'tool_use',id:'entry',name:'write_file',input:{path:'acceptance.mjs',content:"import {helper} from './helper.mjs';\n"+original.replace("await page.click('#load');","helper();await page.click('#load');")}}
+  ]:calls===2?[{type:'tool_use',id:'proposal',name:'propose_test_correction',input:{contract_digest:before.digest,script:'acceptance.mjs',reason:'修复共享助手，保留案例和原断言'}}]:[{type:'text',text:'已提交完整候选，等待独立裁定。'}]
+  yield{type:'assistant',message:{role:'assistant',content}};yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
+ }
+ const result=await runAgentLoop({projectId:p.project_id,sessionId:'s',requestId:'complete-candidate',runtimeScope:'desktop-implement',system:'受控离线工程回归',task:'修复测试助手并提交完整候选，保留原断言。',tools,query,env:{},maxTokens:2048,maxTurns:5,permissionMode:'allow-all',signal:AbortSignal.timeout(60000),publish:()=>{},onToolObservation:e=>{if(e.phase==='completed'){observed.push(e.name);outputs.push(String(e.output))}}})
+ expect(result.status).toBe('completed');expect(observed).toEqual(['read_file','write_file','write_file','propose_test_correction'])
+ const candidates=pendingTestCorrectionInputs(p.project_id);expect(candidates,JSON.stringify(outputs)).toHaveLength(1);expect(candidates[0].native.files.map(f=>f.path)).toEqual(['acceptance.mjs','helper.mjs'])
+ expect(readTestContractFile(p.project_id,before.digest,'acceptance.mjs').text).toBe(original)
+},90000)

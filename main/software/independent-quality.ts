@@ -1,3 +1,4 @@
+import { serializeRedactedJson } from '../../shared/redacted-json'
 import { independentCaseOutcome } from './verification-evidence'
 import { randomUUID } from 'node:crypto'
 import { independentDesignVersion, readIndependentDesign } from './independent-design'
@@ -76,7 +77,7 @@ export async function recordIndependentFindings(projectId: string, candidate: So
     const outcome = independentCaseOutcome(observed)
     const baseline = finding.checks.some(c => c.outcome === 'failed')
     finding.checks.push({ at: new Date().toISOString(), identity, case_name: observed.id, rules: result.design_version, outcome, report: result.report_path, candidate: candidate.id,
-      observation: redactSoftwareOutput(JSON.stringify({ case: observed, overall_passed: canClose, scope: 'frozen_independent_business_case' })) })
+      observation: serializeRedactedJson({ case: observed, overall_passed: canClose, scope: 'frozen_independent_business_case' },redactSoftwareOutput) })
     if (outcome === 'failed') finding.disposition = 'confirmed'
     else if (outcome === 'passed' && baseline && canClose) finding.disposition = 'closed'
     else if (!baseline) finding.disposition = observed.kind === 'semantic' ? 'disputed' : outcome === 'passed' ? 'not_reproduced' : 'suspected'

@@ -1,3 +1,4 @@
+import {serializeRedactedJson} from '../../shared/redacted-json'
 import {createHash} from 'node:crypto'
 import {startDelegation,continueDelegation,findDelegation} from '../agent/delegation/agent-collaboration'
 import type {AgentLoopTurnInfo,ToolContext,ToolObservation} from '../agent/loop/agent-loop'
@@ -7,7 +8,7 @@ interface Attachment {delegation_id:string;child_session_id:string}
 interface Services {facts?:()=>unknown;source?:()=>string|undefined;history?:(ctx:ToolContext)=>unknown;recover?:(ctx:ToolContext)=>Attachment|undefined;attached?:(ctx:ToolContext,child:Attachment)=>void}
 interface Observation {seq:number;at:string;request_id:string;kind:'resume'|'user_request'|'statement'|'tool';turn?:number;source?:string;data:unknown}
 interface Update {session_id:string;turn:number;text:string;truncated:boolean;at:string;based_on?:number;facts?:()=>unknown}
-const bounded=(value:unknown,limit:number)=>{const text=redactSoftwareOutput(typeof value==='string'?value:JSON.stringify(value)??'null');return text.length<=limit?{text,truncated:false}:{text:text.slice(0,Math.floor(limit/2))+'\n[中段省略]\n'+text.slice(-Math.floor(limit/2)),truncated:true,characters:text.length}}
+const bounded=(value:unknown,limit:number)=>{const text=typeof value==='string'?redactSoftwareOutput(value):serializeRedactedJson(value,redactSoftwareOutput);return text.length<=limit?{text,truncated:false}:{text:text.slice(0,Math.floor(limit/2))+'\n[中段省略]\n'+text.slice(-Math.floor(limit/2)),truncated:true,characters:text.length}}
 
 /** One persistent, tool-capable Agent watches production. New observations
  * update its context while running or resume the SAME session when idle.
