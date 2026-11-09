@@ -1,3 +1,4 @@
+import {DEFAULT_STREAM_PROGRESS_TIMEOUT_MS} from '../platform/upstream/providers/sse-reader'
 import { serializeModelQueries } from '../agent/loop/query-queue'
 import { createEngineeringPartner } from '../software/engineering-partner'
 import {recoverEngineeringMonitor,recordEngineeringMonitor,recentProductionObservations} from '../software/engineering-monitor-record'
@@ -9,7 +10,7 @@ import {ModelRequestRefusal} from '../platform/llm/model-request-refusal'
 import {applyApprovedNativeCorrections} from '../software/native-gui-registration'
 import {reviewPendingTestCorrections} from '../software/test-correction-review'
 import {pendingTestCorrection,testCorrectionFacts,testCorrectionRejectionFeedback} from '../software/test-corrections'
-import {executionWindowFacts} from '../software/execution-limits'
+import {executionWindowFacts,currentFundedExecutionWindow,optionalExecutionAdmission} from '../software/execution-limits'
 import { productDesignPolicy } from '../project/product-design-policy'
 import { beginProjectAssignment } from '../software/task-assignment'
 import { readFileSync, existsSync } from 'node:fs'
@@ -53,7 +54,7 @@ import { verifySoftwareCandidate, recentSoftwareVerification } from '../software
 import { verificationResponse, verificationToolFeedback } from '../software/verification-report'
 import { importedProjectContext } from '../software/import-project'
 import { saveSoftwareRunState, readSoftwareRunState, recordSoftwareRepair, type SoftwareRunStatus } from '../software/run-state'
-import { monetaryStopMessage, monetaryInputBlocked } from '../platform/llm/monetary-budget'
+import { quoteMonetaryWork, monetaryStopMessage, monetaryInputBlocked } from '../platform/llm/monetary-budget'
 import { trialFeedbackText } from '../software/trial'
 import { prepareIndependentDesign } from '../software/independent-design'
 import { currentIndependentSemantics, recordIndependentDisputes } from '../software/independent-quality'
@@ -63,7 +64,7 @@ import { handleLongtermMessage } from '../software/longterm-message'
 import { workflowRetirementReason } from './workflow-retirement'
 import { renderSoftwareWorkingContext } from '../software/working-context'
 import { createQualityReview } from '../software/quality-review'
-import { readQualityLedger } from '../software/quality-ledger'
+import { readQualityLedger, qualityRulesVersion } from '../software/quality-ledger'
 
 // Dissatisfaction is a repair request, not cancellation of the new workflow.
 const isStop = (text: string) => text.split(/[，。；！？,;!?\n]+/).some(part => /^(?:(?:请|先|现在|马上|暂时)\s*)*(?:停止|取消|暂停|停下|先停|别推进|暂缓|先别做|不要开工|stop|cancel|pause)(?:(?:当前|本次|这个)?(?:任务|流程|运行|执行|制作)|一下|吧|了|\s)*$/i.test(part.trim()))
@@ -175,7 +176,19 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     recover:recoverEngineeringMonitor,attached:recordEngineeringMonitor,history:recentProductionObservations,
   })
   optionalSession=session=>partner.isMonitor(session)
-  admitQueued=options=>{if(partner.isMonitor(options.sessionId)&&!partner.isObserving())throw new ModelRequestRefusal('ENGINEERING_MONITOR_IDLE')}
+  const admitPartner=()=>{
+    if(!partner.isObserving())throw new ModelRequestRefusal('ENGINEERING_MONITOR_IDLE')
+    const ledger=readQualityLedger(input.projectId)
+    const bindingKinds=new Set(ledger.findings.filter(f=>['suspected','confirmed'].includes(f.disposition)&&['high','critical'].includes(f.severity)&&!f.retest).map(f=>f.review_kind??'code'))
+    const needsCoverage=(brief.lean_brief?.ui==='required'||Boolean(brief.requirements_model?.workflows?.length))&&!ledger.reviews.some(r=>r.purpose==='coverage'&&r.status==='complete'&&r.rules===qualityRulesVersion(input.projectId))
+    const mandatory=1+(brief.lean_brief?.ui==='required'?1:0)+bindingKinds.size+(needsCoverage?1:0)
+    const quote=quoteMonetaryWork(input.env.ANTHROPIC_BASE_URL,input.env.ANTHROPIC_MODEL,input.maxTokens)
+    const window=currentFundedExecutionWindow()
+    const remaining=quote?Math.min(quote.remaining_micro_rmb,window?Math.floor(window.remainingRmb*1e6):Infinity):undefined
+    const decision=optionalExecutionAdmission({remainingMicro:remaining,requestMicro:quote?.request_micro_rmb,mandatoryRequests:mandatory,deadlineAt:window?.deadlineAt,drainMs:DEFAULT_STREAM_PROGRESS_TIMEOUT_MS})
+    if(!decision.allowed){partner.suspend();recordEvaluationEvent(input.projectId,'optional_parked',decision);throw new ModelRequestRefusal(decision.reason!)}
+  }
+  admitQueued=options=>{if(partner.isMonitor(options.sessionId))admitPartner()}
   const quality = createQualityReview(input.projectId, input.sessionId, collaboration, input.env, ()=>partner.latest())
   const observeRuntime = (observation: import('../agent/loop/runtime-observation').RuntimeObservation) => {
     const review = readQualityLedger(input.projectId).reviews.find(r => r.child === observation.session_id)
@@ -249,7 +262,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   const guardedQuery: SDKQuery = async function* (prompt, options) {
     if(partner.isMonitor(options.sessionId)&&!partner.isObserving())throw new ModelRequestRefusal('ENGINEERING_MONITOR_IDLE: 制作已交给宿主收尾，保留调查，不再新增监视请求。')
     try { yield* budgetedQuery(prompt, { ...options, requestGuard: request => {
-      if(partner.isMonitor(options.sessionId)&&!partner.isObserving())throw new ModelRequestRefusal('ENGINEERING_MONITOR_IDLE: 制作已交给宿主收尾。')
+      if(partner.isMonitor(options.sessionId))admitPartner()
       options.requestGuard?.(request)
       try {
         const body = JSON.parse(request.body)

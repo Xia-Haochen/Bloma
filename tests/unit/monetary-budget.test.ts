@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
-import { fetchWithMonetaryBudget, reserveModelRequest, reserveModelRequestWhenAvailable, readMonetaryBudget, MonetaryBudgetError, monetaryStopMessage, fitMonetaryRequest, monetaryInputBlocked } from '../../main/platform/llm/monetary-budget'
+import { quoteMonetaryWork, fetchWithMonetaryBudget, reserveModelRequest, reserveModelRequestWhenAvailable, readMonetaryBudget, MonetaryBudgetError, monetaryStopMessage, fitMonetaryRequest, monetaryInputBlocked } from '../../main/platform/llm/monetary-budget'
 import { streamSSE } from '../../main/platform/upstream/providers/sse-reader'
 import { ANTHROPIC_SSE_ADAPTER } from '../../main/platform/upstream/providers/anthropic-sse-adapter'
 import { activateMonetaryPolicy, activeMonetaryPolicyPath } from '../../main/platform/llm/monetary-epoch'
@@ -267,4 +267,14 @@ describe('shared monetary ceiling', () => {
       prompt_tokens: 100, completion_tokens: 20, prompt_tokens_details: { cached_tokens: 50 } } }))))
     expect(state(path).entries.map((row: { charged_micro_rmb: number }) => row.charged_micro_rmb)).toEqual([360, 262])
   })
+})
+
+it('quotes optional planning from the same complete-input reservation without writing or releasing unknown',()=>{
+ const path=fixture(15),policy=JSON.parse(readFileSync(path,'utf8'));policy.models[0].context_tokens=1048576;writeFileSync(path,JSON.stringify(policy))
+ const reservation=reserveModelRequest(url,body,path)!;reservation.settle(undefined,false)
+ const before=readFileSync(path+'.state.json')
+ expect(quoteMonetaryWork(url,'M1',2048,path)?.request_micro_rmb).toBe(2113536)
+ expect(quoteMonetaryWork(url,'M1',2048,path)?.remaining_micro_rmb).toBe(15000000-2105152)
+ expect(readFileSync(path+'.state.json').equals(before)).toBe(true)
+ expect(state(path).entries[0].status).toBe('unknown')
 })

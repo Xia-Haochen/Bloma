@@ -1,3 +1,4 @@
+export const DEFAULT_STREAM_PROGRESS_TIMEOUT_MS = 120_000
 /**
  * 共享 SSE 流式读取器（照抄 Proma 上游 packages/core/src/providers/sse-reader.ts
  * @ bf3e98c 的流式子集；裁剪 fetchTitle——Bloma 标题生成不走本层）。
@@ -233,7 +234,7 @@ async function runStreamAttempt(options: StreamSSEOptions): Promise<StreamSSERes
 }
 
 async function runReservedStreamAttempt(options: StreamSSEOptions): Promise<StreamSSEResult> {
-  const { request, adapter, onEvent, signal, fetchFn = fetch, timeoutMs = 30_000, streamIdleTimeoutMs = 120_000, streamProgressTimeoutMs = 120_000 } = options
+  const { request, adapter, onEvent, signal, fetchFn = fetch, timeoutMs = 30_000, streamIdleTimeoutMs = 120_000, streamProgressTimeoutMs = DEFAULT_STREAM_PROGRESS_TIMEOUT_MS } = options
 
   // 真正的"首字节超时"：仅在等待 HTTP 响应期间计时，收到响应后立即清除。
   const timeoutController = new AbortController()

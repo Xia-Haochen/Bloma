@@ -51,3 +51,13 @@ export function softwareExecutionLimits(projectId: string, operation: string) {
   const value=JSON.parse(readFileSync(file,'utf8')) as ExecutionLimits;validate(value)
   return value.operation===operation?{requests:value.requests,output:value.output}:undefined
 }
+
+/** Scheduling protection is not an invoice or another reservation ledger. */
+export function optionalExecutionAdmission(input:{remainingMicro?:number;requestMicro?:number;mandatoryRequests:number;deadlineAt?:number;drainMs:number;now?:number}){
+ if(!Number.isSafeInteger(input.mandatoryRequests)||input.mandatoryRequests<0||!Number.isFinite(input.drainMs)||input.drainMs<0)throw Error('OPTIONAL_PROTECTION_INVALID')
+ if([input.remainingMicro,input.requestMicro].some(v=>v!==undefined&&(!Number.isSafeInteger(v)||v<0)))throw Error('OPTIONAL_PROTECTION_INVALID')
+ const protectedMicro=input.requestMicro===undefined?undefined:input.requestMicro*input.mandatoryRequests
+ if(input.deadlineAt!==undefined&&input.deadlineAt-(input.now??Date.now())<=input.drainMs*(input.mandatoryRequests+1))return{allowed:false,reason:'OPTIONAL_DEADLINE_PROTECTED',protected_micro_rmb:protectedMicro}
+ if(input.remainingMicro!==undefined&&input.requestMicro!==undefined&&input.remainingMicro<input.requestMicro+protectedMicro!)return{allowed:false,reason:'OPTIONAL_CLOSEOUT_BUDGET_PROTECTED',protected_micro_rmb:protectedMicro}
+ return{allowed:true,protected_micro_rmb:protectedMicro}
+}

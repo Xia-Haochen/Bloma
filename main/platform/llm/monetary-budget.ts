@@ -35,6 +35,7 @@ export function monetaryStopMessage(error: unknown): string | undefined {
 const fail = (code: string): never => { throw new MonetaryBudgetError(code) }
 const integer = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0
 const micro = (tokens: number, rmbPerMillion: number) => Math.ceil(tokens * rmbPerMillion)
+const requestReserveMicro=(rate:Rate,output:number)=>micro(rate.context_tokens,rate.input_rmb_per_million)+micro(output,rate.output_rmb_per_million)
 const reportedCharge=(state:State,host:string,model:string)=>state.entries.filter(e=>e.host===host&&e.model===model&&e.status==='reported').reduce((sum,e)=>sum+e.charged_micro_rmb,0)
   -(state.reported_pricing_checkpoints??[]).filter(c=>c.host===host&&c.model===model).reduce((sum,c)=>sum+c.original_micro_rmb-c.settled_micro_rmb,0)
 
@@ -167,7 +168,7 @@ export function reserveModelRequest(url: string, body: string, policyPath = proc
   if (matches.length !== 1) fail('MONETARY_MODEL_NOT_ALLOWED')
   const rate = matches[0]
   if (!integer(request.max_tokens) || !request.max_tokens || request.max_tokens > rate.context_tokens) fail('MONETARY_OUTPUT_LIMIT_REQUIRED')
-  const reserved = micro(rate.context_tokens, rate.input_rmb_per_million) + micro(request.max_tokens!, rate.output_rmb_per_million)
+  const reserved = requestReserveMicro(rate,request.max_tokens!)
   const statePath = `${policyPath}.state.json`, lockPath = `${policyPath}.lock`
   const mutate = (fn: (state: State) => void) => {
     let fd: number
@@ -285,4 +286,15 @@ export async function fetchWithMonetaryBudget(url: string, init: RequestInit, fe
     }
     return response
   } finally { reservation?.settle(usage, completed) }
+}
+
+/** Conservative scheduling quote only; physical admission remains atomic above. */
+export function quoteMonetaryWork(baseUrl:string|undefined,model:string|undefined,output:number,policyPath=process.env.BLOMA_MONETARY_POLICY){
+ if(!policyPath||!baseUrl||!model)return
+ monetaryInputBlocked(baseUrl,model,policyPath) // validates policy/state without mutation
+ const policy=JSON.parse(readFileSync(policyPath,'utf8').replace(/^\uFEFF/,'')) as Policy
+ const host=new URL(baseUrl).host,rate=policy.models.find(r=>r.host===host&&r.model===model)!
+ if(!integer(output)||!output||output>rate.context_tokens)fail('MONETARY_OUTPUT_LIMIT_REQUIRED')
+ const spent=existsSync(policyPath+'.state.json')?accountedSpent(JSON.parse(readFileSync(policyPath+'.state.json','utf8')),host,model):0
+ return{remaining_micro_rmb:Math.max(0,Math.floor(rate.cap_rmb*1e6)-spent),request_micro_rmb:requestReserveMicro(rate,output)}
 }
