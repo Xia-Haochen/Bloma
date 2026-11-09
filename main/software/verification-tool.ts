@@ -12,7 +12,7 @@ import { readPrdBackplane } from '../project/prd-store'
 import { assertSoftwareDelivery } from './launch-contract'
 import { verificationResponse,verificationToolFeedback } from './verification-report'
 
-export function buildSoftwareVerifyTool(projectId: string, policy: ReturnType<typeof createSoftwareCollaborationPolicy>, previewChanged?: (url?: string) => void): AgentLoopTool {
+export function buildSoftwareVerifyTool(projectId: string, policy: ReturnType<typeof createSoftwareCollaborationPolicy>, previewChanged?: (url?: string) => void, beforeVerify?:(ctx:import('../agent/loop/agent-loop').ToolContext)=>Promise<void>): AgentLoopTool {
   return { name: 'verify_app', description: '运行当前程序的正式检查。首次GUI验收提供script，导出async({test,page,expect,assert,dataDir,evidenceDir,phase})，案例名包含F编号；restart=true执行initial和reopened两次检查。之后无参数复验。业务输入和断言冻结，允许修复定位；协议细节按需读取read_production_context(topic=verification-gui)。按failure修复，通过后结束制作，宿主负责收尾。',
     input_schema: { type: 'object', additionalProperties: false, properties: { force: { type: 'boolean', description: '只在确需强制重新实测时为true。' },
       script:{type:'string',description:'项目内应用测试，自动冻结并实际验收，无需动作表。使用参数提供的test(node:test API)、expect/assert和page；业务测试名包含单个需求F编号。'},restart:{type:'boolean',description:'按initial/reopened两次执行，实际关闭并重开应用；reopened分支也会自动识别。'} } },
@@ -31,6 +31,7 @@ export function buildSoftwareVerifyTool(projectId: string, policy: ReturnType<ty
         applyApprovedNativeCorrections(projectId,ctx.signal)
         if(input.script!==undefined){if(typeof input.script!=='string'||input.restart!==undefined&&typeof input.restart!=='boolean')throw Error('GUI_NATIVE_INPUT_INVALID');registerNativeGuiTests(projectId,input.script,input.restart===true)}
         await closeDebugSessions(projectId, ctx.sessionId); await stopSoftwareSession(projectId, ctx.sessionId); previewChanged?.()
+        await beforeVerify?.(ctx)
         attempted=true
         const result = await verifySoftwareCandidate(projectId, ctx.requestId, ctx.signal, input.force === true)
         return { output: serializeRedactedJson(verificationResponse(projectId,result),redactSoftwareOutput),

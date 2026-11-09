@@ -450,3 +450,11 @@ it('binding review plus host execution settles a new suspicion but never replace
  await review([])
  expect(await quality.gate()).toBeUndefined()
 },120000)
+
+it('early coverage may inspect an unready slice but cannot grant candidate qualification',async()=>{
+ writeFileSync(join(project.root_path,'unsafe.js'),'document.body.innerHTML = location.hash')
+ await review([],undefined,undefined,undefined,'coverage')
+ expect(readQualityLedger(project.project_id).reviews.at(-1)?.purpose).toBe('coverage')
+ await expect(quality.begin(ctx())).rejects.toThrow('QUALITY_LOCAL_CHECK_REQUIRED')
+ expect(await quality.gate()).toContain('REVIEW_REQUIRED')
+},60000)

@@ -133,6 +133,19 @@ export function createQualityReview(projectId: string, parent: string, policy: R
           : `审阅候选 ${id}。先用read_quality_review取得宿主绑定的确认需求和材料。先看宿主review_focus的同目标/环境前次审阅及文件差异，再批量读取相关实现，不重复读取同一范围；测试只在核对预期或疑点时读取，不逐页遍历全部测试和依赖。保留回合用于结构化提交。重点检查对象身份、异步状态、持久化、接口和遗漏分支；不继承制作方成功结论。用submit_quality_findings提交结构化疑点（没有发现也提交空数组），不自报PASS、不新增需求、不运行或修改文件。` })
     } finally { pending = undefined }
   })
+  const ensureCoverage=async(ctx:ToolContext)=>{
+    const brief=readPrdBackplane(projectId)
+    if(brief.lean_brief?.ui!=='required'&&!brief.requirements_model?.workflows?.length)return
+    if(!registeredQualityCases(projectId).length)throw Error('QUALITY_COVERAGE_MATERIALS_REQUIRED')
+    const current=await identity(projectId,ctx.signal),rules=rulesVersion(projectId)
+    if(readQualityLedger(projectId).reviews.some(r=>r.purpose==='coverage'&&r.status==='complete'&&r.identity.target===current.target&&r.rules===rules))return
+    const child=await begin(ctx,'code',undefined,'coverage')
+    const run=findDelegation(parent,child.delegation_id)
+    if(run?.completion)await withAbort(run.completion,ctx.signal)
+    const review=readQualityLedger(projectId).reviews.find(r=>r.delegation===child.delegation_id)
+    if(review?.status!=='complete')throw new ModelRequestRefusal('QUALITY_COVERAGE_REVIEW_INCOMPLETE')
+    // Coverage discovers work; it never replaces execution or candidate C/V.
+  }
   const system = (child: string) => children.has(child)
     ? readQualityLedger(projectId).reviews.find(r => r.id === children.get(child))?.kind === 'visual'
       ? '你是独立视觉/交互审阅V。只看宿主授权的当前候选真实图片、确认设计、同次DOM/操作事实；不继承制作方或C的结论，不读实现。先read_quality_review和view_quality_image；实际核对图片后用submit_quality_findings提交具体可见观察及疑点，不能用OCR/文件名/DOM替代看图，不能自报PASS或关闭问题。没有明确的业务预期保留争议；只读，不运行命令、不改文件。'
@@ -349,7 +362,7 @@ export function createQualityReview(projectId: string, parent: string, policy: R
     if(calls.some(c=>c.status!=='ok'||c.pending)||!calls.some(c=>c.name==='submit_quality_findings'))return
     if(readQualityLedger(projectId).reviews.some(r=>r.child===child&&r.status==='complete'))return{complete:true}
   }
-  return { prepare, system, gate, begin, childAfterTools, acceptedHandoff:(delegation:string,child:string)=>readQualityLedger(projectId).reviews.some(r=>r.delegation===delegation&&r.child===child&&r.status==='complete'), completionAction: async (signal?: AbortSignal) => { const reason = await deliveryQualityBlock(projectId,signal,activeRoute), current = await identity(projectId, signal); const ledger=applicableQualityLedger(projectId);return {...qualityCloseout(ledger,current,reason,rulesVersion(projectId),independentDesignVersion(projectId),currentObservation()?.digest),feedback:JSON.stringify(qualityWorkQueue(ledger,current,reason,rulesVersion(projectId),independentDesignVersion(projectId)))} }, parentTools, reviewTools, wrapQuery, isQualityChild: (child: string) => children.has(child),
+  return { prepare, system, gate, begin, ensureCoverage, childAfterTools, acceptedHandoff:(delegation:string,child:string)=>readQualityLedger(projectId).reviews.some(r=>r.delegation===delegation&&r.child===child&&r.status==='complete'), completionAction: async (signal?: AbortSignal) => { const reason = await deliveryQualityBlock(projectId,signal,activeRoute), current = await identity(projectId, signal); const ledger=applicableQualityLedger(projectId);return {...qualityCloseout(ledger,current,reason,rulesVersion(projectId),independentDesignVersion(projectId),currentObservation()?.digest),feedback:JSON.stringify(qualityWorkQueue(ledger,current,reason,rulesVersion(projectId),independentDesignVersion(projectId)))} }, parentTools, reviewTools, wrapQuery, isQualityChild: (child: string) => children.has(child),
     // The role-only tool builder cannot know the child ID until execute. Protocol
     // tools authenticate the actual session, including against parent forgeries.
     childProtocol }

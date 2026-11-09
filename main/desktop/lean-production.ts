@@ -264,7 +264,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   }
   const query=quality.wrapQuery(guardedQuery,async signal=>{await settleCorrections(signal)})
   const baseTools = buildSoftwareAgentTools(input.projectId, 'parent', collaboration,
-    url => emit('software_preview_changed', { preview_url: url ?? null }), () => emit('software_suggestions_changed', {}),()=>emit('longterm_changed',{summary:findProject(input.projectId).longterm_summary}))
+    url => emit('software_preview_changed', { preview_url: url ?? null }), () => emit('software_suggestions_changed', {}),()=>emit('longterm_changed',{summary:findProject(input.projectId).longterm_summary}),undefined,ctx=>quality.ensureCoverage(ctx))
   let scopePending = false
   const tools = productionAgentTools(baseTools, [
     ...quality.parentTools,
