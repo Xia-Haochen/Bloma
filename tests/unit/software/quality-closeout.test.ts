@@ -86,3 +86,17 @@ it('a later interrupted review prevents an older completion from directing the m
  const facts=ledger([finding()]);facts.reviews.push({id:'old',kind:'code',identity,status:'complete',at:''},{id:'stopped',kind:'code',identity,status:'interrupted',at:''})
  expect(qualityCloseout(facts,identity,{code:'investigation',message:'仍需审阅'},'rules').next_tool).toBe('start_quality_review')
 })
+
+it('never treats legacy prose as runtime evidence and exposes the missing case obligation',()=>{
+ const f=finding({reviewed:{identity,review:'r',evidence:'code changed'}})
+ const facts=ledger([f]);facts.reviews.push({id:'r',kind:'code',purpose:'binding',identity,status:'complete',at:''})
+ const queue=qualityWorkQueue(facts,identity,{code:'investigation',message:'missing runtime'},'rules')
+ expect(queue.problems[0].investigation).toMatchObject({finding_id:'f',binding:null,missing:'independently_confirmed_case',steps:f.reproduction})
+ expect(qualityCloseout(facts,identity,undefined,'rules').required_investigation).toEqual(['f'])
+})
+it('keeps partial reviews out of candidate qualification and schedules an accepted binding for execution',()=>{
+ const f=finding({retest:{identity,review:'binding',case_name:'target',rules:'rules',evidence:'independently checked trigger'}})
+ const facts=ledger([f]);facts.reviews.push({id:'binding',kind:'code',purpose:'binding',identity,status:'complete',at:''})
+ expect(qualityCloseout(facts,identity,{code:'investigation',message:'execute'},'rules')).toMatchObject({next_tool:'verify_app',required_investigation:['f']})
+ expect(qualityWorkQueue(facts,identity,undefined,'rules').problems[0].investigation.binding).toEqual({case_name:'target',rules:'rules'})
+})

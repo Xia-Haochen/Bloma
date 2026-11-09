@@ -369,10 +369,11 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
       if(action.halt)throw Error(gap)
       if(action.next_tool==='apply_test_correction'){applyApprovedNativeCorrections(input.projectId,ctx.signal);const checked=await verifySoftwareCandidate(input.projectId,input.requestId,ctx.signal);if(checked.status!=='passed')return JSON.stringify(verificationResponse(input.projectId,checked));continue}
       if(!['start_quality_review','start_visual_review'].includes(action.next_tool))return gap?action.feedback:undefined
-      if(attemptedReviews.has(action.next_tool))return action.feedback
-      attemptedReviews.add(action.next_tool)
+      const reviewKey=action.purpose+':'+action.next_tool
+      if(attemptedReviews.has(reviewKey))return action.feedback
+      attemptedReviews.add(reviewKey)
       const visual = action.next_tool==='start_visual_review'
-      await quality.begin(ctx, visual ? 'visual' : 'code')
+      await quality.begin(ctx, visual ? 'visual' : 'code',undefined,action.purpose)
       const summary = await waitForProductionChildren(ctx)
       const completedReview=readQualityLedger(input.projectId).reviews.filter(r=>(r.kind??'code')===(visual?'visual':'code')).at(-1)
       if(completedReview?.status!=='complete'){const interrupted=await quality.completionAction(ctx.signal);throw new ModelRequestRefusal(interrupted.halt?interrupted.gate!:'QUALITY_REVIEW_INTERRUPTED: 宿主审阅未完成，已保留现场，未追加制作请求。'+(summary??''))}
@@ -380,7 +381,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
       const checked=await verifySoftwareCandidate(input.projectId,input.requestId,ctx.signal)
       if(!locallyVerifiedSoftware(checked))return 'QUALITY_CLOSEOUT_CHECK_REQUIRED: '+JSON.stringify(verificationResponse(input.projectId,checked))
       const after = await quality.completionAction(ctx.signal)
-      if (after.next_tool===action.next_tool && after.gate) {
+      if (after.next_tool===action.next_tool && after.purpose===action.purpose && after.gate) {
         return after.feedback
       }
       if (!after.gate && after.next_tool === 'verify_app') return undefined

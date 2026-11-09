@@ -15,11 +15,12 @@ import type { PastedImageRef } from '../../shared/types'
 import type { CollaborationSelection } from './collaboration-selection'
 
 export type Identity = { source: string; target: string; environment: string }
+export type ReviewPurpose = 'candidate' | 'binding' | 'coverage'
 export type ReviewKind = 'code' | 'visual'
-export interface Review { id: string; kind?: ReviewKind; identity: Identity; status: 'pending' | 'submitted' | 'complete' | 'interrupted'; child?: string; delegation?: string; at: string
+export interface Review { purpose?: ReviewPurpose; rules?: string; id: string; kind?: ReviewKind; identity: Identity; status: 'pending' | 'submitted' | 'complete' | 'interrupted'; child?: string; delegation?: string; at: string
   engineering?: import('./engineering-design').EngineeringReview
   observation?: {digest:string;image_hash?:string;ui:unknown;steps:unknown[];logs:unknown[]}
-  resolutions?: Array<{finding_id:string;evidence:string;case_name?:string}>
+  resolutions?: Array<{finding_id:string;evidence:string;case_name?:string;basis?:'static_misread'|'not_applicable'}>
   run_id?: string; failure_code?: string
   source_manifest?: import('./quality-review-context').ReviewSourceManifest
   intent_observations?: import('./intent-review').IntentObservation[]; visual?: VisualMaterial; image?: PastedImageRef; visual_delivery?: { at: string; image_hash: string; request_hash: string }; visual_observations?: unknown[]
@@ -29,7 +30,8 @@ export interface QualityFinding {
   review_kind?: ReviewKind; visual_material_hash?: string
   independent?: { design_version: string; design_digest: string; case_id: string }
   retest?: { identity: Identity; review: string; evidence: string; case_name: string; rules: string }
-  reviewed?: { identity: Identity; review: string; evidence: string }
+  requires_execution?: boolean
+  reviewed?: { identity: Identity; review: string; evidence: string; basis?: 'static_misread'|'not_applicable' }
   challenge?: { at: string; reason: string; evidence: string; source: 'implementer_claim' }
   severity: 'critical' | 'high' | 'medium' | 'low'; location: string; trigger: string; evidence: string; reproduction: string; unknowns: string
   disposition: 'suspected' | 'disputed' | 'suggestion' | 'not_reproduced' | 'confirmed' | 'closed' | 'superseded'
@@ -84,6 +86,17 @@ export function qualityFailureBaseline(finding: QualityFinding) {
 }
 
 export function completedQualityReview(ledger:Ledger,kind:ReviewKind,current:Identity){
-  const latest=ledger.reviews.filter(r=>(r.kind??'code')===kind).at(-1)
+  const latest=ledger.reviews.filter(r=>(r.kind??'code')===kind&&(r.purpose??'candidate')==='candidate').at(-1)
   return latest?.status==='complete'&&sameIdentity(latest.identity,current)?latest:undefined
+}
+
+/** Read-only projection of frozen contracts; no duplicate assertions are stored. */
+export function registeredQualityCases(projectId:string):Array<{name:string;requirements:string[];file:string}> {
+  const rows:Array<{name:string;requirements:string[];file:string}>=[]
+  for(const file of [guiSuitePath(projectId),cliSuitePath(projectId)]){
+    if(!existsSync(file))continue
+    const suite=JSON.parse(readFileSync(file,'utf8'))
+    for(const c of suite.native_tests?.cases??suite.cases??[]) rows.push({name:c.name,requirements:c.covers??[c.feature],file})
+  }
+  return rows
 }

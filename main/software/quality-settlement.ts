@@ -1,7 +1,7 @@
 import { serializeRedactedJson } from '../../shared/redacted-json'
 import { redactSoftwareOutput } from './process-manager'
 import { applicableQualityLedger, qualityFailureBaseline, qualityIdentity, qualityRulesVersion, readQualityLedger, saveQualityLedger, sameIdentity } from './quality-ledger'
-import { observedQualityFinding, sameQualityScope } from './quality-closeout'
+import { observedQualityFinding, findingCaseBinding } from './quality-closeout'
 import type { SoftwareVerification } from './verification'
 
 /** Called only by the verifier after validating its execution inputs. Reuse the
@@ -16,12 +16,12 @@ export async function settleObservedQuality(projectId: string, result: SoftwareV
   let changed = false
   for (const finding of ledger.findings) {
     if (!applicable.has(finding.id) || finding.independent || ['suggestion','disputed','superseded'].includes(finding.disposition)) continue
-    const baseline = qualityFailureBaseline(finding), binding = finding.retest && sameQualityScope(finding.retest.identity,current) ? finding.retest : baseline ?? finding.checks.at(-1)
-    if (!binding || binding.rules !== rules || !baseline&&!sameQualityScope(binding.identity, current)) continue
+    const baseline = qualityFailureBaseline(finding), binding = findingCaseBinding(finding,current,rules)
+    if (!binding || binding.rules !== rules) continue
     const outcome = observedQualityFinding(result, finding, binding.case_name)
     if (outcome === 'unverified' || outcome === 'passed' && result.status !== 'passed') continue
     const last = finding.checks.at(-1)
-    if (last?.candidate === result.candidate.id && last.outcome === outcome && sameIdentity(last.identity, current)) continue
+    if (last?.grounded && last.candidate === result.candidate.id && last.outcome === outcome && sameIdentity(last.identity, current)) continue
     finding.checks.push({ grounded:Boolean(finding.retest&&binding===finding.retest || baseline?.grounded), at: new Date().toISOString(), identity: current, rules, case_name: binding.case_name,
       outcome, candidate: result.candidate.id, report: result.report_path,
       observation: serializeRedactedJson({ source: 'host_verification', status: result.status, case_name: binding.case_name, outcome,

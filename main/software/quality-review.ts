@@ -35,7 +35,7 @@ import { independentDesignVersion } from './independent-design'
 import { challengeIndependentCase } from './independent-quality'
 import { selectQualityCollaboration } from './collaboration-selection'
 
-import { qualityFailureBaseline, applicableQualityLedger, qualityRulesVersion as rulesVersion, qualityHash as hash, sameIdentity as same, qualityIdentity as identity, readQualityLedger, saveQualityLedger, type Review, type ReviewKind, type Ledger, type QualityFinding } from './quality-ledger'
+import { registeredQualityCases, qualityFailureBaseline, applicableQualityLedger, qualityRulesVersion as rulesVersion, qualityHash as hash, sameIdentity as same, qualityIdentity as identity, readQualityLedger, saveQualityLedger, type Review, type ReviewKind, type ReviewPurpose, type Ledger, type QualityFinding } from './quality-ledger'
 export { qualityLedgerPath, readQualityLedger } from './quality-ledger'
 export type { QualityFinding } from './quality-ledger'
 
@@ -97,16 +97,16 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       if (stored.status !== 'complete') { const ended = findDelegation(parent, input.delegationId); stored.status = 'interrupted'; stored.failure_code = ended?.error?.match(/\b[A-Z][A-Z_]{4,}\b/)?.[0] ?? 'loop:' + (ended?.loopStatus ?? 'interrupted'); save(ledger) }
     }, completionNote: () => '\n结构化审阅意见按实际提交记录保管；子任务完成不代表缺陷已关闭。' }
   }
-  const begin = async (ctx: ToolContext, kind: ReviewKind = 'code', debugId?: string) => exclusive(async () => {
+  const begin = async (ctx: ToolContext, kind: ReviewKind = 'code', debugId?: string, purpose:ReviewPurpose='candidate') => exclusive(async () => {
     assertParent(ctx)
     // Reject known local delivery blockers before paying for C/V. This is the
     // existing delivery scan, not a second policy or a substitute review PASS.
     const security = defaultQuickSecurityGate(projectId)
-    if (!security || !security.passed || security.blocking) throw Error('QUALITY_LOCAL_CHECK_REQUIRED: 先处理本机静态检查，再审阅稳定候选。' + (security?.listing ?? '扫描未完成'))
+    if (purpose==='candidate' && (!security || !security.passed || security.blocking)) throw Error('QUALITY_LOCAL_CHECK_REQUIRED: 先处理本机静态检查，再审阅稳定候选。' + (security?.listing ?? '扫描未完成'))
     const binding = await identity(projectId, ctx.signal), id = randomUUID(), ledger = readQualityLedger(projectId)
     const work = qualityCloseout(applicableQualityLedger(projectId), binding, undefined, rulesVersion(projectId), independentDesignVersion(projectId))
-    if (work.must_fix.some(id=>qualityFailureBaseline(ledger.findings.find(f=>f.id===id)!)?.rules===rulesVersion(projectId))) throw Error('QUALITY_FINDING_REPRODUCTION_REQUIRED: 先用冻结案例复现或复测重要问题，不通过重新审阅代替闭合。' + JSON.stringify(work))
-    const previous = ledger.reviews.filter(r => (r.kind ?? 'code') === kind).at(-1)
+    if (purpose==='candidate' && work.must_fix.some(id=>qualityFailureBaseline(ledger.findings.find(f=>f.id===id)!)?.rules===rulesVersion(projectId))) throw Error('QUALITY_FINDING_REPRODUCTION_REQUIRED: 先用冻结案例复现或复测重要问题，不通过重新审阅代替闭合。' + JSON.stringify(work))
+    const previous = ledger.reviews.filter(r => (r.kind ?? 'code') === kind && (r.purpose??'candidate')===purpose).at(-1)
     if (!work.must_fix.length && !work.required_investigation.length && (!currentObservation()||currentObservation()!.digest===previous?.observation?.digest) && previous?.status === 'complete' && same(previous.identity,binding) && (previous.intent_observations??[]).every(o=>o.status==='supported')) {
       if (kind === 'code' || previous.visual && previous.image && previous.child && previous.visual_delivery?.image_hash === previous.visual.image_hash) {
         if (kind === 'visual') validateVisualGrant(previous.visual!,previous.child!,previous.image!)
@@ -124,12 +124,12 @@ export function createQualityReview(projectId: string, parent: string, policy: R
     if (!same(binding, await identity(projectId, ctx.signal))) throw Error('QUALITY_CAPTURE_CANDIDATE_CHANGED')
     const inventory = kind === 'code' ? await runtimeInventory(findProject(projectId).root_path, ctx.signal) : undefined
     if (inventory && inventory.digest !== binding.source) throw Error('QUALITY_CAPTURE_CANDIDATE_CHANGED')
-    const review: Review = { id, kind, observation:currentObservation(), run_id: ctx.requestId, identity: binding, visual, ...(inventory ? { source_manifest: compactReviewManifest(inventory) } : {}), status: 'pending', at: new Date().toISOString() }
+    const review: Review = { id, kind, purpose, rules:rulesVersion(projectId), observation:currentObservation(), run_id: ctx.requestId, identity: binding, visual, ...(inventory ? { source_manifest: compactReviewManifest(inventory) } : {}), status: 'pending', at: new Date().toISOString() }
     ledger.reviews.push(review); save(ledger)
     pending = review
     try {
       return startDelegation(ctx, { role: 'review', readOnly: true,
-        task: kind === 'visual' ? `视觉审阅候选 ${id}。用read_quality_review读取确认预期、同次DOM/操作事实；必须view_quality_image查看真实图片，再提交visual_observations（image_sha256、area、region、observed；area须覆盖layout/interaction/content/scope）及findings。独立检查布局、遮挡、静态残留、单位、状态和当前对象；DOM与文件名不是图片。只报证据与疑点，不改源码或目标，不自报PASS。`
+        task: purpose!=='candidate'?`核对${purpose}材料；这是局部覆盖/案例绑定审查，不能替代最终C/V。读取read_quality_review及相关冻结测试，按触发步骤和原预期核对，不按F编号猜绑定。无匹配案例时保留疑点；有明确匹配时提交resolutions.case_name，宿主随后执行。` : kind === 'visual' ? `视觉审阅候选 ${id}。用read_quality_review读取确认预期、同次DOM/操作事实；必须view_quality_image查看真实图片，再提交visual_observations（image_sha256、area、region、observed；area须覆盖layout/interaction/content/scope）及findings。独立检查布局、遮挡、静态残留、单位、状态和当前对象；DOM与文件名不是图片。只报证据与疑点，不改源码或目标，不自报PASS。`
           : `审阅候选 ${id}。先用read_quality_review取得宿主绑定的确认需求和材料。先看宿主review_focus的同目标/环境前次审阅及文件差异，再批量读取相关实现，不重复读取同一范围；测试只在核对预期或疑点时读取，不逐页遍历全部测试和依赖。保留回合用于结构化提交。重点检查对象身份、异步状态、持久化、接口和遗漏分支；不继承制作方成功结论。用submit_quality_findings提交结构化疑点（没有发现也提交空数组），不自报PASS、不新增需求、不运行或修改文件。` })
     } finally { pending = undefined }
   })
@@ -147,13 +147,15 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       const ux = readConfirmedUxBinding(projectId, brief)
       materialsRead.add(ctx.sessionId)
       return { output: JSON.stringify({ review, root: findProject(projectId).root_path, goal: brief.positioning, source_statements:brief.lean_brief?.intent_sources??brief.requirements_model?.sources, constraints: brief.constraints, assumptions: brief.assumptions, confirmed_ux: ux, design_policy: productDesignPolicy(brief),
+        test_coverage:{cases:registeredQualityCases(projectId),workflows:brief.requirements_model?.workflows,requirements:brief.requirements,authority:'派生阅读投影；按冻结测试正文核对连续操作和预期，登记F编号不证明场景覆盖。'},
         host_observation:review.observation, engineering_advice:engineeringAdvice?.(), confirmed_design: review.kind === 'visual' && ux?.html_path ? { html: readFileSync(join(findProject(projectId).root_path, ux.html_path), 'utf8').slice(0, 64000), bounded_characters: 64000 } : undefined,
         unresolved_findings: applicableQualityLedger(projectId).findings.filter(f=>findingNeedsClosure(f,review.identity,rulesVersion(projectId),independentDesignVersion(projectId))||findingNeedsInvestigation(f,review.identity,rulesVersion(projectId),independentDesignVersion(projectId))).map(f=>({...f,checks:f.checks.slice(-1)})), resolution_protocol:'旧疑点若被实际证据排除，在resolutions提交finding_id和具体触发/观察依据。普通案例通过不足以排除疑点；已确认失败不得用审阅关闭。', review_focus: review.kind === 'visual' ? undefined : reviewChangeContext(ledger, review.identity, review.source_manifest, review.id), intent: brief.requirements_model, intent_review_protocol: review.kind === 'visual' ? 'V仅按当前真实图片和同次操作事实检查布局/交互/内容/覆盖范围；不得声称核对全部长期业务。核心体验上下文用于识别偏题，具体疑点提交finding。截图可能保留用户或测试修改后的状态，当前数值不等于出厂默认；明确区分所见事实与推断。可自定义设置按已确认范围判断，不擅自把默认偏好变成禁止修改的约束。无需提交intent_observations。' : '有experience时逐项提交intent_observations:{commitment_id,status:supported|concern|unverified,evidence,limitations}；核对禁止替代。supported只是审阅意见，不代表真实运行通过。concern须提供finding_indices，填本次findings数组中对应问题的0起始索引，只关联真正影响该体验的问题；证据不足保留unverified。', visual_facts: visual, visual_checklist: review.kind === 'visual' ? visualReviewChecklist : undefined,
         engineering: review.kind === 'visual' ? undefined : { design: readEngineeringDesign(findProject(projectId).root_path), guidance: ENGINEERING_GUIDANCE, submission: '代码审阅提交engineering:{status:supported|concern|unverified,severity:high|medium|low,evidence,limitations}。具体引用文件/接口，核对职责、依赖、状态归属、错误和资源生命周期、测试与兼容。重要结构缺陷填concern并给严重性与具体影响，证据不足填unverified；普通建议和未评估项不阻断，不虚构F编号。设计文档与目录数量不能证明实现合理；supported仅表示审阅支持，实际行为仍由宿主验证。' }, requirements: brief.requirements.map(r => ({ id: r.id, description: r.description, expected_source: trustedAcceptance(brief, r) })), out_of_scope: brief.out_of_scope }) }
     } }, { name: 'submit_quality_findings', description: '提交只读疑点，不得指定状态或PASS。requirement只填F编号，expected_source从read_quality_review的expected_source逐字复制（不写来源说明或编号拼接）；无依据增强标suggestion，预期有争议标disputed。宿主生成ID、绑定候选；只能提交一次。',
-    input_schema: { type: 'object', additionalProperties: false, required: ['findings'], properties: { engineering: ENGINEERING_REVIEW_SCHEMA, resolutions: {type:'array',maxItems:32,items:{type:'object',additionalProperties:false,required:['finding_id','evidence'],properties:{finding_id:{type:'string'},evidence:{type:'string',minLength:1,maxLength:4000},case_name:{type:'string',description:'仅用于独立审阅批准已修订合同下重测原失败案例；不能改为其他案例，批准不代表通过'}}}}, intent_observations: { type: 'array', maxItems: 32, items: { type: 'object', additionalProperties: false, required: ['commitment_id','status','evidence','limitations'], properties: { commitment_id: {type:'string'}, status:{type:'string',enum:['supported','concern','unverified']}, evidence:{type:'string'}, limitations:{type:'string'}, finding_indices:{type:'array',maxItems:32,uniqueItems:true,items:{type:'integer',minimum:0},description:'concern必填；对应本次findings数组的0起始索引，不关联同功能的无关建议'} } } }, visual_observations: { type: 'array', maxItems: 16, items: { type: 'object', additionalProperties: false, required: ['image_sha256', 'area', 'region', 'observed'], properties: { area: { type: 'string', enum: Object.keys(visualReviewChecklist) }, image_sha256: { type: 'string' }, region: { type: 'string', maxLength: 1000 }, observed: { type: 'string', maxLength: 2000 } } } }, findings: { type: 'array', maxItems: 32, items: { type: 'object', additionalProperties: false,
+    input_schema: { type: 'object', additionalProperties: false, required: ['findings'], properties: { engineering: ENGINEERING_REVIEW_SCHEMA, resolutions: {type:'array',maxItems:32,items:{type:'object',additionalProperties:false,required:['finding_id','evidence'],properties:{basis:{type:'string',enum:['static_misread','not_applicable']},finding_id:{type:'string'},evidence:{type:'string',minLength:1,maxLength:4000},case_name:{type:'string',description:'仅用于独立审阅批准已修订合同下重测原失败案例；不能改为其他案例，批准不代表通过'}}}}, intent_observations: { type: 'array', maxItems: 32, items: { type: 'object', additionalProperties: false, required: ['commitment_id','status','evidence','limitations'], properties: { commitment_id: {type:'string'}, status:{type:'string',enum:['supported','concern','unverified']}, evidence:{type:'string'}, limitations:{type:'string'}, finding_indices:{type:'array',maxItems:32,uniqueItems:true,items:{type:'integer',minimum:0},description:'concern必填；对应本次findings数组的0起始索引，不关联同功能的无关建议'} } } }, visual_observations: { type: 'array', maxItems: 16, items: { type: 'object', additionalProperties: false, required: ['image_sha256', 'area', 'region', 'observed'], properties: { area: { type: 'string', enum: Object.keys(visualReviewChecklist) }, image_sha256: { type: 'string' }, region: { type: 'string', maxLength: 1000 }, observed: { type: 'string', maxLength: 2000 } } } }, findings: { type: 'array', maxItems: 32, items: { type: 'object', additionalProperties: false,
       required: ['expected_source', 'category', 'severity', 'location', 'trigger', 'evidence', 'reproduction', 'unknowns', 'kind'], anyOf: [{ required: ['requirement'] }, { required: ['requirement_id'] }],
       properties: { ...Object.fromEntries(['requirement', 'expected_source', 'category', 'location', 'trigger', 'evidence', 'reproduction', 'unknowns'].map(key => [key, { type: 'string', maxLength: 4000 }])),
+        requires_execution:{type:'boolean',description:'默认true。依赖操作时序、账号/窗口/网络/持久化的疑点必须true；仅静态误读或不适用问题可false。'},
         case_name:{type:'string',maxLength:1000,description:'可选：独立审阅已核对具体触发输入和断言的注册案例名；不确定覆盖时省略，不按F编号猜测。'},
         requirement_id: { type: 'string', enum: [...readPrdBackplane(projectId).requirements.map(r => r.id), 'unscoped'], description: 'requirement的兼容别名；同时提供时必须相同。' },
         requirement: { type: 'string', enum: [...readPrdBackplane(projectId).requirements.map(r => r.id), 'unscoped'], description: '只填给定F编号；不要填需求全文、AC/BR编号或拼接多个编号。无确认依据的纯建议才用unscoped。' },
@@ -180,16 +182,17 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       else if (input.engineering !== undefined) throw Error('ENGINEERING_REVIEW_NOT_APPLICABLE')
       const bindings:Array<{finding_id:string;case_name:string;evidence:string}>=[]
       const rows = input.findings.map((raw: unknown): QualityFinding => {
-        const {case_name,...row} = canonicalFindingReference(raw), fields = ['requirement', 'expected_source', 'category', 'severity', 'location', 'trigger', 'evidence', 'reproduction', 'unknowns', 'kind']
+        const {case_name,requires_execution,...row} = canonicalFindingReference(raw), fields = ['requirement', 'expected_source', 'category', 'severity', 'location', 'trigger', 'evidence', 'reproduction', 'unknowns', 'kind']
         if (!row || Object.keys(row).some(k => !fields.includes(k)) || fields.some(k => typeof row[k] !== 'string' || (row[k] as string).length > 4000 || k !== 'unknowns' && !(row[k] as string).trim())
           || !['critical', 'high', 'medium', 'low'].includes(String(row.severity)) || !['suspected', 'disputed', 'suggestion'].includes(String(row.kind))) throw Error('QUALITY_FINDING_INVALID')
+        if(requires_execution!==undefined&&typeof requires_execution!=='boolean')throw Error('QUALITY_EVIDENCE_REQUIREMENT_INVALID')
         const requirement = brief.requirements.find(r => r.id === row.requirement)
         if (!requirement && (row.requirement !== 'unscoped' || row.kind !== 'suggestion')) throw Error('QUALITY_REQUIREMENT_ID_INVALID: requirement只填当前F编号；纯增强建议才用unscoped。')
         const disposition = !requirement ? 'suggestion' : row.expected_source !== trustedAcceptance(brief, requirement) ? 'disputed' : row.kind
         const { kind: _kind, ...finding } = row
         const findingId=randomUUID()
         if(case_name!==undefined){if(typeof case_name!=='string'||!case_name.trim()||case_name.length>1000)throw Error('QUALITY_CASE_BINDING_INVALID');bindings.push({finding_id:findingId,case_name,evidence:String(row.reproduction)+'\n'+String(row.evidence)})}
-        return { ...finding, id: findingId, review: review.id, review_kind: review.kind ?? 'code', visual_material_hash: review.visual?.manifest_hash, identity: review.identity, disposition, checks: [] } as unknown as QualityFinding
+        return { ...finding, requires_execution:requires_execution!==false, id: findingId, review: review.id, review_kind: review.kind ?? 'code', visual_material_hash: review.visual?.manifest_hash, identity: review.identity, disposition, checks: [] } as unknown as QualityFinding
       })
       const intent = validateIntentObservations(input.intent_observations, review.kind === 'visual' ? undefined : brief.requirements_model?.experience)
       review.intent_observations = bindIntentFindings(intent,brief.requirements_model?.experience,rows)
@@ -197,12 +200,20 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       if(!Array.isArray(resolutions)||resolutions.length>32)throw Error('QUALITY_RESOLUTION_INVALID')
       const resolvedIds=new Set<string>()
       for(const item of resolutions){
-        if(!item||Object.keys(item).some(key=>!['finding_id','evidence','case_name'].includes(key))||typeof item.finding_id!=='string'||resolvedIds.has(item.finding_id)||item.case_name!==undefined&&(typeof item.case_name!=='string'||!item.case_name.trim()||item.case_name.length>1000))throw Error('QUALITY_RESOLUTION_INVALID')
+        if(!item||Object.keys(item).some(key=>!['finding_id','evidence','case_name','basis'].includes(key))||typeof item.finding_id!=='string'||resolvedIds.has(item.finding_id)||item.case_name!==undefined&&(typeof item.case_name!=='string'||!item.case_name.trim()||item.case_name.length>1000))throw Error('QUALITY_RESOLUTION_INVALID')
+        if(item.basis!==undefined&&!['static_misread','not_applicable'].includes(item.basis))throw Error('QUALITY_RESOLUTION_BASIS_INVALID')
         resolvedIds.add(item.finding_id)
         const f=ledger.findings.find(f=>f.id===item.finding_id)
         const baseline=f?qualityFailureBaseline(f):undefined
+        if(!item.case_name&&(!item.basis||f?.requires_execution!==false))throw Error('QUALITY_RUNTIME_EXECUTION_REQUIRED')
         if(!f||f.independent||(baseline?item.case_name!==baseline.case_name:!['suspected','not_reproduced','confirmed','closed'].includes(f.disposition))
           ||(f.review_kind??'code')!==(review.kind??'code')||typeof item.evidence!=='string'||!item.evidence.trim()||item.evidence.length>4000)throw Error('QUALITY_RESOLUTION_INVALID')
+      }
+      for(const item of [...resolutions,...bindings]){
+        if(!item.case_name)continue
+        const f=[...ledger.findings,...rows].find(f=>f.id===item.finding_id)!
+        const matches=registeredQualityCases(projectId).filter(c=>c.name===item.case_name&&c.requirements.includes(f.requirement))
+        if(matches.length!==1)throw Error('QUALITY_CASE_BINDING_NOT_REGISTERED')
       }
       review.resolutions=[...resolutions,...bindings]
       // This validated final submission is the review's commit point. A later
@@ -210,7 +221,7 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       ledger.findings.push(...rows); review.status = 'complete'
       for(const item of review.resolutions){
         const finding=ledger.findings.find(f=>f.id===item.finding_id)!
-        const evidence={identity:review.identity,review:review.id,evidence:item.evidence}
+        const evidence={identity:review.identity,review:review.id,evidence:item.evidence,...(item.basis?{basis:item.basis}:{})}
         if(item.case_name)finding.retest={...evidence,case_name:item.case_name,rules:rulesVersion(projectId)}
         else if(!qualityFailureBaseline(finding))finding.reviewed=evidence
       }

@@ -53,7 +53,7 @@ function register(query: SDKQuery) {
     prepareDelegation: quality.prepare, childAfterTools:quality.childAfterTools, childSystemBuilder: (_role, child) => quality.system(child)!,
     childToolsBuilder: (id, role) => quality.reviewTools(buildSoftwareAgentTools(id, role, policy)), publish: () => {} })
 }
-async function review(findings: Record<string, unknown>[] = [finding], intent?: unknown[], resolutions?: unknown[], engineering: import('../../../main/software/engineering-design').EngineeringReview | null = {status:'supported',evidence:'app.cjs owns pure addition; CLI owns parsing/output; no persistence or external resources.',limitations:'CLI fixture only'}) {
+async function review(findings: Record<string, unknown>[] = [finding], intent?: unknown[], resolutions?: unknown[], engineering: import('../../../main/software/engineering-design').EngineeringReview | null = {status:'supported',evidence:'app.cjs owns pure addition; CLI owns parsing/output; no persistence or external resources.',limitations:'CLI fixture only'}, purpose:import('../../../main/software/quality-ledger').ReviewPurpose='candidate') {
   let calls = 0
   register(async function* (_prompt, options) {
     if (calls > 0) expect(JSON.stringify(options.messages)).toContain('只检查已保存记录，不自动保存草稿')
@@ -63,7 +63,7 @@ async function review(findings: Record<string, unknown>[] = [finding], intent?: 
       : [{ type: 'text', text: '已提交疑点，未验证。' }] } }
     yield { type: 'result', subtype: 'success', usage: { input_tokens: 10, output_tokens: 10 } }
   })
-  const child = await quality.begin(ctx()); await findDelegation(parent, child.delegation_id)!.completion; await settleParentDelegationRuns(parent)
+  const child = await quality.begin(ctx(),'code',undefined,purpose); await findDelegation(parent, child.delegation_id)!.completion; await settleParentDelegationRuns(parent)
   expect(readQualityLedger(project.project_id).reviews.at(-1)?.status).toBe('complete')
   return child
 }
@@ -198,7 +198,9 @@ it('does not buy a duplicate complete review and cannot erase important doubts b
   expect(observed.checks[0].observation).toContain('"current_candidate_only":true')
   expect(observed.identity).toEqual(f.identity)
   expect(await quality.gate()).toContain('REPRODUCTION_REQUIRED')
-  await review([],undefined,[{finding_id:f.id,evidence:'已核对原触发输入2和3以及当前加法实现，原999分支已不存在。'}])
+  await review([],undefined,[{finding_id:f.id,case_name:'sum',evidence:'独立核对sum的输入2和3与原预期相符，由宿主执行。'}])
+  expect(await quality.gate()).toContain('REPRODUCTION_REQUIRED')
+  await verifySoftwareCandidate(project.project_id,'r',ctx().signal)
   expect(await quality.gate()).toBeUndefined()
   writeFileSync(join(project.root_path,'app.cjs'),'console.log(7)')
   expect(await quality.gate()).toContain('REPRODUCTION_REQUIRED')
@@ -328,6 +330,8 @@ it('keeps uncertain experience observations open and permits a new current revie
   await review([], [observation])
   expect(await quality.gate()).toContain('INTENT_UNRESOLVED')
   await review([], [{...observation,status:'supported',evidence:'已读实现输出具体结果',limitations:'真实行为仍由宿主验证'}])
+  expect(await quality.gate()).toContain('REPRODUCTION_REQUIRED')
+  await verifySoftwareCandidate(project.project_id,'r',ctx().signal)
   expect(await quality.gate()).toBeUndefined()
   writeFileSync(join(project.root_path,'app.cjs'),'console.log(7)')
   expect(await quality.gate()).toContain('REVIEW_REQUIRED')
@@ -429,3 +433,20 @@ it('records an omitted engineering assessment as unverified without invalidating
   expect(readQualityLedger(project.project_id).reviews.at(-1)?.engineering?.status).toBe('unverified')
   expect(await quality.gate()).toBeUndefined()
 })
+
+
+it('binding review plus host execution settles a new suspicion but never replaces final C',async()=>{
+ const {case_name,...unbound}=finding
+ await review([unbound])
+ writeFileSync(join(project.root_path,'app.cjs'),'console.log(5)')
+ await verifySoftwareCandidate(project.project_id,'r',ctx().signal)
+ const f=readQualityLedger(project.project_id).findings[0]
+ expect(f.checks).toHaveLength(0)
+ await review([],undefined,[{finding_id:f.id,case_name:'sum',evidence:'Frozen sum executes the exact original inputs and expected output.'}],undefined,'binding')
+ expect(await quality.gate()).toContain('REPRODUCTION_REQUIRED')
+ await verifySoftwareCandidate(project.project_id,'r',ctx().signal)
+ expect(readQualityLedger(project.project_id).findings[0].disposition).toBe('not_reproduced')
+ expect(await quality.gate()).toContain('REVIEW_REQUIRED')
+ await review([])
+ expect(await quality.gate()).toBeUndefined()
+},120000)
