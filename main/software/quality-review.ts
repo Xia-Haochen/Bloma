@@ -8,7 +8,7 @@ import {pendingTestCorrection} from './test-corrections'
 import {ModelRequestRefusal} from '../platform/llm/model-request-refusal'
 import { defaultQuickSecurityGate } from '../desktop/production-contracts'
 import { runtimeInventory } from './release-store'
-import { compactReviewManifest, reviewChangeContext, repeatedReviewFailure } from './quality-review-context'
+import { reviewReadIdentity, compactReviewManifest, reviewChangeContext, repeatedReviewFailure } from './quality-review-context'
 import { canonicalFindingReference } from './quality-reference'
 import { validateIntentObservations, bindIntentFindings } from './intent-review'
 import { productDesignPolicy } from '../project/product-design-policy'
@@ -52,6 +52,7 @@ export function createQualityReview(projectId: string, parent: string, policy: R
   if(recovered)saveQualityLedger(projectId,recovery)
   const children = new Map<string, string>()
   const materialsRead = new Set<string>(), sourceRead = new Set<string>()
+  const providedReads=new Map<string,string>()
   const imagesRequested = new Set<string>()
   let pending: Review | undefined
   const currentObservation = () => {
@@ -311,7 +312,13 @@ export function createQualityReview(projectId: string, parent: string, policy: R
   const reviewTools = (tools: AgentLoopTool[], child?: string): AgentLoopTool[] => child && readQualityLedger(projectId).reviews.find(r => r.id === children.get(child))?.kind === 'visual' ? reviewProtocol('visual') : [...tools.filter(t => ['read_file', 'list_files', 'find', 'grep'].includes(t.name)).map(tool => ({
     ...tool, execute: async (input: Record<string, unknown>, ctx: ToolContext) => {
       if (readQualityLedger(projectId).reviews.find(r => r.id === children.get(ctx.sessionId))?.kind === 'visual') throw Error('VISUAL_SOURCE_READ_DENIED: V只使用授权图片和操作事实')
+      const review=readQualityLedger(projectId).reviews.find(r=>r.id===children.get(ctx.sessionId))
+      const path=typeof input.path==='string'?input.path.replaceAll('\\','/').replace(/^\.\//,''):''
+      const read=tool.name==='read_file'?reviewReadIdentity(review?.source_manifest,path,input):undefined
+      const key=read?ctx.sessionId+':'+read.key:undefined
+      if(key&&providedReads.has(key))return{output:JSON.stringify({already_provided:providedReads.get(key),requested_path:path,sha256:read!.sha256,aliases:read!.aliases,note:'相同字节和读取范围已在本次审查提供；需要其它范围时照常读取。'})}
       const result = await tool.execute(input, ctx)
+      if(key&&!result.isError)providedReads.set(key,path)
       if (tool.name === 'read_file' && !result.isError && children.has(ctx.sessionId)) sourceRead.add(ctx.sessionId)
       return result
     }

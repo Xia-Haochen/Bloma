@@ -3,7 +3,7 @@ const h=vi.hoisted(()=>({start:vi.fn(),resume:vi.fn(),record:{status:'running',l
 vi.mock('../../../main/agent/delegation/agent-collaboration',()=>({startDelegation:h.start,continueDelegation:h.resume,findDelegation:()=>h.record}))
 import {createEngineeringPartner} from '../../../main/software/engineering-partner'
 const ctx=()=>({projectId:'project',sessionId:'parent',requestId:'run',signal:new AbortController().signal}) as any
-const event=(id:string,name='inspect_app',output='seed=100027; actual room=normal')=>({phase:'completed' as const,turn:1,id,name,input:{seed:777001},output,isError:false})
+const event=(id:string,name='inspect_app',output='seed=100027; actual room=normal')=>({phase:'completed' as const,turn:1,id,name,input:{seed:777001},output,isError:true})
 beforeEach(()=>{vi.clearAllMocks();Object.assign(h.record,{status:'running',loopStatus:undefined,taskHandoff:undefined,pendingQuestion:undefined,completion:undefined});h.start.mockReturnValue({delegation_id:'peer',child_session_id:'child'});h.resume.mockImplementation(()=>{h.record.status='running';h.record.completion=undefined;return{delegation_id:'peer',child_session_id:'child'}})})
 
 it('updates a running Agent with public claims and actual results without spawning another agent',async()=>{
@@ -116,4 +116,11 @@ it('drains the original invocation after parking and retains its late evidence w
  finish();await draining
  expect(peer.latest()).toMatchObject({updates:[{text:'Current observed failure remains evidence'}]})
  expect(h.resume).not.toHaveBeenCalled()
+})
+
+it('does not purchase investigation for successful reads or unrelated source changes',()=>{
+ let source='one';const peer=createEngineeringPartner(true,undefined,{source:()=>source});peer.begin(ctx());peer.context('child');peer.observed('child',{turn:1,toolCalls:[]});h.record.status='completed'
+ for(let n=0;n<10;n++){source=String(n);peer.observeTool({...event(String(n),'read_file','PID='+n),input:{path:'file',offset:n},isError:false})}
+ expect(h.resume).not.toHaveBeenCalled()
+ peer.observeTool({...event('failure'),isError:true});expect(h.resume).toHaveBeenCalledTimes(1)
 })

@@ -1,3 +1,4 @@
+import {readToolFeedback} from '../../shared/tool-feedback'
 import {serializeRedactedJson} from '../../shared/redacted-json'
 import {createHash} from 'node:crypto'
 import {startDelegation,continueDelegation,findDelegation} from '../agent/delegation/agent-collaboration'
@@ -5,7 +6,7 @@ import type {AgentLoopTurnInfo,ToolContext,ToolObservation} from '../agent/loop/
 import {redactSoftwareOutput} from './process-manager'
 
 interface Attachment {delegation_id:string;child_session_id:string}
-interface Services {facts?:()=>unknown;source?:()=>string|undefined;history?:(ctx:ToolContext)=>unknown;recover?:(ctx:ToolContext)=>Attachment|undefined;attached?:(ctx:ToolContext,child:Attachment)=>void}
+interface Services {needsEvidence?:()=>boolean;facts?:()=>unknown;source?:()=>string|undefined;history?:(ctx:ToolContext)=>unknown;recover?:(ctx:ToolContext)=>Attachment|undefined;attached?:(ctx:ToolContext,child:Attachment)=>void}
 interface Observation {seq:number;at:string;request_id:string;kind:'resume'|'user_request'|'statement'|'tool';turn?:number;source?:string;data:unknown}
 interface Update {session_id:string;turn:number;text:string;truncated:boolean;at:string;based_on?:number;facts?:()=>unknown}
 const bounded=(value:unknown,limit:number)=>{const text=typeof value==='string'?redactSoftwareOutput(value):serializeRedactedJson(value,redactSoftwareOutput);return text.length<=limit?{text,truncated:false}:{text:text.slice(0,Math.floor(limit/2))+'\n[中段省略]\n'+text.slice(-Math.floor(limit/2)),truncated:true,characters:text.length}}
@@ -80,10 +81,12 @@ export function createEngineeringPartner(enabled:boolean,knownChild?:(session:st
       // output. The complete start/end chronology remains in the parent audit.
       observations=observations.filter(row=>!(row.kind==='tool'&&row.turn===event.turn&&row.request_id===ctx?.requestId&&(row.data as {id?:string;phase?:string}).id===event.id&&(row.data as {phase?:string}).phase==='started'))
       if(event.name==='answer_delegation_question')lastQuestion=undefined
-      const key=JSON.stringify([source(),event.name,event.input]),digest=createHash('sha256').update(JSON.stringify([event.isError,event.output])).digest('hex')
+      const feedback=readToolFeedback(event.output)
+      const fingerprint=feedback?.source==='host'&&feedback.verification!=='passed'?feedback.fingerprint:undefined
+      const key=JSON.stringify([source(),event.name,fingerprint??event.input]),digest=fingerprint??createHash('sha256').update(JSON.stringify([event.isError,event.output])).digest('hex')
       if(deliveredFacts.get(key)===digest)return
       deliveredFacts.set(key,digest);if(deliveredFacts.size>256)deliveredFacts.delete(deliveredFacts.keys().next().value!)
-      add('tool',{id:event.id,name:event.name,phase:'completed',input:bounded(event.input,3000),result:bounded(event.output,6000),is_error:event.isError},event.turn)
+      add('tool',{id:event.id,name:event.name,phase:'completed',input:bounded(event.input,3000),result:bounded(event.output,6000),is_error:event.isError},event.turn,event.isError||Boolean(services.needsEvidence?.()&&['inspect_app','verify_app','run_command'].includes(event.name)))
     },
     context(session:string){if(session!==child)return;prepared=sequence;return input()},
     observed(session:string,turn:AgentLoopTurnInfo){if(session===child&&!turn.failed){seen=Math.max(seen,prepared);if(seen>=sequence)pending=undefined}},

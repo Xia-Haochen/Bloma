@@ -170,6 +170,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   const publicRequest=redactSoftwareOutput(input.content)
   const partner = createEngineeringPartner(pairedEngineering,child=>collaboration.engineering.has(child),{
     source:()=>softwareVerificationFingerprint(project.root_path),
+    needsEvidence:()=>readQualityLedger(input.projectId).findings.some(f=>['suspected','confirmed'].includes(f.disposition)),
     facts:()=>({current_request:{text:publicRequest.length<=4000?publicRequest:publicRequest.slice(0,2000)+'[中段省略]'+publicRequest.slice(-2000),truncated:publicRequest.length>4000},working_state:renderSoftwareWorkingContext(input.projectId),development:engineeringObservations(input.projectId,input.sessionId)}),
     recover:recoverEngineeringMonitor,attached:recordEngineeringMonitor,history:recentProductionObservations,
   })

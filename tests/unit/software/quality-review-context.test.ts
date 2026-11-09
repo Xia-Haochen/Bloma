@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { compactReviewManifest, reviewChangeContext } from '../../../main/software/quality-review-context'
+import { reviewReadIdentity, compactReviewManifest, reviewChangeContext } from '../../../main/software/quality-review-context'
 import type { Ledger } from '../../../main/software/quality-ledger'
 it('keeps desktop projects with many dependency files reviewable without hiding dependency changes',()=>{
   const files=[{path:'app.js',sha256:'app',size:10},...Array.from({length:600},(_,i)=>({path:`node_modules/lib/${i}.js`,sha256:String(i),size:10}))]
@@ -18,4 +18,13 @@ it('focuses a fresh review on actual byte changes without converting previous fi
   ledger.reviews[0].status='interrupted';expect(reviewChangeContext(ledger,identity,manifest,'new').mode).toBe('full')
   ledger.reviews[0].status='complete';ledger.reviews[0].source_manifest!.digest='tampered'
   expect(reviewChangeContext(ledger,identity,manifest,'new').mode).toBe('full')
+})
+
+it('coalesces identical material aliases only for the same range and manifest',()=>{
+ const m={digest:'source',files:[{path:'00_UX/confirmed.html',sha256:'same',size:9},{path:'00_UX/history/one.html',sha256:'same',size:9}]}
+ const a=reviewReadIdentity(m,m.files[0].path,{path:m.files[0].path,offset:0})!
+ const b=reviewReadIdentity(m,m.files[1].path,{path:m.files[1].path,offset:0})!
+ expect(a.key).toBe(b.key);expect(a.aliases).toHaveLength(2)
+ expect(reviewReadIdentity(m,m.files[0].path,{offset:1})!.key).not.toBe(a.key)
+ expect(reviewReadIdentity({...m,digest:'new'},m.files[0].path,{offset:0})!.key).not.toBe(a.key)
 })
