@@ -1,6 +1,6 @@
 # Bloma 工程执行与验收职责收敛会话交接
 
-日期：2026-11-09，Asia/Shanghai。**本文件要求的离线工程修复与组合验证已完成，最终结果见第10节。校园项目正式付费验收、C/V与发布仍暂停，未宣称产品交付。** 运行时、完整测试候选事务、执行上下文、证据和伙伴调度均沿原software-v1实现；后续不得重放已完成批次或自动恢复付费。
+日期：2026-11-09，Asia/Shanghai。**本文件要求的离线工程修复与组合验证已完成，修复结果见第10节，最新从头复验见第11节。校园项目正式付费验收、C/V与发布仍暂停，未宣称产品交付。** 运行时、完整测试候选事务、执行上下文、证据和伙伴调度均沿原software-v1实现；后续不得重放已完成批次或自动恢复付费。
 
 本文件是该任务唯一接手主入口。沿现有 `software-v1` 改造，复用制作者、完整 Pi 伙伴、独立审查、C/V、发布门禁、执行记录与费用账本。减少模型必须掌握的内部协议，不以增加提示词、工具数量或平行状态机替代职责收敛。
 
@@ -260,3 +260,26 @@ Get-Content "$repairTrialRoot\monetary-policy.json.state.json" -Raw | ConvertFro
 同一个真实Electron组合用例再扩展为“两处助手修复＋新资源＋隔离试跑＋工作区冲突拒绝＋先应用后恢复正式绑定＋正常多窗口/随机凭据/刷新/退出/重开”，完整通过（engineering-repair-complete-chain-20261109.log）。这是受控独立裁定及真实本机执行，不是付费模型质量证明。扩展测试后的类型检查通过（engineering-repair-final-source-types-20261109.log）。
 
 最终只读核对：真实项目仍active / generating_mvp / desktop-implement，software_release_id为空；8 rejected、1 pending；费用仍430 reported、1 unknown，pause-generation存在。原项目、冻结预期、历史拒绝及账本未改，无真实付费模型请求，无push。保护文档hash-object仍53c7abb3aef8497d8b0522b8aab806c82b2ec164。
+
+## 11 从头完整复验（2026-11-09）
+
+用户要求“从头重新测验一下”。本轮锁定代码基线f64faebb1ecd70a20e5995aa31cb083fad71462b，重新执行类型检查、文档检查、renderer/main构建，并使用新建的临时PROMA_HOME、项目、数据和候选执行测试；未沿用上一轮验收回执。运行代码和测试断言全程未改，两个测试阶段均一次运行通过，没有失败后重试。
+
+| 阶段 | 文件数 | 测试数 | 结果 |
+| --- | --- | --- | --- |
+| npm run check:offline | 19 | 190 | 全部通过，退出码0 |
+| 补充工程回归（单worker） | 33 | 211 | 全部通过，退出码0，0跳过 |
+| 本轮合计 | 52 | 401 | 两份文件清单不重叠，不重复累计 |
+
+补充范围包含完整质量审查28项、独立验收6项、长任务/取消恢复、真实Electron及浏览器调试、运行时/发布、完整修正试跑、伙伴和预算队列、原子文件写入、JSON脱敏、凭据扫描，以及原校园材料的隔离重放。原Electron 33.2.0只读复用及校园原冻结脚本检查均实际启用。标准套件已包含真实Pi完整候选提交和增强后的真实Electron完整修复组合链路；本轮PCM对照也直接通过。
+
+本轮独立证据目录：run-artifacts/engineering-retest-20261109-140333/。baseline.json记录起始基线；test-plan.json记录去重清单；check-offline.log及check-offline-result.json记录标准检查；supplemental.log、supplemental-results.json及supplemental-result.json记录补充检查；integrity-and-result.json记录结束时完整性比较。补充套件使用受控模型、真实本机进程/GUI，不调用真实付费供应商。
+
+前后核对全部一致：
+
+- 账本SHA256：33916f5fff08bc40ce0bdcf3bf2c7869969a9fae21c93e5a93183e9d3ba9e599；仍430 reported、1 unknown。
+- 提案状态文件SHA256：62ddd2d5611002d2bffc3f51f9c450c49221b2be59b23fffa305e920ed358b84；仍8 rejected、1 pending。
+- 保护文档hash-object：53c7abb3aef8497d8b0522b8aab806c82b2ec164，原两行修改保留。
+- pause-generation持续存在；未改真实项目或冻结预期，未恢复付费，未push。
+
+本轮未发现测试回归；不据此宣称校园产品已完成正式真实模型/C/V/发布。仅更新本节及入口中的复验记录，运行代码和测试保持f64faeb基线。
