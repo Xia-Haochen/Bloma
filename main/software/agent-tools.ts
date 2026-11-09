@@ -46,7 +46,7 @@ export function buildSoftwareAgentTools(projectId: string, role: DelegationRunRo
         if(ctx.projectId!==projectId||typeof input.stage_id!=='string'||typeof input.script!=='string'||input.restart!==undefined&&typeof input.restart!=='boolean')throw Error('PROJECT_STAGE_INPUT_INVALID')
         if(activeSoftwareCommands(projectId,ctx.sessionId).length)throw Error('PROJECT_STAGE_WAIT_FOR_COMMANDS')
         await closeDebugSessions(projectId,ctx.sessionId);await stopSoftwareSession(projectId,ctx.sessionId)
-        const result=await verifyProjectStage(projectId,input.stage_id,input.script,ctx.signal,input.restart===true)
+        const result=await verifyProjectStage(projectId,input.stage_id,input.script,ctx.signal,input.restart===true,beforeVerify?()=>beforeVerify(ctx):undefined)
         return{output:JSON.stringify(result),isError:result.status!=='passed',feedback:result.feedback}
       }catch(error){return{output:String(error),isError:true,feedback:verificationRefusalFeedback(error)}}
     }})

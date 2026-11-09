@@ -464,5 +464,21 @@ it('permits an additive targeted CLI case while refusing to delete or weaken the
  const register=(cases:unknown[])=>tool.execute({expectations:{'F-001':'2加3得5'},cases},ctx())
  expect((await register([old,extra])).isError).not.toBe(true)
  expect((await register([extra])).isError).toBe(true)
+ expect((await register([extra,old])).isError).toBe(true)
  expect((await register([{...old,stdout:'999'},extra])).isError).toBe(true)
 })
+
+it('reads exact frozen test contracts through review-owned file keys and refuses arbitrary paths',async()=>{
+ register(async function*(_prompt,options){
+  const read=quality.childProtocol.find(t=>t.name==='read_quality_review')!
+  const page=JSON.parse((await read.execute({test_file:'cli'},ctx(options.sessionId))).output)
+  expect(JSON.parse(page.text).cases[0]).toMatchObject({name:'sum',args:['2','3'],stdout:'5'})
+  expect(page.authority).toBe('frozen_test_input_not_execution_or_current_image')
+  await expect(read.execute({test_file:'../foreign'},ctx(options.sessionId))).rejects.toThrow('NOT_OWNED')
+  yield{type:'assistant',message:{role:'assistant',content:[{type:'tool_use',id:'materials',name:'read_quality_review',input:{}},{type:'tool_use',id:'source',name:'read_file',input:{path:'app.cjs'}},{type:'tool_use',id:'submit',name:'submit_quality_findings',input:{findings:[]}}]}}
+  yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
+ })
+ const child=await quality.begin(ctx());await findDelegation(parent,child.delegation_id)!.completion
+ expect(readQualityLedger(project.project_id).reviews.at(-1)?.status).toBe('complete')
+ await expect(quality.childProtocol[0].execute({test_file:'cli'},ctx())).rejects.toThrow('DENIED')
+},60000)

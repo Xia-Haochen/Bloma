@@ -64,7 +64,7 @@ import { handleLongtermMessage } from '../software/longterm-message'
 import { workflowRetirementReason } from './workflow-retirement'
 import { renderSoftwareWorkingContext } from '../software/working-context'
 import { createQualityReview } from '../software/quality-review'
-import { readQualityLedger, qualityRulesVersion } from '../software/quality-ledger'
+import { readQualityLedger, qualityCoverageRulesVersion } from '../software/quality-ledger'
 
 // Dissatisfaction is a repair request, not cancellation of the new workflow.
 const isStop = (text: string) => text.split(/[，。；！？,;!?\n]+/).some(part => /^(?:(?:请|先|现在|马上|暂时)\s*)*(?:停止|取消|暂停|停下|先停|别推进|暂缓|先别做|不要开工|stop|cancel|pause)(?:(?:当前|本次|这个)?(?:任务|流程|运行|执行|制作)|一下|吧|了|\s)*$/i.test(part.trim()))
@@ -118,14 +118,15 @@ export async function runLeanProduction(input: DesktopRouteInput, deps: DesktopR
   try {
     activatePendingEvaluation(input.projectId)
     recordEvaluationEvent(input.projectId,'operation_started',{session_id:input.sessionId,request_id:input.requestId})
-    const finish = await withLeanRuntime(input.projectId, 'desktop-implement', input.signal,
-      signal => runLeanProductionInner({ ...input, signal }, deps))
-    await finish?.()
+    await withLeanRuntime(input.projectId, 'desktop-implement', input.signal,async signal=>{
+      const finish=await runLeanProductionInner({...input,signal},deps)
+      await finish?.()
+    })
   } catch (error) {
     const code = error instanceof Error ? error.message : String(error)
     const monetaryNotice = monetaryStopMessage(error)
     const reason = monetaryNotice ? `${code}：${monetaryNotice}` : code
-    if (!input.signal?.aborted && !/LEASE_ACTIVE|ALREADY_ACTIVE/.test(reason)) updateProject(input.projectId, { status: 'active', current_stage: 'generating_mvp', desktop_phase: 'desktop-implement',
+    if (!input.signal?.aborted && !/LEASE_ACTIVE|ALREADY_ACTIVE|LEASE_LOST|TASK_ASSIGNMENT_|TASK_SCOPE_CHANGED/.test(reason)) updateProject(input.projectId, { status: 'active', current_stage: 'generating_mvp', desktop_phase: 'desktop-implement',
       desktop_blocked: { reason: 'verification-incomplete', note: reason, at: new Date().toISOString() } })
     const text = `本次执行未完成，现场与用量保留：${reason}`
     deps.persistAssistant(input.sessionId, text); deps.publish(input, 'message_delta', { text })
@@ -180,7 +181,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     if(!partner.isObserving())throw new ModelRequestRefusal('ENGINEERING_MONITOR_IDLE')
     const ledger=readQualityLedger(input.projectId)
     const bindingKinds=new Set(ledger.findings.filter(f=>['suspected','confirmed'].includes(f.disposition)&&['high','critical'].includes(f.severity)&&!f.retest).map(f=>f.review_kind??'code'))
-    const needsCoverage=(brief.lean_brief?.ui==='required'||Boolean(brief.requirements_model?.workflows?.length))&&!ledger.reviews.some(r=>r.purpose==='coverage'&&r.status==='complete'&&r.rules===qualityRulesVersion(input.projectId))
+    const needsCoverage=(brief.lean_brief?.ui==='required'||Boolean(brief.requirements_model?.workflows?.length))&&!ledger.reviews.some(r=>r.purpose==='coverage'&&r.status==='complete'&&r.rules===qualityCoverageRulesVersion(input.projectId))
     const mandatory=1+(brief.lean_brief?.ui==='required'?1:0)+bindingKinds.size+(needsCoverage?1:0)
     const quote=quoteMonetaryWork(input.env.ANTHROPIC_BASE_URL,input.env.ANTHROPIC_MODEL,input.maxTokens)
     const window=currentFundedExecutionWindow()
@@ -208,6 +209,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     deps.publish(input, type, payload)
   }
   const blocked = (reason: string, confirmation = false, state: SoftwareRunStatus = 'blocked') => {
+    assignment?.assertCurrent()
     if (/\b(?:MONETARY_(?:BUDGET|OPERATION)_EXHAUSTED|HARNESS_(?:REQUEST|OUTPUT)_BUDGET_EXHAUSTED|REQUEST_BUDGET_EXHAUSTED)\b/.test(reason)) {
       try {
         const observed = retainedDebugVersion(input.projectId, input.sessionId)
@@ -364,6 +366,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     return waiting
   }
   const advanceCloseout = async (ctx: import('../agent/loop/agent-loop').ToolContext, locallyChecked = false) => {
+    assignment?.assertCurrent()
     if(pendingTestCorrection(input.projectId)){
       await settleCorrections(ctx.signal)
       const checked=await verifySoftwareCandidate(input.projectId,input.requestId,ctx.signal)
@@ -374,11 +377,13 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     if (!locallyChecked && !await recentSoftwareVerification(input.projectId, input.requestId, ctx.signal)) return
     partner.suspend()
     await withAbort(partner.drain(),ctx.signal)
+    assignment?.assertCurrent()
     recordEvaluationEvent(input.projectId,'closeout_entered',{run_id:runId,request_id:input.requestId,source:softwareVerificationFingerprint(project.root_path)})
     const waiting = await waitForProductionChildren(ctx)
     if (waiting) return waiting
     const attemptedReviews=new Set<string>()
     for (;;) {
+      assignment?.assertCurrent()
       const action = await quality.completionAction(ctx.signal), gap = action.gate
       if(action.halt)throw Error(gap)
       if(action.next_tool==='apply_test_correction'){applyApprovedNativeCorrections(input.projectId,ctx.signal);const checked=await verifySoftwareCandidate(input.projectId,input.requestId,ctx.signal);if(checked.status!=='passed')return JSON.stringify(verificationResponse(input.projectId,checked));continue}
@@ -572,18 +577,16 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
       if (candidate) await verifyReleaseSource(candidate, runSignal)
       const text = `${modelBudgetStop ? '模型调用已停止；宿主沿已登记规则完成了实际验证。' : ''}已登记的本机案例、安全与启动检查通过，可从项目交付入口启动试用。完整需求效果尚未独立评定。${core.llm ? 'AI请求与异常分支已做本机HTTP检查，外部供应商连通与生成效果尚未实测。' : ''}继续修改可直接描述或点选。`
       return async () => {
-        runSignal.throwIfAborted()
+        runSignal.throwIfAborted();assignment?.assertCurrent()
         const finalQualityGap = await quality.gate(runSignal)
         if (finalQualityGap) { blocked(finalQualityGap); return }
         if (prdScopeFingerprint(readPrdBackplane(input.projectId)) !== scope || versionOf() !== version) { blocked('收口前产物或验证输入发生变化，本次未交付。'); return }
         const persistCandidate = async (mode: 'seal' | 'trial' | 'deliver') => {
           if (!candidate) return
-          const began = Date.now(); let accounted = false
-          try {
-            await (mode === 'seal' ? sealSoftwareRelease : promoteSoftwareRelease)(candidate,
-              { version, scope, at: new Date().toISOString(), collaboration_id: readQualityLedger(input.projectId).collaboration?.at(-1)?.id }, runSignal,
-              () => { budget.recordRuntime(Date.now() - began); accounted = true; return prdScopeFingerprint(readPrdBackplane(input.projectId)) === scope && versionOf() === version }, mode === 'deliver')
-          } finally { if (!accounted) budget.recordRuntime(Date.now() - began) }
+          assignment?.assertCurrent()
+          await (mode === 'seal' ? sealSoftwareRelease : promoteSoftwareRelease)(candidate,
+            { version, scope, at: new Date().toISOString(), collaboration_id: readQualityLedger(input.projectId).collaboration?.at(-1)?.id }, runSignal,
+            () => { assignment?.assertCurrent();return prdScopeFingerprint(readPrdBackplane(input.projectId)) === scope && versionOf() === version }, mode === 'deliver')
         }
         if (candidate) {
           if (isLongtermSoftware(input.projectId)) await persistCandidate('seal')

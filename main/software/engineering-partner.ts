@@ -86,7 +86,7 @@ export function createEngineeringPartner(enabled:boolean,knownChild?:(session:st
       const key=JSON.stringify([source(),event.name,fingerprint??event.input]),digest=fingerprint??createHash('sha256').update(JSON.stringify([event.isError,event.output])).digest('hex')
       if(deliveredFacts.get(key)===digest)return
       deliveredFacts.set(key,digest);if(deliveredFacts.size>256)deliveredFacts.delete(deliveredFacts.keys().next().value!)
-      add('tool',{id:event.id,name:event.name,phase:'completed',input:bounded(event.input,3000),result:bounded(event.output,6000),is_error:event.isError},event.turn,event.isError||Boolean(services.needsEvidence?.()&&['inspect_app','verify_app','run_command'].includes(event.name)))
+      add('tool',{id:event.id,name:event.name,phase:'completed',input:bounded(event.input,3000),result:bounded(event.output,6000),is_error:event.isError},event.turn,event.isError&&!['read_file','list_files','find','grep'].includes(event.name)||Boolean(services.needsEvidence?.()&&event.name==='verify_app'))
     },
     context(session:string){if(session!==child)return;prepared=sequence;return input()},
     observed(session:string,turn:AgentLoopTurnInfo){if(session===child&&!turn.failed){seen=Math.max(seen,prepared);if(seen>=sequence)pending=undefined}},

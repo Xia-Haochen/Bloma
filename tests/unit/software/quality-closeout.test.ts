@@ -100,3 +100,12 @@ it('keeps partial reviews out of candidate qualification and schedules an accept
  expect(qualityCloseout(facts,identity,{code:'investigation',message:'execute'},'rules')).toMatchObject({next_tool:'verify_app',required_investigation:['f']})
  expect(qualityWorkQueue(facts,identity,undefined,'rules').problems[0].investigation.binding).toEqual({case_name:'target',rules:'rules'})
 })
+
+it('accepts typed static correction only for static findings and never closes an executed failure with prose',()=>{
+ const correction={identity,review:'r',evidence:'exact static scope mismatch',basis:'not_applicable' as const}
+ const staticFinding=finding({requires_execution:false,reviewed:correction})
+ expect(qualityCloseout(ledger([staticFinding]),identity,undefined,'rules').required_investigation).toEqual([])
+ expect(qualityCloseout(ledger([finding({requires_execution:true,reviewed:correction})]),identity,undefined,'rules').required_investigation).toEqual(['f'])
+ const failed=finding({...staticFinding,disposition:'confirmed',checks:[{at:'',identity,rules:'rules',case_name:'target',grounded:true,outcome:'failed',observation:'observed assertion'}]})
+ expect(qualityCloseout(ledger([failed]),identity,undefined,'rules').must_fix).toEqual(['f'])
+})

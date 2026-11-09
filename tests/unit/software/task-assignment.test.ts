@@ -26,7 +26,7 @@ it('requires the existing lease and refuses duplicate ownership or stale complet
   a.checkpoint('interrupted',{error:'host interrupted'});budget.finishRuntime()
   budget.startRuntime();const b=beginProjectAssignment(project.project_id,'s','b')
   expect(b.task_id).toBe(a.task_id)
-  expect(()=>a.checkpoint('verified')).toThrow('STALE')
+  expect(()=>a.checkpoint('verified')).toThrow('STALE');expect(()=>a.assertCurrent()).toThrow('STALE')
   b.checkpoint('cancelled')
   expect(()=>b.checkpoint('running')).toThrow('ENDED')
   const view=projectTaskView(project.project_id)
@@ -41,4 +41,9 @@ it('does not turn a model completion or a changed source into verified work',()=
   writeFileSync(join(project.root_path,'changed.js'),'new source')
   expect(()=>a.checkpoint('verified',{candidateId:'old',source,check:{path:'missing',sha256:'bad'}})).toThrow('EVIDENCE_REQUIRED')
   expect(projectTaskView(project.project_id).tasks[0].assignments[0].status).toBe('running')
+})
+
+it('refuses closeout ownership after the original runtime lease has ended',()=>{
+ budget.startRuntime();const a=beginProjectAssignment(project.project_id,'s','a');a.assertCurrent()
+ budget.finishRuntime();expect(()=>a.assertCurrent()).toThrow('LEASE_LOST')
 })

@@ -47,7 +47,7 @@ export function buildLeanCliTool(projectId: string): AgentLoopTool {
         if (isSoftwareProject(projectId)) assertRetainedSoftwareBehavior(projectId, 'cli', suite)
         if (existsSync(cliSuitePath(projectId))) {
           const previous = parseSuite(JSON.parse(readFileSync(cliSuitePath(projectId), 'utf8')))
-          if (previous.scope_hash === suite.scope_hash && previous.cases.some(old=>!suite.cases.some(current=>JSON.stringify(current)===JSON.stringify(old)))) throw new Error('CLI_EXISTING_EXPECTATIONS_CHANGED')
+          if (previous.scope_hash === suite.scope_hash && previous.cases.some((old,index)=>JSON.stringify(suite.cases[index])!==JSON.stringify(old))) throw new Error('CLI_EXISTING_EXPECTATIONS_CHANGED')
         }
         writeTextFileAtomic(cliSuitePath(projectId), JSON.stringify(suite, null, 2))
         return { output: `已登记固定输入与输出预期，尚未运行或判定通过。${isSoftwareProject(projectId) ? '程序就绪后调用verify_app，按具体失败修复；通过后可以结束制作。' : ''}` }

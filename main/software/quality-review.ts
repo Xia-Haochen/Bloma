@@ -35,7 +35,7 @@ import { independentDesignVersion } from './independent-design'
 import { challengeIndependentCase } from './independent-quality'
 import { selectQualityCollaboration } from './collaboration-selection'
 
-import { registeredQualityCases, qualityFailureBaseline, applicableQualityLedger, qualityRulesVersion as rulesVersion, qualityHash as hash, sameIdentity as same, qualityIdentity as identity, readQualityLedger, saveQualityLedger, type Review, type ReviewKind, type ReviewPurpose, type Ledger, type QualityFinding } from './quality-ledger'
+import { qualityTestSources, qualityCoverageRulesVersion, registeredQualityCases, qualityFailureBaseline, applicableQualityLedger, qualityRulesVersion as rulesVersion, qualityHash as hash, sameIdentity as same, qualityIdentity as identity, readQualityLedger, saveQualityLedger, type Review, type ReviewKind, type ReviewPurpose, type Ledger, type QualityFinding } from './quality-ledger'
 export { qualityLedgerPath, readQualityLedger } from './quality-ledger'
 export type { QualityFinding } from './quality-ledger'
 
@@ -125,7 +125,7 @@ export function createQualityReview(projectId: string, parent: string, policy: R
     if (!same(binding, await identity(projectId, ctx.signal))) throw Error('QUALITY_CAPTURE_CANDIDATE_CHANGED')
     const inventory = kind === 'code' ? await runtimeInventory(findProject(projectId).root_path, ctx.signal) : undefined
     if (inventory && inventory.digest !== binding.source) throw Error('QUALITY_CAPTURE_CANDIDATE_CHANGED')
-    const review: Review = { id, kind, purpose, rules:rulesVersion(projectId), observation:currentObservation(), run_id: ctx.requestId, identity: binding, visual, ...(inventory ? { source_manifest: compactReviewManifest(inventory) } : {}), status: 'pending', at: new Date().toISOString() }
+    const review: Review = { id, kind, purpose, rules:purpose==='coverage'?qualityCoverageRulesVersion(projectId):rulesVersion(projectId), observation:currentObservation(), run_id: ctx.requestId, identity: binding, visual, ...(inventory ? { source_manifest: compactReviewManifest(inventory) } : {}), status: 'pending', at: new Date().toISOString() }
     ledger.reviews.push(review); save(ledger)
     pending = review
     try {
@@ -137,8 +137,8 @@ export function createQualityReview(projectId: string, parent: string, policy: R
   const ensureCoverage=async(ctx:ToolContext)=>{
     const brief=readPrdBackplane(projectId)
     if(brief.lean_brief?.ui!=='required'&&!brief.requirements_model?.workflows?.length)return
-    if(!registeredQualityCases(projectId).length)throw Error('QUALITY_COVERAGE_MATERIALS_REQUIRED')
-    const current=await identity(projectId,ctx.signal),rules=rulesVersion(projectId)
+    if(!registeredQualityCases(projectId,true).length)throw Error('QUALITY_COVERAGE_MATERIALS_REQUIRED')
+    const current=await identity(projectId,ctx.signal),rules=qualityCoverageRulesVersion(projectId)
     if(readQualityLedger(projectId).reviews.some(r=>r.purpose==='coverage'&&r.status==='complete'&&r.identity.target===current.target&&r.rules===rules))return
     const child=await begin(ctx,'code',undefined,'coverage')
     const run=findDelegation(parent,child.delegation_id)
@@ -151,17 +151,29 @@ export function createQualityReview(projectId: string, parent: string, policy: R
     ? readQualityLedger(projectId).reviews.find(r => r.id === children.get(child))?.kind === 'visual'
       ? '你是独立视觉/交互审阅V。只看宿主授权的当前候选真实图片、确认设计、同次DOM/操作事实；不继承制作方或C的结论，不读实现。先read_quality_review和view_quality_image；实际核对图片后用submit_quality_findings提交具体可见观察及疑点，不能用OCR/文件名/DOM替代看图，不能自报PASS或关闭问题。没有明确的业务预期保留争议；只读，不运行命令、不改文件。'
       : `你是独立只读代码/数据审阅C。项目根：${findProject(projectId).root_path}。业务范围以read_quality_review返回的已确认目标为依据；同时核对宿主提供的工程设计与工程底线。实现和设计是待查资料，不能当成已通过结论。定位具体触发、预期来源和证据，提交finding而非PASS。不看制作方自评，不改代码/预期，不运行命令。无法确定的业务规则保留争议。必须调用submit_quality_findings后才结束。` : undefined
-  const childProtocol: AgentLoopTool[] = [{ name: 'read_quality_review', description: '读取本只读审阅的候选身份与确认需求。', input_schema: { type: 'object', additionalProperties: false, properties: {} },
+  const childProtocol: AgentLoopTool[] = [{ name: 'read_quality_review', description: '读取本审阅的候选、确认需求及冻结测试索引。绑定case_name前核对冻结合同和相关测试正文；test_file只接受索引中的key，可用offset分页。', input_schema: { type: 'object', additionalProperties: false, properties: {test_file:{type:'string'},offset:{type:'integer',minimum:0}} },
     execute: async (_input, ctx) => {
       ctx.signal.throwIfAborted()
       const ledger = readQualityLedger(projectId), review = ledger.reviews.find(r => r.id === children.get(ctx.sessionId))
       if (ctx.projectId !== projectId || !review || !same(review.identity, await identity(projectId, ctx.signal))) throw Error('QUALITY_REVIEW_STALE_OR_DENIED')
+      if(Object.keys(_input).some(k=>!['test_file','offset'].includes(k))||_input.test_file===undefined&&_input.offset!==undefined)throw Error('QUALITY_REVIEW_INPUT_INVALID')
+      if(review.rules&&review.rules!==(review.purpose==='coverage'?qualityCoverageRulesVersion(projectId):rulesVersion(projectId)))throw Error('QUALITY_REVIEW_TESTS_CHANGED')
+      const testSources=qualityTestSources(projectId,review.purpose==='coverage')
+      if(_input.test_file!==undefined){
+        const file=testSources.find(f=>f.key===_input.test_file),offset=_input.offset??0
+        if(!file||!Number.isSafeInteger(offset)||(offset as number)<0)throw Error('QUALITY_TEST_FILE_NOT_OWNED')
+        const bytes=readFileSync(file.path)
+        if(createHash('sha256').update(bytes).digest('hex')!==file.sha256)throw Error('QUALITY_FROZEN_TEST_CHANGED')
+        const utf8=bytes.toString('utf8'),encoding=Buffer.from(utf8).equals(bytes)?'utf8':'base64',text=encoding==='utf8'?utf8:bytes.toString('base64')
+        return{output:JSON.stringify({file:file.key,sha256:file.sha256,encoding,offset,text:text.slice(offset as number,(offset as number)+16000),total_characters:text.length,
+          next:(offset as number)+16000<text.length?{test_file:file.key,offset:(offset as number)+16000}:undefined,authority:'frozen_test_input_not_execution_or_current_image'})}
+      }
       const brief = readPrdBackplane(projectId)
       const visual = review.visual ? readVisualMaterial(review.visual, hash(review.identity)).manifest : undefined
       const ux = readConfirmedUxBinding(projectId, brief)
       materialsRead.add(ctx.sessionId)
       return { output: JSON.stringify({ review, root: findProject(projectId).root_path, goal: brief.positioning, source_statements:brief.lean_brief?.intent_sources??brief.requirements_model?.sources, constraints: brief.constraints, assumptions: brief.assumptions, confirmed_ux: ux, design_policy: productDesignPolicy(brief),
-        test_coverage:{cases:registeredQualityCases(projectId),workflows:brief.requirements_model?.workflows,requirements:brief.requirements,authority:'派生阅读投影；按冻结测试正文核对连续操作和预期，登记F编号不证明场景覆盖。'},
+        frozen_test_files:testSources.map(({path,...entry})=>entry),test_coverage:{scope:review.purpose==='coverage'?'available_cumulative_slice':'complete_registered_suite',cases:registeredQualityCases(projectId,review.purpose==='coverage'),workflows:brief.requirements_model?.workflows,requirements:brief.requirements,authority:'派生阅读投影；按冻结测试正文核对连续操作和预期，登记F编号不证明场景覆盖。'},
         host_observation:review.observation, engineering_advice:engineeringAdvice?.(), confirmed_design: review.kind === 'visual' && ux?.html_path ? { html: readFileSync(join(findProject(projectId).root_path, ux.html_path), 'utf8').slice(0, 64000), bounded_characters: 64000 } : undefined,
         unresolved_findings: applicableQualityLedger(projectId).findings.filter(f=>findingNeedsClosure(f,review.identity,rulesVersion(projectId),independentDesignVersion(projectId))||findingNeedsInvestigation(f,review.identity,rulesVersion(projectId),independentDesignVersion(projectId))).map(f=>({...f,checks:f.checks.slice(-1)})), resolution_protocol:'旧疑点若被实际证据排除，在resolutions提交finding_id和具体触发/观察依据。普通案例通过不足以排除疑点；已确认失败不得用审阅关闭。', review_focus: review.kind === 'visual' ? undefined : reviewChangeContext(ledger, review.identity, review.source_manifest, review.id), intent: brief.requirements_model, intent_review_protocol: review.kind === 'visual' ? 'V仅按当前真实图片和同次操作事实检查布局/交互/内容/覆盖范围；不得声称核对全部长期业务。核心体验上下文用于识别偏题，具体疑点提交finding。截图可能保留用户或测试修改后的状态，当前数值不等于出厂默认；明确区分所见事实与推断。可自定义设置按已确认范围判断，不擅自把默认偏好变成禁止修改的约束。无需提交intent_observations。' : '有experience时逐项提交intent_observations:{commitment_id,status:supported|concern|unverified,evidence,limitations}；核对禁止替代。supported只是审阅意见，不代表真实运行通过。concern须提供finding_indices，填本次findings数组中对应问题的0起始索引，只关联真正影响该体验的问题；证据不足保留unverified。', visual_facts: visual, visual_checklist: review.kind === 'visual' ? visualReviewChecklist : undefined,
         engineering: review.kind === 'visual' ? undefined : { design: readEngineeringDesign(findProject(projectId).root_path), guidance: ENGINEERING_GUIDANCE, submission: '代码审阅提交engineering:{status:supported|concern|unverified,severity:high|medium|low,evidence,limitations}。具体引用文件/接口，核对职责、依赖、状态归属、错误和资源生命周期、测试与兼容。重要结构缺陷填concern并给严重性与具体影响，证据不足填unverified；普通建议和未评估项不阻断，不虚构F编号。设计文档与目录数量不能证明实现合理；supported仅表示审阅支持，实际行为仍由宿主验证。' }, requirements: brief.requirements.map(r => ({ id: r.id, description: r.description, expected_source: trustedAcceptance(brief, r) })), out_of_scope: brief.out_of_scope }) }

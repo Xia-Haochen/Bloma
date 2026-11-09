@@ -174,7 +174,7 @@ it('wire validation rejects OCR/name-only substitutes and changed images in eith
   expect(assertVisualRequest(JSON.stringify({ messages: [{ content: [{ type: 'image_url', image_url: { url: `data:image/png;base64,${data.toString('base64')}` } }] }] }), hash)).toMatch(/^[a-f0-9]{64}$/)
   expect(() => assertVisualRequest(JSON.stringify({ messages: [{ content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: Buffer.from('different').toString('base64') } }] }] }), hash)).toThrow('CHANGED')
 })
-it('normal production repairs local failures before buying C/V and publishes the stable GUI candidate', async () => {
+it('normal production reviews coverage then repairs local failures before candidate C/V and publication', async () => {
   const { enterDesktopLine } = await import('../../../main/desktop/desktop-route')
   const { findProject } = await import('../../../main/project/project-service')
   const { route, env } = register()
@@ -198,9 +198,9 @@ it('normal production repairs local failures before buying C/V and publishes the
   const ledger = readQualityLedger(project.project_id)
   expect(findProject(project.project_id).desktop_blocked, JSON.stringify({ step, ledger })).toBeUndefined()
   expect(findProject(project.project_id).status).toBe('completed')
-  expect(ledger.reviews.filter(r => r.status === 'complete').map(r => r.kind)).toEqual(['code', 'visual'])
+  expect(ledger.reviews.filter(r => r.status === 'complete').map(r => [r.purpose??'candidate',r.kind])).toEqual([['coverage','code'],['candidate','code'],['candidate','visual']])
   expect(verificationStatuses).toEqual(['failed','passed'])
-  expect(leanBudget(project.project_id, 'desktop-implement').snapshot().requests).toBe(step + wireBodies.length + 1)
+  expect(leanBudget(project.project_id, 'desktop-implement').snapshot().requests).toBe(step + wireBodies.length + 2)
   const artifacts = join(process.cwd(), 'run-artifacts', 'q2-visual'); mkdirSync(artifacts, { recursive: true })
   writeFileSync(join(artifacts, 'production-ledger.json'), JSON.stringify(ledger, null, 2))
   // A real verified baseline, not selector fixture metadata: only cosmetic CSS
@@ -230,7 +230,8 @@ it('normal production repairs local failures before buying C/V and publishes the
   expect(unchangedCalls).toBe(1);expect(wireBodies.length).toBe(stableWire);expect(stable.reviews.length).toBe(stableReviews)
   const evidence=join(process.cwd(),'run-artifacts','q4-selection');mkdirSync(evidence,{recursive:true});writeFileSync(join(evidence,'production-ledger.json'),JSON.stringify(stable,null,2))
 
-}, 180000)
+// Three operations retain their original 150s/120s/90s cancellation signals.
+}, (150+120+90+30)*1000)
 it('production stops on the first actual image rejection without retrying V or changing route', async () => {
   const { enterDesktopLine } = await import('../../../main/desktop/desktop-route')
   const { findProject } = await import('../../../main/project/project-service')

@@ -52,14 +52,21 @@ export function beginProjectAssignment(projectId: string, session: string, run: 
   task.current = run
   task.assignments.push({ id: run, session, lease: budget.runtimeOwner, status: 'running', started_at: new Date().toISOString(), source: softwareVerificationFingerprint(project.root_path) })
   save(projectId, state)
+  const owned=()=>{
+    const currentProject=findProject(projectId),currentBrief=readPrdBackplane(projectId),next=readProjectTasks(projectId)
+    const currentTask=next.tasks.find(t=>t.id===id),attempt=currentTask?.assignments.find(a=>a.id===run)
+    if(currentTask?.current!==run||!attempt||attempt.session!==session)throw Error('TASK_ASSIGNMENT_STALE')
+    if((currentProject.lean_operation_id??'initial')!==operation)throw Error('TASK_SCOPE_CHANGED')
+    const live=leanBudget(projectId,'desktop-implement').snapshot()
+    if(live.runtimeOwner!==attempt.lease||live.runtimePid!==process.pid)throw Error('TASK_EXECUTION_LEASE_LOST')
+    return{currentProject,currentBrief,next,attempt}
+  }
   return {
     task_id: id, assignment_id: run,
+    assertCurrent(){const {currentBrief,attempt}=owned();if(prdScopeFingerprint(currentBrief)!==scope)throw Error('TASK_SCOPE_CHANGED');if(['cancelled','interrupted'].includes(attempt.status))throw Error('TASK_ASSIGNMENT_ENDED')},
     checkpoint(status: SoftwareRunStatus, patch: { source?: string; candidateId?: string; error?: string; check?: { path: string; sha256: string } } = {}) {
-      const currentProject = findProject(projectId), currentBrief = readPrdBackplane(projectId)
-      if (['running','verifying','repairing','verified'].includes(status) && ((currentProject.lean_operation_id ?? 'initial') !== operation || prdScopeFingerprint(currentBrief) !== scope)) throw Error('TASK_SCOPE_CHANGED')
-      const next = readProjectTasks(projectId), currentTask = next.tasks.find(t => t.id === id)
-      const attempt = currentTask?.assignments.find(a => a.id === run)
-      if (currentTask?.current !== run || !attempt || attempt.session !== session) throw Error('TASK_ASSIGNMENT_STALE')
+      const {currentProject,currentBrief,next,attempt}=owned()
+      if(['running','verifying','repairing','verified'].includes(status)&&prdScopeFingerprint(currentBrief)!==scope)throw Error('TASK_SCOPE_CHANGED')
       if (['cancelled', 'interrupted'].includes(attempt.status) && status !== attempt.status) throw Error('TASK_ASSIGNMENT_ENDED')
       if (status === 'verified') {
         if (!patch.check || !patch.candidateId || !patch.source || patch.source !== softwareVerificationFingerprint(currentProject.root_path)) throw Error('TASK_HOST_EVIDENCE_REQUIRED')

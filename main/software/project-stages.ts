@@ -68,7 +68,7 @@ export function readProjectStageReport(id:string,input:{attempt_id:unknown;repor
     next:end<text.length?{tool:'read_production_context',arguments:{topic:'project-stages',attempt_id:attempt.id,report_hash:hash,offset:end}}:undefined}
 }
 /** Partial checks do not overwrite the formal GUI suite or weaken its full coverage. */
-export async function verifyProjectStage(id: string, stageId: string, script: string, signal: AbortSignal, restart = false) {
+export async function verifyProjectStage(id: string, stageId: string, script: string, signal: AbortSignal, restart = false, beforeExecute?:()=>Promise<void>) {
   signal.throwIfAborted()
   if (active.has(id)) throw Error('PROJECT_STAGE_ALREADY_RUNNING')
   const project = findProject(id), brief = readPrdBackplane(id), scope = prdScopeFingerprint(brief)
@@ -90,6 +90,7 @@ export async function verifyProjectStage(id: string, stageId: string, script: st
   state.attempts.push(attempt); save(id, state); active.add(id)
   recordEvaluationEvent(id, 'stage_check_started', { stage: stageId, attempt: attempt.id, covers: attempt.covers })
   try {
+    await beforeExecute?.()
     const candidate = await prepareSoftwareRelease(id, project.root_path, signal)
     attempt.candidate = candidate.id
     if (!['browser','electron'].includes(candidate.launch.ui ?? '')) throw Error('PROJECT_STAGE_NATIVE_GUI_REQUIRED')

@@ -1,3 +1,4 @@
+import {registeredQualityCases} from '../../../main/software/quality-ledger'
 import { launchSoftwareTrial, closeSoftwareTrial } from '../../../main/software/trial'
 import { latestCheckedStageCandidate } from '../../../main/software/project-stages'
 import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs'
@@ -10,7 +11,7 @@ import { readPrdBackplane, markPrdUserConfirmed } from '../../../main/project/pr
 import { syncDocuments } from '../../../main/project/document-sync'
 import { parseLeanBrief } from '../../../main/guide/lean-brief'
 import { prdScopeFingerprint } from '../../../main/project/requirement-contract'
-import { projectStageView, verifyProjectStage } from '../../../main/software/project-stages'
+import { readProjectStages, projectStageView, verifyProjectStage } from '../../../main/software/project-stages'
 import { registerNativeGuiTests } from '../../../main/software/native-gui-registration'
 import { guiSuitePath } from '../../../main/desktop/gui-acceptance'
 let home:string,old:string|undefined,project:ReturnType<typeof createProject>
@@ -32,7 +33,7 @@ it.each([false,true])('runs cumulative GUI journeys and preserves earlier contra
   writeFileSync(join(root,'index.html'),`<!doctype html><button id="add">登记</button><button id="repair">维修A</button><button id="borrow">借出A</button><div id="list"></div><script>function render(items){document.querySelector('#list').replaceChildren();for(const [id,v]of Object.entries(items)){for(const key of ['name','state']){const el=document.createElement('p');el.id=key+'-'+id;el.textContent=v[key];document.querySelector('#list').append(el)}}}for(const action of ['add','repair','borrow'])document.getElementById(action).onclick=async()=>render(await(await fetch('/action/'+action)).json());fetch('/items').then(r=>r.json()).then(render)</script>`)
   const script=(body:string)=>writeFileSync(join(root,'acceptance.mjs'),`export default async({test,page,expect,phase})=>{${body}}`)
   script(first)
-  expect((await verifyProjectStage(project.project_id,'store','acceptance.mjs',new AbortController().signal,true)).status).toBe('passed')
+  expect((await verifyProjectStage(project.project_id,'store','acceptance.mjs',new AbortController().signal,true,async()=>{expect(readProjectStages(project.project_id).attempts.at(-1)?.executed).toBe(false);expect(registeredQualityCases(project.project_id,true).map(c=>c.requirements)).toEqual([['F-001']]);expect(registeredQualityCases(project.project_id)).toEqual([])})).status).toBe('passed')
   expect(existsSync(guiSuitePath(project.project_id))).toBe(false)
   expect(projectStageView(project.project_id).next_stage).toBe('flow')
   let entry='acceptance.mjs'

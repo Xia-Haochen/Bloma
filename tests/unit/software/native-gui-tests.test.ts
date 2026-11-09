@@ -1,3 +1,4 @@
+import {qualityTestSources} from '../../../main/software/quality-ledger'
 import {proposeTestTransaction,applyApprovedTestCorrections} from '../../../main/software/test-corrections'
 import {reviewPendingTestCorrections} from '../../../main/software/test-correction-review'
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, readdirSync } from 'node:fs';
@@ -413,4 +414,12 @@ it('rejects a known unsupported Electron adapter before freezing',()=>{
  writeFileSync(join(project.root_path,'tests/acceptance.mjs'),script.replace('test,page,expect,assert,phase,evidenceDir','test,page,context,expect,assert,phase,evidenceDir').replace("assert.ok(evidenceDir);","await context.newPage();assert.ok(evidenceDir);"))
  expect(()=>registerNativeGuiTests(project.project_id,'tests/acceptance.mjs')).toThrow('GUI_NATIVE_CAPABILITY_UNSUPPORTED')
  expect(existsSync(guiSuitePath(project.project_id))).toBe(false)
+})
+
+it('calls host coverage after freezing the complete script and before any execution receipt',async()=>{
+ const coverage=vi.fn(async()=>{expect(JSON.parse(readFileSync(guiSuitePath(project.project_id),'utf8')).native_tests.cases.length).toBeGreaterThan(0);const frozen=qualityTestSources(project.project_id).find(f=>f.key.endsWith('/tests/acceptance.mjs'))!;expect(readFileSync(frozen.path,'utf8')).toBe(script);throw Error('COVERAGE_REQUIRES_CONTINUOUS_ACCOUNT_JOURNEY')})
+ const tool=buildSoftwareVerifyTool(project.project_id,createSoftwareCollaborationPolicy(project.project_id,project.root_path,'s'),undefined,coverage)
+ const result=await tool.execute({script:'tests/acceptance.mjs'}, {projectId:project.project_id,sessionId:'s',requestId:'coverage',signal:AbortSignal.timeout(30000),state:createToolState()})
+ expect(coverage).toHaveBeenCalledTimes(1);expect(result.isError).toBe(true);expect(result.output).toContain('COVERAGE_REQUIRES_CONTINUOUS_ACCOUNT_JOURNEY')
+ expect(existsSync(join(home,'software-verification',project.project_id+'.json'))).toBe(false)
 })

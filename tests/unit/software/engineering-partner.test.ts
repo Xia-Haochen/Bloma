@@ -24,7 +24,7 @@ it('resumes the same Agent only for new meaningful evidence and never polls whil
   const peer=createEngineeringPartner(true);peer.begin(ctx());peer.context('child');peer.observed('child',{turn:1,toolCalls:[]});h.record.status='completed'
   peer.take(ctx());peer.begin(ctx());expect(h.resume).not.toHaveBeenCalled()
   peer.observeStatement({turn:2,text:'收到建议，准备交给宿主。'});expect(h.resume).not.toHaveBeenCalled()
-  peer.observeTool(event('read','read_file','source text'));expect(h.resume).toHaveBeenCalledTimes(1)
+  peer.observeTool(event('execution','run_command','new execution failure'));expect(h.resume).toHaveBeenCalledTimes(1)
   peer.observeTool(event('probe'));expect(h.resume).toHaveBeenCalledTimes(1)
   expect(h.resume.mock.calls[0][1]).toBe('peer');expect(JSON.stringify(peer.context('child'))).toContain('actual room=normal')
   expect(h.start).toHaveBeenCalledTimes(1)
