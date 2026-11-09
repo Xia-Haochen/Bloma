@@ -49,7 +49,7 @@ export function applyApprovedNativeCorrections(projectId:string,signal?:AbortSig
   if(!native)return count>0
   const revisions=testCorrectionView(projectId).proposals.filter(p=>p.status==='approved'&&p.applied_at)
   const latest=new Map(revisions.map(p=>[p.file,p.new_hash]))
-  const stale=native.files.some(file=>{
+  const stale=revisions.some(p=>p.transaction&&p.contract_digest===native.digest&&p.replacement_digest!==native.digest)||native.files.some(file=>{
     const path=native.layout==='project'?file.path:native.directory+'/'+file.path
     return latest.has(path)&&file.sha256!==latest.get(path)&&revisions.some(p=>p.file===path&&p.old_hash===file.sha256)
   })

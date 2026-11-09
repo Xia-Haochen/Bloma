@@ -1,6 +1,6 @@
 import type {AgentLoopTool} from '../agent/loop/agent-loop'
 import type {createSoftwareCollaborationPolicy} from './collaboration-policy'
-import {applyTestCorrection,proposeTestCorrection,readTestContractFile,testCorrectionView} from './test-corrections'
+import {applyTestCorrection,proposeTestTransaction,readTestContractFile,testCorrectionView} from './test-corrections'
 import {verificationRefusalFeedback} from './verification-report'
 
 export function buildTestCorrectionTools(id:string,policy:ReturnType<typeof createSoftwareCollaborationPolicy>):AgentLoopTool[]{
@@ -20,9 +20,9 @@ export function buildTestCorrectionTools(id:string,policy:ReturnType<typeof crea
         return{...value,text:value.text.slice(offset,end),offset,total_characters:value.text.length,truncated:offset>0||end<value.text.length,
           next:end<value.text.length?{tool:'read_test_contract',arguments:{contract_digest:input.contract_digest,file:input.file,offset:end,limit}}:undefined}
       }),
-    tool('propose_test_correction','冻结测试的内容疑似违背确认需求或无法执行时，提出精确修改，不直接改测试。old_text必须唯一匹配宿主冻结原文；给出需求F编号和证据理由。独立宿主裁定前暂停，不重试不换入口绕过。',
-      {contract_digest:{type:'string'},file:{type:'string'},old_text:{type:'string',maxLength:16000},new_text:{type:'string',maxLength:16000},feature_ids:{type:'array',items:{type:'string'}},reason:{type:'string',maxLength:3000}},
-      ['contract_digest','file','old_text','new_text','feature_ids','reason'],input=>proposeTestCorrection(id,input)),
+    tool('propose_test_correction','提交当前工作版本的完整测试修正：宿主封存入口、依赖和声明资源，计算与冻结基线的差异并独立裁定。提交不批准、不签发PASS；后续工作区修改不会改变待审候选。',
+      {contract_digest:{type:'string'},script:{type:'string'},working_digest:{type:'string'},reason:{type:'string',maxLength:3000}},
+      ['contract_digest','script','reason'],input=>proposeTestTransaction(id,input)),
     tool('apply_test_correction','仅应用已经独立宿主批准的精确测试修改；模型不能批准。若工作文件另被修改，先从read_test_contract恢复原字节。应用不等于通过，随后重跑保留案例。',
       {proposal_id:{type:'string'}},['proposal_id'],input=>applyTestCorrection(id,input.proposal_id)),
   ]

@@ -6,7 +6,7 @@ import {runSecurityScan} from '../verification/security-scan'
 import {parseGuiSuite} from '../desktop/gui-acceptance'
 import {prepareSoftwareRelease,runtimeInventory} from './release-store'
 import {runNativeGuiTests} from './native-gui-observer'
-import {pendingTestCorrectionInputs} from './test-corrections'
+import {pendingTestCorrectionInputs,stageTestCorrectionCandidate} from './test-corrections'
 
 /** Execute the exact proposal in a disposable candidate before adjudication.
  * Its release manifest intentionally stays invalid: this is diagnosis, never
@@ -21,7 +21,8 @@ export async function probeTestCorrection(projectId:string,proposal:ReturnType<t
   // Stage only the exact proposed bytes in the disposable candidate. Native
   // execution still verifies every frozen dependency; application to the live
   // tree remains separately gated by independent approval and byte identity.
-  writeFileSync(file,proposal.after.text)
+  if(proposal.transaction)stageTestCorrectionCandidate(projectId,proposal.native,candidate.root)
+  else writeFileSync(file,proposal.after.text)
   const expected=await runtimeInventory(candidate.root,signal,candidate.dependencies)
   const security=runSecurityScan({project_id:projectId,root_path:candidate.root,profile:'local-software'})
   if(!security.passed)throw Error('TEST_CORRECTION_PROBE_SECURITY_FAILED')

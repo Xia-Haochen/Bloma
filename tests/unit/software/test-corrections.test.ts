@@ -1,3 +1,4 @@
+import {proposeTestTransaction,pendingTestCorrectionInputs,stageTestCorrectionCandidate} from '../../../main/software/test-corrections'
 import {applyApprovedNativeCorrections} from '../../../main/software/native-gui-registration'
 import {guiSuitePath} from '../../../main/desktop/gui-acceptance'
 import {buildSoftwareVerifyTool} from '../../../main/software/verification-tool'
@@ -226,4 +227,36 @@ it('host resumes a correction applied before formal binding refresh without repe
  expect(JSON.parse(readFileSync(guiSuitePath(p.project_id),'utf8')).native_tests.digest).not.toBe(oldSuite.native_tests!.digest)
  expect(applyApprovedNativeCorrections(p.project_id)).toBe(false)
  expect(readTestContractFile(p.project_id,before.digest,'acceptance.mjs').text).toBe(original)
+})
+
+it('seals a large multi-file candidate, stages exact resources and rejects conflicting edits atomically',()=>{
+  const root=p.root_path, entry=join(root,'acceptance.mjs')
+  const proposed="import {helper} from './helper.mjs';\n"+original.replace("await page.click('#load');","helper();await page.click('#load');")+'\n/*'+ 'large-script '.repeat(4000)+'*/'
+  writeFileSync(entry,proposed);writeFileSync(join(root,'helper.mjs'),'export const helper=()=>42')
+  writeFileSync(join(root,'native-inputs.json'),JSON.stringify({files:['fixture.txt']}));writeFileSync(join(root,'fixture.txt'),'frozen fixture')
+  const result=proposeTestTransaction(p.project_id,{contract_digest:before.digest,script:'acceptance.mjs',reason:'修复共享辅助调用并补充必要输入，不改业务断言'})
+  const pending=pendingTestCorrectionInputs(p.project_id)[0]
+  expect(pending.files!.after.map(f=>f.file)).toEqual(['fixture.txt','helper.mjs','native-inputs.json'])
+  expect(pending.after.text.length).toBeGreaterThan(42000)
+  writeFileSync(join(root,'fixture.txt'),'conflicting later edit')
+  const probe=join(home,'isolated-probe');mkdirSync(probe)
+  stageTestCorrectionCandidate(p.project_id,pending.native,probe)
+  expect(readFileSync(join(probe,'fixture.txt'),'utf8')).toBe('frozen fixture')
+  expect(readFileSync(join(probe,'acceptance.mjs'),'utf8')).toBe(proposed)
+  decideTestCorrection(p.project_id,result.id,decision(result.id))
+  writeFileSync(entry,original)
+  expect(()=>applyTestCorrection(p.project_id,result.id)).toThrow('WORKING_BYTES_CHANGED')
+  expect(readFileSync(entry,'utf8')).toBe(original)
+  writeFileSync(join(root,'fixture.txt'),'frozen fixture')
+  applyTestCorrection(p.project_id,result.id)
+  const after=freezeNativeGuiTests(p.project_id,root,'acceptance.mjs',['F-001'])
+  expect(after.digest).toBe(pending.native.digest)
+  expect(filterApprovedTestChanges(p.project_id,before,after,nativeTestContractChanges(before,after))).toEqual([])
+  expect(readProjectStages(p.project_id).attempts[0].status).toBe('failed')
+  expect(readTestContractFile(p.project_id,before.digest,'acceptance.mjs').text).toBe(original)
+})
+it('rejects stale working versions and replacing the registered entry',()=>{
+  writeFileSync(join(p.root_path,'acceptance.mjs'),original+'\n// repaired')
+  expect(()=>proposeTestTransaction(p.project_id,{contract_digest:before.digest,script:'acceptance.mjs',working_digest:before.digest,reason:'repair'})).toThrow('WORKING_BYTES_CHANGED')
+  expect(()=>proposeTestTransaction(p.project_id,{contract_digest:before.digest,script:'different.mjs',reason:'replace'})).toThrow('PROPOSAL_INVALID')
 })

@@ -197,3 +197,13 @@ Get-Content "$repairTrialRoot\monetary-policy.json.state.json" -Raw | ConvertFro
 - 该夹具改为声明实际版本并调用prepareSoftwareRuntime显式准备；原案例、GUI断言及正式verifySoftwareCandidate通过要求不变。定向真实Electron正式验收复验通过，见engineering-repair-native-electron-20261109.log（1通过、25未选中）。其后类型检查通过，见engineering-repair-types-closeout-20261109.log。没有重复整套标准回归；178项原通过与该项复验分别保留。
 - 当前完成的是1a运行时绑定和3a可读诊断子项。第1批完整实例上下文、第2批多文件修正事务、第3批独立裁定/失败分布/动作计数/静态扫描、第4批伙伴调度与进展治理、第5批校园组合反例复现均未完成，不能关闭本次工程修复任务。
 - 暂停标记仍在；账本读取仍430 reported、1 unknown；未发送付费模型请求，未改原失败/提案/冻结预期/费用记录，未push。保护文档hash-object仍为53c7abb3aef8497d8b0522b8aab806c82b2ec164。
+
+## 10 接续修复（2026-11-09）
+
+### 批次2：完整测试候选事务
+
+正常Agent提案入口改为contract_digest、script、reason（可附working_digest作乐观并发检查），不再暴露old_text/new_text。旧单文件记录与宿主回归入口保留兼容。宿主冻结当前完整可达输入，差异包含新增/删除/修改；保留入口、案例集合、原需求预期及重开要求。完整入口文本与其它依赖分别供独立审阅，不截断冒充完整输入；超过裁定输入上限仍明确拒绝。
+
+同一封存候选用于隔离试跑、批准和应用。多文件应用先检查所有输入冲突，IO失败回滚；中断留下的准确旧/新字节可恢复，未完成应用仍受原发布门禁阻断。批准链按完整候选摘要连接，旧记录不改写；正式复验仍必需。
+
+验证：test-corrections 19项通过，随后多文件冲突/大脚本定向2项复验通过（重叠不相加）。覆盖大于42000字符入口、多文件修正、新资源、冻结原文保留、准确隔离装入、后续编辑冲突、旧失败保留；旧真实浏览器纠正后正式复验链路仍通过。日志engineering-repair-transactions-20261109.log、engineering-repair-native-transaction-20261109.log、engineering-repair-transaction-final-20261109.log。后续组合与完整离线结果另记，不以本批代替全部退出条件。
