@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto'
 import {startDelegation,continueDelegation,findDelegation} from '../agent/delegation/agent-collaboration'
 import type {AgentLoopTurnInfo,ToolContext,ToolObservation} from '../agent/loop/agent-loop'
 import {redactSoftwareOutput} from './process-manager'
@@ -15,6 +16,7 @@ export function createEngineeringPartner(enabled:boolean,knownChild?:(session:st
   let id:string|undefined,child:string|undefined,ctx:ToolContext|undefined,active=false,starting=false,initialized=false
   let sequence=0,prepared=0,seen=0,pending:'observation'|'resume'|undefined,unavailable:string|undefined,lastQuestion:string|undefined
   let observations:Observation[]=[],updates:Update[]=[]
+  const deliveredFacts=new Map<string,string>()
   const current=()=>ctx&&id?findDelegation(ctx.sessionId,id):undefined
   const facts=()=>{try{return services.facts?.()}catch(error){return{available:false,error:String(error)}}}
   const source=()=>{try{return services.source?.()}catch{return undefined}}
@@ -49,7 +51,8 @@ export function createEngineeringPartner(enabled:boolean,knownChild?:(session:st
   const add=(kind:Observation['kind'],data:unknown,turn?:number,meaningful=true)=>{
     if(!enabled||!active||!ctx||ctx.signal.aborted)return
     observations.push({seq:++sequence,at:new Date().toISOString(),request_id:ctx.requestId,kind,turn,source:source(),data})
-    observations=observations.slice(-8)
+    observations=observations.slice(-32)
+    while(observations.length>1&&JSON.stringify(observations).length>48000)observations.shift()
     if(meaningful&&pending!=='resume')pending='observation'
     if(meaningful)wake()
   }
@@ -70,12 +73,15 @@ export function createEngineeringPartner(enabled:boolean,knownChild?:(session:st
     observeUserRequest(message:{turn:number;text:string}){if(enabled&&active&&message.text.trim())add('user_request',bounded(message.text,4000),message.turn)},
     observeTool(event:ToolObservation){
       if(!enabled||!active||ctx?.signal.aborted)return
-      if(event.phase==='started'){add('tool',{id:event.id,name:event.name,phase:'started',input:bounded(event.input,3000),note:'已请求执行，尚无结果，不能推断成功或失败。'},event.turn);return}
+      if(event.phase==='started'){add('tool',{id:event.id,name:event.name,phase:'started',input:bounded(event.input,3000),note:'已请求执行，尚无结果，不能推断成功或失败。'},event.turn,false);return}
       if(event.halted){active=false;pending=undefined;return}
       // Once returned, one observation carries both requested input and actual
       // output. The complete start/end chronology remains in the parent audit.
       observations=observations.filter(row=>!(row.kind==='tool'&&row.turn===event.turn&&row.request_id===ctx?.requestId&&(row.data as {id?:string;phase?:string}).id===event.id&&(row.data as {phase?:string}).phase==='started'))
       if(event.name==='answer_delegation_question')lastQuestion=undefined
+      const key=JSON.stringify([source(),event.name,event.input]),digest=createHash('sha256').update(JSON.stringify([event.isError,event.output])).digest('hex')
+      if(deliveredFacts.get(key)===digest)return
+      deliveredFacts.set(key,digest);if(deliveredFacts.size>256)deliveredFacts.delete(deliveredFacts.keys().next().value!)
       add('tool',{id:event.id,name:event.name,phase:'completed',input:bounded(event.input,3000),result:bounded(event.output,6000),is_error:event.isError},event.turn)
     },
     context(session:string){if(session!==child)return;prepared=sequence;return input()},

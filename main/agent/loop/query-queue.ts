@@ -1,24 +1,23 @@
-import type { SDKQuery } from '../../orchestration/stages/orchestration-contracts'
-import { withAbort } from './agent-loop'
+import type { SDKQuery, SDKQueryOptions } from '../../orchestration/stages/orchestration-contracts'
 
-/** Agents may work concurrently, but share one model reservation at a time.
- * This queue grants no money and leaves all existing physical-request guards
- * in place. A cancelled waiter cannot release another request's active slot. */
-export function serializeModelQueries(query:SDKQuery):SDKQuery {
-  let tail=Promise.resolve()
+/** A single reservation is the conservative budget fallback. Priority only
+ * orders waiting requests; it never cancels an owner or grants extra money. */
+export function serializeModelQueries(query:SDKQuery,priority:(options:SDKQueryOptions)=>number=()=>0):SDKQuery {
+  let busy=false,sequence=0
+  const waiting:Array<{rank:number;sequence:number;grant:()=>void}>=[]
+  const dispatch=()=>{if(busy||!waiting.length)return;waiting.sort((a,b)=>a.rank-b.rank||a.sequence-b.sequence);busy=true;waiting.shift()!.grant()}
   return async function*(prompt,options){
     options.signal.throwIfAborted()
-    const previous=tail
-    let release!:()=>void
-    tail=new Promise<void>(resolve=>{release=resolve})
     let acquired=false
+    await new Promise<void>((resolve,reject)=>{
+      const item={rank:priority(options),sequence:sequence++,grant:()=>{options.signal.removeEventListener('abort',abort);acquired=true;resolve()}}
+      const abort=()=>{const index=waiting.indexOf(item);if(index>=0)waiting.splice(index,1);reject(options.signal.reason??Error('cancelled'))}
+      options.signal.addEventListener('abort',abort,{once:true});waiting.push(item);dispatch()
+    })
     try{
-      await withAbort(previous,options.signal);acquired=true;options.signal.throwIfAborted()
+      options.signal.throwIfAborted()
       const {refreshMessages,...rest}=options
       yield* query(prompt,refreshMessages?{...rest,messages:refreshMessages()}:rest)
-    }finally{
-      if(acquired)release()
-      else void previous.then(release,release)
-    }
+    }finally{if(acquired){busy=false;dispatch()}}
   }
 }

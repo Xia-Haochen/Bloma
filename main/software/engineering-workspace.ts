@@ -141,6 +141,8 @@ export function createEngineeringWorkspaces(projectId:string,productRoot:string,
       input_schema:{type:'object',additionalProperties:false,required:['command'],properties:{command:{type:'array',items:{type:'string'}},cwd:{type:'string'},timeout_ms:{type:'integer',minimum:100,maximum:60000}}},
       execute:async(input:Record<string,unknown>,ctx:ToolContext)=>{
         check(ctx)
+        const literal=JSON.stringify(input.command).replaceAll('\\\\','/').toLowerCase()
+        if(literal.includes(findProject(projectId).root_path.replaceAll('\\','/').toLowerCase()))throw Error('ENGINEERING_USE_VERSIONED_SOURCE: 使用context.json中的准确版本副本；当前产品路径不属于该探针的输入身份。命令仍不是OS沙箱。')
         const started=new Date().toISOString(),timeout=Number(input.timeout_ms??60000)
         if(!Number.isSafeInteger(timeout)||timeout<100||timeout>60000)throw Error('ENGINEERING_COMMAND_TIMEOUT_INVALID')
         let result:Record<string,unknown>

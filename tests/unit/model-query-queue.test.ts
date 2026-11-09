@@ -53,3 +53,11 @@ it('settles shared full-image reservations before admitting the next role',async
     expect(count).toBe(2);expect(budget.snapshot()).toMatchObject({physical_requests:2,unreported_requests:0,upper_rmb:0.0002})
   }finally{rmSync(root,{recursive:true,force:true})}
 })
+
+it('prioritizes waiting maker and necessary review requests without stealing the active reservation',async()=>{
+ const entered=latch(),release=latch(),calls:string[]=[]
+ const query=serializeModelQueries(async function*(prompt){calls.push(prompt);if(prompt==='active'){entered.resolve();await release.promise}yield{type:'result',subtype:'success'}},o=>o.sessionId==='maker'?0:1)
+ const active=drain(query,'active');await entered.promise
+ const peer=drain(query,'peer'),maker=drain(query,'maker',{...options(),sessionId:'maker'})
+ expect(calls).toEqual(['active']);release.resolve();await Promise.all([active,peer,maker]);expect(calls).toEqual(['active','maker','peer'])
+})

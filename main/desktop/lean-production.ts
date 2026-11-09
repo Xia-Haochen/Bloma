@@ -8,7 +8,7 @@ import { locallyVerifiedSoftware } from '../software/verification'
 import {ModelRequestRefusal} from '../platform/llm/model-request-refusal'
 import {applyApprovedNativeCorrections} from '../software/native-gui-registration'
 import {reviewPendingTestCorrections} from '../software/test-correction-review'
-import {pendingTestCorrection,testCorrectionFacts} from '../software/test-corrections'
+import {pendingTestCorrection,testCorrectionFacts,testCorrectionRejectionFeedback} from '../software/test-corrections'
 import {executionWindowFacts} from '../software/execution-limits'
 import { productDesignPolicy } from '../project/product-design-policy'
 import { beginProjectAssignment } from '../software/task-assignment'
@@ -147,7 +147,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   const pairedEngineering=process.env.BLOMA_ENGINEERING_PARTNER==='1'
   // Maker, peer and isolated adjudication use the same transport queue, so an
   // in-flight peer reservation is not mistaken for permanently exhausted funds.
-  const executionQuery=pairedEngineering?serializeModelQueries(input.query):input.query
+  const executionQuery=pairedEngineering?serializeModelQueries(input.query,options=>options.sessionId===input.sessionId||options.sessionId?.startsWith(input.sessionId+'-test-review-')?0:1):input.query
   const correctionQuery=leanBudget(input.projectId,'desktop-implement').wrap(executionQuery)
   const settleCorrections=async(reviewSignal:AbortSignal)=>{
     await reviewPendingTestCorrections({projectId:input.projectId,sessionId:input.sessionId,query:correctionQuery,env:input.env,maxTokens:input.maxTokens,signal:reviewSignal})
@@ -430,6 +430,11 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
           // Only an actual full verification for the exact current inputs
           // starts closeout. Partial stage checks and self-reported success do not.
           if(scopePending)return
+          if(calls.some(c=>c.name==='propose_test_correction'&&c.status==='ok')){
+            await settleCorrections(ctx.signal)
+            const rejected=testCorrectionRejectionFeedback(input.projectId)
+            if(rejected)return{feedback:JSON.stringify(testCorrectionFacts(input.projectId)),verification:rejected}
+          }
           const advice=partner.take(ctx)
           if(advice)return{feedback:advice}
           if(!calls.some(c=>c.status==='ok'&&!c.pending&&['verify_app','inspect_app'].includes(c.name)))return

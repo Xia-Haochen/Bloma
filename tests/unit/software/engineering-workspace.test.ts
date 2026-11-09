@@ -143,3 +143,10 @@ it('lets an owned peer read the actual quality finding without changing evidence
   lease.release()
   await expect(read.execute({finding_id:finding.id},ctx())).rejects.toThrow('ENGINEERING_WORKSPACE_INACTIVE')
 })
+
+it('rejects an explicit live product path instead of mixing a probe with mutable product inputs',async()=>{
+ const work=createEngineeringWorkspaces(project.project_id,project.root_path,'parent');work.prepare('child',args)
+ const command=work.tools('child').find(t=>t.name==='run_command')!
+ await expect(command.execute({command:['node',join(project.root_path,'app.js')]},ctx())).rejects.toThrow('ENGINEERING_USE_VERSIONED_SOURCE')
+ expect(readFileSync(join(project.root_path,'app.js'),'utf8')).toBe('original')
+})

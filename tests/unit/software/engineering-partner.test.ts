@@ -32,7 +32,7 @@ it('resumes the same Agent only for new meaningful evidence and never polls whil
 it('sees an actionable public plan before execution, and sees direct user steering as distinct from producer claims',()=>{
   const peer=createEngineeringPartner(true);peer.begin(ctx());peer.context('child');peer.observed('child',{turn:1,toolCalls:[]});h.record.status='completed'
   peer.observeStatement({turn:2,text:'将修改冻结输入。'})
-  peer.observeTool({phase:'started',turn:2,id:'write',name:'edit_file',input:{path:'test.mjs'}});expect(h.resume).toHaveBeenCalledTimes(1)
+  peer.observeTool({phase:'started',turn:2,id:'write',name:'edit_file',input:{path:'test.mjs'}});expect(h.resume).not.toHaveBeenCalled()
   expect(peer.context('child')!.observations.at(-1)?.data).toMatchObject({phase:'started'})
   peer.observeUserRequest({turn:2,text:'只排查，不要改数据。'})
   expect(peer.context('child')!.observations.at(-1)?.kind).toBe('user_request')
@@ -90,12 +90,19 @@ it('keeps messages advisory, supports questions, and does not retry failed inves
 
 it('bounds and redacts observation material while preserving truncation and current sources',()=>{
   const peer=createEngineeringPartner(true);peer.begin(ctx())
-  for(let n=0;n<12;n++)peer.observeTool(event(String(n),'read_file','api_key=PRIVATE_KEY\n'+'x'.repeat(10000)))
-  const facts=peer.context('child')!;expect(facts.observations).toHaveLength(8);expect(facts.omitted_or_folded_events).toBeGreaterThan(0)
+  for(let n=0;n<40;n++)peer.observeTool({...event(String(n),'read_file','api_key=PRIVATE_KEY\n'+'x'.repeat(10000)),input:{path:String(n)}})
+  const facts=peer.context('child')!;expect(facts.observations.length).toBeLessThanOrEqual(32);expect(facts.omitted_or_folded_events).toBeGreaterThan(0)
   expect(JSON.stringify(facts)).not.toContain('PRIVATE_KEY');expect(JSON.stringify(facts)).toContain('truncated')
 })
 
 it('disabled monitoring still relays explicitly delegated peer messages without starting paid work',()=>{
   const peer=createEngineeringPartner(false,id=>id==='manual');peer.begin(ctx());peer.observeTool(event('p'));expect(h.start).not.toHaveBeenCalled()
   peer.receive('manual',{turn:1,text:'手工委派的局部证据。',truncated:false});expect(peer.take(ctx())).toContain('局部证据')
+})
+
+it('does not resume for duplicate evidence, but does for a changed source or outcome',()=>{
+ let source='one';const peer=createEngineeringPartner(true,undefined,{source:()=>source});peer.begin(ctx());peer.context('child');peer.observed('child',{turn:1,toolCalls:[]});h.record.status='completed'
+ peer.observeTool(event('first'));expect(h.resume).toHaveBeenCalledTimes(1);peer.context('child');peer.observed('child',{turn:2,toolCalls:[]});h.record.status='completed'
+ peer.observeTool(event('duplicate'));expect(h.resume).toHaveBeenCalledTimes(1)
+ source='two';peer.observeTool(event('new-source'));expect(h.resume).toHaveBeenCalledTimes(2)
 })
