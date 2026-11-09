@@ -54,3 +54,12 @@ it('measures readiness from host receipts and keeps unknown sends and absent pub
  expect(report.publication).toBeNull();expect(report.maker.physical).toBe(0)
  expect(summarizeTrialCloseout([]).first_ready).toBeNull()
 })
+
+it('observes host publication without buying another model call and never equates a stage event alone with delivery',()=>{
+ const rows=[{sequence:1,started_at:'2026-11-09T00:00:00Z',after:{quality_counts:{total:0,closed:0,not_reproduced:0}},tool_events:[{type:'tool_call_completed',at:'2026-11-09T00:01:00Z',payload:{tool:'verify_app',feedback:{verification:'passed',scope:'software_candidate'}}}]}]
+ const event={type:'stage_changed',at:'2026-11-09T00:02:00Z',payload:{stage:'delivered'}}
+ expect(summarizeTrialCloseout(rows,[event]).publication).toBeNull()
+ const report=summarizeTrialCloseout(rows,[event,{type:'host_closeout_snapshot',payload:{state:{status:'completed',desktop_phase:'delivered',software_release_id:'release',quality_counts:{total:1,closed:0,not_reproduced:1}}}}])
+ expect(report.publication).toMatchObject({elapsed_ms:60000,release_id:'release'})
+ expect(report.finding_delta).toEqual({added:1,closed:0,not_reproduced:1});expect(report.maker.physical).toBe(0)
+})

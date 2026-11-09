@@ -39,7 +39,7 @@ export function createTrialRequestRecorder(folder:string,redact:(value:unknown)=
       body.push(`| ${r.sequence} | ${cell(r.before?.desktop_phase??r.before?.current_stage??r.phase)} / ${cell(r.role)} | ${cell(r.status)} | ${r.transports.filter((t:any)=>t.state==='started').length} | ${r.usage?.input_tokens??'?'} / ${r.usage?.output_tokens??'?'} | ${cell(r.trigger)}；${cell(r.tool_calls.map((t:any)=>t.name).join(', '))} | [请求 ${r.sequence}](requests/${String(r.sequence).padStart(5,'0')}.json) |`)
     }
     writeFileSync(join(folder,'timeline.md'),JSON.parse(redact(body.join('\n')+'\n')))
-    writeFileSync(join(folder,'closeout-summary.json'),redact(summarizeTrialCloseout([...rows.values()])))
+    writeFileSync(join(folder,'closeout-summary.json'),redact(summarizeTrialCloseout([...rows.values()],existsSync(join(folder,'events.jsonl'))?readFileSync(join(folder,'events.jsonl'),'utf8').split(/\r?\n/).filter(Boolean).map(line=>JSON.parse(line)):[])))
   }
   const event=(type:string,payload:any)=>{
     if(type==='thinking_delta'||type==='reasoning_delta')return
@@ -84,11 +84,11 @@ export function createTrialRequestRecorder(folder:string,redact:(value:unknown)=
       row.finished_at=new Date().toISOString();row.after=snapshot(options.sessionId);save(row);timeline()
     }
   }
-  return{wrap,event,finish:timeline}
+  return{wrap,event,finish:()=>{event('host_closeout_snapshot',{state:snapshot()});timeline()}}
 }
 
 /** Derived from immutable recorder rows; never used for admission or publication. */
-export function summarizeTrialCloseout(rows:any[]){
+export function summarizeTrialCloseout(rows:any[],events:any[]=[]){
  const ordered=[...rows].sort((a,b)=>a.sequence-b.sequence)
  const tools=ordered.flatMap(r=>(r.tool_events??[]).filter((e:any)=>e.type==='tool_call_completed').map((e:any)=>({row:r,event:e})))
  const ready=tools.find(({event})=>event.payload?.feedback?.verification==='passed'&&event.payload?.feedback?.scope==='software_candidate')
@@ -98,10 +98,15 @@ export function summarizeTrialCloseout(rows:any[]){
  const sent=(r:any)=>(r.transports??[]).filter((t:any)=>t.state==='started').length
  const first=(names:string[])=>following.find(r=>names.includes(r.role)&&sent(r)>0)
  const milestone=(r:any)=>r&&at!==undefined?{sequence:r.sequence,elapsed_ms:Date.parse(r.started_at)-at}:null
- const published=following.find(r=>r.after?.desktop_phase==='delivered'&&r.after?.software_release_id)
+ const terminal=events.filter(e=>e.type==='host_closeout_snapshot').at(-1)?.payload?.state
+ const publication=terminal?.status==='completed'&&terminal?.desktop_phase==='delivered'&&terminal?.software_release_id?events.find(e=>e.type==='stage_changed'&&e.payload?.stage==='delivered'&&at!==undefined&&Date.parse(e.at)>=at):undefined
+ const seenReads=new Set<string>();let repeatedReads=0
+ for(const r of following)for(const call of r.tool_calls??[]){if(!['read_file','grep','find'].includes(call.name))continue;const key=JSON.stringify([r.role,r.before?.source,call.name,call.input]);if(seenReads.has(key))repeatedReads++;seenReads.add(key)}
+ const countsBefore=ready?.row.after?.quality_counts,countsAfter=terminal?.quality_counts
+ const delta=(key:string)=>Number.isSafeInteger(countsBefore?.[key])&&Number.isSafeInteger(countsAfter?.[key])?countsAfter[key]-countsBefore[key]:null
  const counts=(list:any[])=>({logical:list.length,physical:list.reduce((n,r)=>n+sent(r),0),reported_micro_rmb:list.reduce((n,r)=>n+(r.reported_price_micro_rmb??0),0),unknown_physical:list.reduce((n,r)=>n+(r.unreported_physical_attempts??sent(r)),0)})
  return{first_ready:ready?{sequence:ready.row.sequence,at:ready.event.at}:null,
-  first_code:milestone(first(['code'])),first_visual:milestone(first(['visual'])),publication:milestone(published),
+  first_code:milestone(first(['code'])),first_visual:milestone(first(['visual'])),publication:publication?{at:publication.at,elapsed_ms:Date.parse(publication.at)-at!,release_id:terminal.software_release_id}:null,finding_delta:{added:delta('total'),closed:delta('closed'),not_reproduced:delta('not_reproduced')},repeat_calls_same_source_and_input:repeatedReads,
   after_ready:counts(following),maker:counts(role('orchestrator')),optional:counts(role('research')),
   required_reviews:counts(following.filter(r=>['code','visual'].includes(r.role))),
   verification_attempts:tools.filter(({event})=>at!==undefined&&Date.parse(event.at)>=at&&event.payload?.tool==='verify_app').length,

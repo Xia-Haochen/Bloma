@@ -144,7 +144,7 @@ export async function main() {
     record:value=>appendFileSync(join(root,'wallet-observations.jsonl'),safe(value)+'\n')})
   let latestStage:string|undefined
   const trace=createTrialRequestRecorder(join(root,'trace'),safe,session=>{
-    try{const p=findProject(project.project_id);return{project_id:p.project_id,status:p.status,current_stage:latestStage??p.current_stage,persisted_stage:p.current_stage,desktop_phase:p.desktop_phase,source:softwareVerificationFingerprint(p.root_path),review_kind:readQualityLedger(p.project_id).reviews.find(r=>r.child===session)?.kind}}catch{return{phase}}
+    try{const p=findProject(project.project_id);return{project_id:p.project_id,status:p.status,current_stage:latestStage??p.current_stage,persisted_stage:p.current_stage,desktop_phase:p.desktop_phase,software_release_id:p.software_release_id,quality_counts:(()=>{const findings=readQualityLedger(p.project_id).findings;return{total:findings.length,closed:findings.filter(f=>f.disposition==='closed').length,not_reproduced:findings.filter(f=>f.disposition==='not_reproduced').length}})(),source:softwareVerificationFingerprint(p.root_path),review_kind:readQualityLedger(p.project_id).reviews.find(r=>r.child===session)?.kind}}catch{return{phase}}
   },policyRate)
   const deadlineAt=Date.now()+45*60000
   const availableFunding=()=>Math.min(fundedAllowance-(control.snapshot().upper_rmb??0),money()[0]?.remaining_rmb??fundedAllowance)
