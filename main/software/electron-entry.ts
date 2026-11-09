@@ -1,3 +1,5 @@
+import { managedRuntime } from './runtime-bindings'
+import { assertElectronVersion } from './electron-runtime'
 import { existsSync } from 'node:fs'
 import { basename, isAbsolute, join, resolve } from 'node:path'
 
@@ -8,7 +10,7 @@ export function isLocalElectronAlias(command: readonly string[]): boolean {
 
 /** Resolve local aliases without executing npx, downloading a runtime, or
  * treating the packaged Bloma executable as a generic Electron runtime. */
-export function electronEntry(root: string, command: readonly string[]): { executablePath: string; args: string[] } {
+export function electronEntry(root: string, command: readonly string[], projectId?: string): { executablePath: string; args: string[] } {
   let [head, ...args] = command
   const wrapper = basename(head ?? '').replace(/\.(cmd|exe|bat)$/i, '').toLowerCase()
   if (wrapper === 'npx') {
@@ -19,6 +21,10 @@ export function electronEntry(root: string, command: readonly string[]): { execu
     throw Error('ELECTRON_DIRECT_ENTRY_REQUIRED: 不解析任意包管理器脚本；LAUNCH.command填写项目Electron与实际应用路径，或已打包exe。')
   }
   if (!head) throw Error('ELECTRON_DIRECT_ENTRY_REQUIRED: 缺少实际应用入口')
+  if (head === 'electron' && projectId) {
+    const bound = managedRuntime(projectId, 'electron')
+    if (bound) { assertElectronVersion(root, bound.version); head = bound.executable }
+  }
   if (head === 'electron') head = join(root, 'node_modules/electron/dist', process.platform === 'win32' ? 'electron.exe' : process.platform === 'darwin' ? 'Electron.app/Contents/MacOS/Electron' : 'electron')
   const executablePath = isAbsolute(head) ? head : resolve(root, head)
   if (!existsSync(executablePath)) throw Error(existsSync(join(root, 'node_modules/electron/package.json'))

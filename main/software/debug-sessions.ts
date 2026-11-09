@@ -128,7 +128,7 @@ async function debugOrigin(signal: AbortSignal) {
   return `http://127.0.0.1:${address.port}`
 }
 async function openManagedElectron(session: DebugSession, signal: AbortSignal) {
-  const entry = electronEntry(session.root, session.launch.command), origin = await debugOrigin(signal)
+  const entry = electronEntry(session.root, session.launch.command, session.snapshot.projectId), origin = await debugOrigin(signal)
   session.cdpEndpoint = origin
   const process = await startSoftwareProcess({ root: session.root, projectId: session.snapshot.projectId, sessionId: session.owner,
     command: [entry.executablePath, ...entry.args, `--user-data-dir=${join(session.workspace, 'profile')}`, '--remote-debugging-address=127.0.0.1', `--remote-debugging-port=${new URL(origin).port}`],

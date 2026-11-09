@@ -55,13 +55,13 @@ export function buildSoftwareAgentTools(projectId: string, role: DelegationRunRo
 }
 
 function prepareEnvironmentTool(projectId: string, policy: Policy): AgentLoopTool {
-  return { name: 'prepare_software_environment', description: '在Bloma私有目录准备并校验真实Node或Python运行时，自动绑定本项目命令和npm子进程；复用相同版本。尊重engines/.python-version/requires-python，version可省略。首期Windows x64，不改系统PATH/注册表，不请求用户安装。下载失败保留可恢复状态；工程依赖仍用原包管理器/锁文件安装。',
-    input_schema: { type: 'object', required: ['runtime'], additionalProperties: false, properties: { runtime: { type: 'string', enum: ['node', 'python'] }, version: { type: 'string', maxLength: 100 } } },
+  return { name: 'prepare_software_environment', description: '在Bloma私有目录准备并校验真实Node/Python运行时或复用已安装的兼容完整Electron目录，自动绑定本项目命令和npm子进程；复用相同版本。尊重engines/.python-version/requires-python，version可省略。首期Windows x64，不改系统PATH/注册表，不请求用户安装。下载失败保留可恢复状态；工程依赖仍用原包管理器/锁文件安装。',
+    input_schema: { type: 'object', required: ['runtime'], additionalProperties: false, properties: { runtime: { type: 'string', enum: ['node', 'python', 'electron'] }, version: { type: 'string', maxLength: 100 } } },
     execute: async (input, ctx) => {
       try {
         policy.assertCommand(ctx)
-        if (ctx.projectId !== projectId || !['node', 'python'].includes(String(input.runtime)) || input.version !== undefined && (typeof input.version !== 'string' || input.version.length > 100)) throw Error('RUNTIME_INPUT_INVALID')
-        const prepared = await prepareSoftwareRuntime(projectId, findProject(projectId).root_path, input.runtime as 'node' | 'python', input.version as string | undefined, ctx.signal)
+        if (ctx.projectId !== projectId || !['node', 'python', 'electron'].includes(String(input.runtime)) || input.version !== undefined && (typeof input.version !== 'string' || input.version.length > 100)) throw Error('RUNTIME_INPUT_INVALID')
+        const prepared = await prepareSoftwareRuntime(projectId, findProject(projectId).root_path, input.runtime as 'node' | 'python' | 'electron', input.version as string | undefined, ctx.signal)
         return { output: JSON.stringify({ ...prepared, verification: '运行时已实际执行探测；不等于软件完成或独立交付' }) }
       } catch (error) { return { isError: true, output: String(error) } }
     } }

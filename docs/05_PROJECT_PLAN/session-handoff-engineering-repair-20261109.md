@@ -162,3 +162,17 @@ Get-Content "$repairTrialRoot\monetary-policy.json.state.json" -Raw | ConvertFro
 不要从旧env.ps1或历史prepare-user/interact命令直接启动试验。用户停止指令、原费用上限和完整输入预留优先于历史脚本。
 
 本次交接仅修改主交接文档及仓库/计划/架构入口；未改运行代码、生成产品、试验账本或持久记忆，未发送付费请求。交接校验为 `npm run docs:check` 和 `git diff --check`；此前工程测试结果仅按第3节的原批次范围引用。
+
+## 9 本轮离线实施进度（2026-11-09）
+
+完整方案仍未完成；付费试验继续暂停。以下是可独立回滚的子批次，不能作为第6节全部退出条件已满足的证明。
+
+### 1a 显式 Electron 绑定与完整目录校验
+
+- 沿既有 ManagedRuntime/catalog/binding 增加 Electron；显式准备优先复用兼容项目目录或通用宿主 Electron 发行目录，复制到私有独立目录后实际探测版本。项目声明优先，不使用打包 Bloma 主程序，不连接网络下载，也不自动把33.2.0改成39.8.10。
+- 裸 electron 和 npx electron 共用 electronEntry，调试、GUI与点选入口也使用同一项目绑定。删除裸命令的隐式宿主回退。环境检查分别显示项目绑定与宿主可供准备的发行目录，宿主发现本身不声称已验证。
+- 全目录摘要覆盖资源、DLL、locale及物理asar，拒绝符号链接；执行与发布验证资源完整性。发布记录保存实际使用的绑定，不把当前可变绑定作为旧候选身份。
+- 定向回归：原运行时/执行/依赖/发布22项通过，新真实Electron用例1项通过（启动、同数据重开、快照、不兼容版本和非exe资源篡改反例）；现有真实GUI调试与点选8项通过。类型检查和主进程构建通过。
+- 初次新用例没有声明独立profile，Electron GUI进程启动失败；日志保留。按生产GUI路径增加独立profile后通过，未放宽业务断言。此观察不能单独确定Chromium退出的底层根因。
+- 证据：run-artifacts/engineering-repair-runtime-20261109.log（含原失败）、engineering-repair-electron-profile-20261109.log、engineering-repair-runtime-gui-20261109.log、engineering-repair-runtime-types-final-20261109.log、engineering-repair-runtime-build-20261109.log。
+- 未完成：运行上下文的动态端口/随机凭据/多窗口组合验证，校园反例隔离副本复现，完整修正事务、裁定与伙伴调度等后续批次。现有组件测试不能代替这些条件，也不是校园产品验收。

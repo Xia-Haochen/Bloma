@@ -46,11 +46,9 @@ it('installs a local package offline using the normal npm tool and reports metad
   expect(result.isError, result.output).toBe(false)
   expect(JSON.parse(result.output)).toMatchObject({ exit_code: 0, dependencies: { state: 'metadata_present_unverified', missing_count: 0 } })
 }, 40000)
-it('resolves bare Electron to a real executable, prefers the project runtime and removes Node mode',()=>{
+it('refuses implicit host Electron fallback, resolves local aliases and removes Node mode',()=>{
   const environment={...softwareEnvironment(project.project_id),ELECTRON_RUN_AS_NODE:'1'}
-  const bundled=resolveSoftwareCommand(project.root_path,['electron','main.cjs'],environment)
-  expect(isAbsolute(bundled.command[0])).toBe(true);expect(existsSync(bundled.command[0])).toBe(true)
-  expect(bundled.env.ELECTRON_RUN_AS_NODE).toBeUndefined();expect(bundled.command[1]).toBe('main.cjs')
+  expect(()=>resolveSoftwareCommand(project.root_path,['electron','main.cjs'],environment)).toThrow('ELECTRON_EXECUTABLE_MISSING')
   const name=process.platform==='win32'?'electron.exe':process.platform==='darwin'?'Electron.app/Contents/MacOS/Electron':'electron'
   const local=join(project.root_path,'node_modules/electron/dist',name);mkdirSync(join(local,'..'),{recursive:true});writeFileSync(local,'fixture executable')
   expect(resolveSoftwareCommand(project.root_path,['electron','main.cjs'],environment).command[0]).toBe(realpathSync(local))

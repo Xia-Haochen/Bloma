@@ -66,13 +66,13 @@ export function softwareEnvironment(projectId: string, dataDir?: string, root?:s
 
 export function resolveSoftwareCommand(root: string, value: unknown, environment: Record<string, string>): { command: string[]; env: Record<string, string> } {
   let command = validateSoftwareCommand(value)
-  if (isLocalElectronAlias(command)) {
-    const entry = electronEntry(root, command)
+  if (isLocalElectronAlias(command) || command[0] === 'electron') {
+    const entry = electronEntry(root, command, environment.BLOMA_RUNTIME_PROJECT)
     command = [entry.executablePath, ...entry.args]
   }
   const name = basename(command[0]).replace(/\.(exe|cmd|bat)$/i, '').toLowerCase()
   const env = { ...environment }
-  if (isLocalElectronAlias(value as string[])) delete env.ELECTRON_RUN_AS_NODE
+  if (isLocalElectronAlias(value as string[]) || (value as string[])[0] === 'electron') delete env.ELECTRON_RUN_AS_NODE
   const runtimeProject = environment.BLOMA_RUNTIME_PROJECT
   const node = runtimeProject ? managedRuntime(runtimeProject, 'node')?.executable : undefined
   if (['python', 'python3'].includes(name)) {
@@ -85,14 +85,6 @@ export function resolveSoftwareCommand(root: string, value: unknown, environment
     if (!executable) throw new Error('COMMAND_NODE_UNAVAILABLE')
     command[0] = executable
     if (process.versions.electron && executable === process.execPath) env.ELECTRON_RUN_AS_NODE = '1'
-  } else if (name === 'electron' && !command[0].includes('/') && !command[0].includes('\\')) {
-    const executableName=process.platform==='win32'?'electron.exe':process.platform==='darwin'?'Electron.app/Contents/MacOS/Electron':'electron'
-    const candidates=[join(root,'node_modules/electron/dist',executableName)]
-    try { candidates.push(join(dirname(createRequire(import.meta.url).resolve('electron/package.json')),'dist',executableName)) } catch {}
-    const executable=candidates.find(existsSync)
-    if(!executable)throw Error('COMMAND_ELECTRON_UNAVAILABLE: 项目或Bloma安装中缺少可执行Electron运行时')
-    command[0]=realpathSync(executable)
-    delete env.ELECTRON_RUN_AS_NODE
   } else if (['npm', 'npx'].includes(name)) {
     let script: string | undefined
     try { script = join(dirname(createRequire(import.meta.url).resolve('npm/package.json')), 'bin', name === 'npm' ? 'npm-cli.js' : 'npx-cli.js') } catch {}

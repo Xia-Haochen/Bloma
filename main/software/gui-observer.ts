@@ -130,7 +130,7 @@ export async function observeSoftwareGui(input: { projectId: string; root: strin
       input.signal?.throwIfAborted()
       let page: Page
       if (input.launch.ui === 'electron') {
-        const entry = electronEntry(input.root, input.launch.command)
+        const entry = electronEntry(input.root, input.launch.command, input.projectId)
         app = await _electron.launch({ ...entry, args: [...entry.args, `--user-data-dir=${userData}`], cwd: input.root,
           env: softwareEnvironment(input.projectId, data,input.root), timeout: 20000 })
         child = app.process()

@@ -1,3 +1,4 @@
+import { managedRuntime, validateManagedRuntime, type ManagedRuntime } from './runtime-bindings'
 import { findProject, updateProject } from '../project/project-service'
 import { createHash, randomUUID } from 'node:crypto'
 import {testCorrectionGate} from './test-corrections'
@@ -39,6 +40,7 @@ export class ReleaseIntegrityError extends Error {
 export interface SoftwareRelease { version: 1; id: string; projectId: string; sourceRoot: string; root: string;
   speech_resources?:SpeechResourceSnapshot
   source: RuntimeInventory; runtime: RuntimeInventory; launch: LaunchDeclaration; dependencies: Record<string, string>;
+  electron_runtime?: ManagedRuntime
   external_files?: Array<{ path: string; sha256: string }>
   verified?: { version: string; scope: string; at: string; collaboration_id?: string } }
 const IGNORED = new Set(['.git', '00_HISTORY', '.cache', '__pycache__', '.pytest_cache', 'data-backups'])
@@ -136,6 +138,8 @@ export async function prepareSoftwareRelease(projectId: string, sourceRoot: stri
   if(speech)await writeFile(join(root,CAPABILITY_CAPSULE),JSON.stringify({version:1,speech}))
   const resolved = resolveSoftwareCommand(root, relocated.command, softwareEnvironment(projectId,undefined,root))
   const launch = { ...relocated, command: resolved.command }
+  const boundElectron = managedRuntime(projectId, 'electron')
+  const electron_runtime = boundElectron && resolved.command[0] === boundElectron.executable ? boundElectron : undefined
   const external_files: NonNullable<SoftwareRelease['external_files']> = []
   for (const file of [...new Set(launch.command.filter(isAbsolute))]) {
     const rel = relative(root, file)
@@ -146,7 +150,7 @@ export async function prepareSoftwareRelease(projectId: string, sourceRoot: stri
   await writeFile(join(root, 'LAUNCH.json'), JSON.stringify(launch, null, 2))
   if ((await runtimeInventory(sourceRoot, signal)).digest !== source.digest) throw Error('RELEASE_SOURCE_CHANGED_DURING_COPY')
   const runtime = await runtimeInventory(root, signal, dependencies)
-  const release: SoftwareRelease = { version: 1, id, projectId, sourceRoot, root, source, runtime, launch, dependencies, external_files,...(speech_resources?{speech_resources}:{}) }
+  const release: SoftwareRelease = { version: 1, id, projectId, sourceRoot, root, source, runtime, launch, dependencies, external_files, ...(electron_runtime ? { electron_runtime } : {}),...(speech_resources?{speech_resources}:{}) }
   writeTextFileAtomic(join(directory, 'release.json'), JSON.stringify(release))
   return release
 }
@@ -161,6 +165,10 @@ export async function validateSoftwareRelease(projectId: string, release: Softwa
   const runtime = await runtimeInventory(release.root, signal, release.dependencies)
   if(release.speech_resources)await validateSpeechResources(release.speech_resources,signal)
   if (runtime.digest !== release.runtime.digest) throw new ReleaseIntegrityError('RELEASE_BYTES_CHANGED', release.runtime, runtime)
+  if (release.electron_runtime) {
+    validateManagedRuntime(release.electron_runtime)
+    if (release.launch.command[0] !== release.electron_runtime.executable) throw Error('RELEASE_ELECTRON_BINDING_CHANGED')
+  }
   for (const file of release.external_files ?? []) if (await fileDigest(file.path, signal) !== file.sha256) throw Error('RELEASE_EXTERNAL_RUNTIME_CHANGED')
 }
 export async function verifyReleaseSource(release: SoftwareRelease, signal?: AbortSignal) {
