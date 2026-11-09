@@ -458,3 +458,11 @@ it('early coverage may inspect an unready slice but cannot grant candidate quali
  await expect(quality.begin(ctx())).rejects.toThrow('QUALITY_LOCAL_CHECK_REQUIRED')
  expect(await quality.gate()).toContain('REVIEW_REQUIRED')
 },60000)
+
+it('permits an additive targeted CLI case while refusing to delete or weaken the frozen original',async()=>{
+ const tool=buildLeanCliTool(project.project_id),old={name:'sum',covers:['F-001'],args:['2','3'],stdout:'5',exit_code:0},extra={name:'new',covers:['F-001'],args:['3','4'],stdout:'7',exit_code:0}
+ const register=(cases:unknown[])=>tool.execute({expectations:{'F-001':'2加3得5'},cases},ctx())
+ expect((await register([old,extra])).isError).not.toBe(true)
+ expect((await register([extra])).isError).toBe(true)
+ expect((await register([{...old,stdout:'999'},extra])).isError).toBe(true)
+})
