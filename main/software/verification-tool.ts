@@ -1,3 +1,4 @@
+import { serializeRedactedJson } from '../../shared/redacted-json'
 import {applyApprovedNativeCorrections} from './native-gui-registration'
 import type { AgentLoopTool } from '../agent/loop/agent-loop'
 import type { createSoftwareCollaborationPolicy } from './collaboration-policy'
@@ -32,7 +33,7 @@ export function buildSoftwareVerifyTool(projectId: string, policy: ReturnType<ty
         await closeDebugSessions(projectId, ctx.sessionId); await stopSoftwareSession(projectId, ctx.sessionId); previewChanged?.()
         attempted=true
         const result = await verifySoftwareCandidate(projectId, ctx.requestId, ctx.signal, input.force === true)
-        return { output: redactSoftwareOutput(JSON.stringify(verificationResponse(projectId,result))),
+        return { output: serializeRedactedJson(verificationResponse(projectId,result),redactSoftwareOutput),
           isError: result.status !== 'passed', feedback: verificationToolFeedback(result) }
       } catch (error) { const summary = String(error),result={status:'unverified' as const,summary};return { output: JSON.stringify({...verificationResponse(projectId,result,false,error),execution:attempted?'attempted_not_completed':'not_started'}),feedback:{...verificationToolFeedback(result),execution:ctx.signal.aborted?'cancelled':attempted?'failed':'not_run'}, isError: true } }
     } }

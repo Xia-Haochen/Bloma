@@ -1,3 +1,4 @@
+import { serializeRedactedJson } from '../../shared/redacted-json'
 import { guiCaseEvidence, cliCaseOutcome } from './verification-evidence'
 import { createHash } from 'node:crypto'
 import { existsSync,readFileSync, statSync } from 'node:fs'
@@ -31,8 +32,8 @@ export function verificationRefusalFeedback(error:unknown):ToolFeedback{
 }
 function preview(value:unknown,reportHash:string,persisted=true){
   if(value===undefined)return undefined
-  const text=redactSoftwareOutput(typeof value==='string'?value:JSON.stringify(value))
-  return text.length<=1200?JSON.parse(redactSoftwareOutput(JSON.stringify(value))):{preview:text.slice(0,1200),truncated:true,total_characters:text.length,read_more:persisted?{tool:'read_production_context',arguments:{topic:'verification-report',section:'raw',report_hash:reportHash,offset:0}}:{source:'current_tool_result',note:'前置错误未生成验收报告，完整错误在本次工具回执summary中'}}
+  const text=typeof value==='string'?redactSoftwareOutput(value):serializeRedactedJson(value,redactSoftwareOutput)
+  return text.length<=1200?JSON.parse(serializeRedactedJson(value,redactSoftwareOutput)):{preview:text.slice(0,1200),truncated:true,total_characters:text.length,read_more:persisted?{tool:'read_production_context',arguments:{topic:'verification-report',section:'raw',report_hash:reportHash,offset:0}}:{source:'current_tool_result',note:'前置错误未生成验收报告，完整错误在本次工具回执summary中'}}
 }
 export function verificationCases(result:SoftwareVerification){
   const gui=(result.core?.host_gui?.case_results??[]).map((row,index)=>{
@@ -117,7 +118,7 @@ export function readVerificationReport(projectId:string,input:{report_hash?:unkn
   if(!Number.isSafeInteger(offset)||(offset as number)<0)throw Error('VERIFICATION_REPORT_PAGE_INVALID')
   if((offset as number)>0&&input.report_hash===undefined)throw Error('VERIFICATION_REPORT_HASH_REQUIRED: 后续页必须绑定第一页的report_hash')
   if(input.section==='raw'){
-    const text=redactSoftwareOutput(JSON.stringify(receipt.result)),start=offset as number,end=Math.min(start+6000,text.length)
+    const text=serializeRedactedJson(receipt.result,redactSoftwareOutput),start=offset as number,end=Math.min(start+6000,text.length)
     return{report_hash:receipt.result_hash,freshness:'historical_not_revalidated',usable_for_delivery:false,encoding:'JSON text fragment; do not parse as a complete record',text:text.slice(start,end),offset:start,total_characters:text.length,
       next:end<text.length?{tool:'read_production_context',arguments:{topic:'verification-report',section:'raw',report_hash:receipt.result_hash,offset:end}}:undefined}
   }

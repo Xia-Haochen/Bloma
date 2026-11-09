@@ -5,10 +5,7 @@ import type {SDKQuery} from '../main/orchestration/stages/orchestration-contract
 import type {SDKMessage} from '../shared/types'
 
 const sha=(s:string)=>createHash('sha256').update(s).digest('hex')
-/** Redact string values before encoding: regexes must never consume JSON escapes. */
-export function serializeTrialRecord(value:unknown,redact:(text:string)=>string){
-  return JSON.stringify(value,(_key,item)=>typeof item==='string'?redact(item):item)
-}
+export { serializeRedactedJson as serializeTrialRecord } from '../shared/redacted-json'
 /** Trial-only observation. No admission, retries, prompts or product state are
  * changed. Explicit request/tool IDs replace timestamp-based attribution. */
 export function createTrialRequestRecorder(folder:string,redact:(value:unknown)=>string,snapshot:(session?:string)=>any,rates?:{input_rmb_per_million:number;output_rmb_per_million:number;cache_rmb_per_million:number}){

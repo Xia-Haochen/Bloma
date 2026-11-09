@@ -176,3 +176,11 @@ Get-Content "$repairTrialRoot\monetary-policy.json.state.json" -Raw | ConvertFro
 - 初次新用例没有声明独立profile，Electron GUI进程启动失败；日志保留。按生产GUI路径增加独立profile后通过，未放宽业务断言。此观察不能单独确定Chromium退出的底层根因。
 - 证据：run-artifacts/engineering-repair-runtime-20261109.log（含原失败）、engineering-repair-electron-profile-20261109.log、engineering-repair-runtime-gui-20261109.log、engineering-repair-runtime-types-final-20261109.log、engineering-repair-runtime-build-20261109.log。
 - 未完成：运行上下文的动态端口/随机凭据/多窗口组合验证，校园反例隔离副本复现，完整修正事务、裁定与伙伴调度等后续批次。现有组件测试不能代替这些条件，也不是校园产品验收。
+
+### 3a 准入失败时的只读诊断与结构化脱敏
+
+- 复用现有quality ledger；执行身份/交付准入建立失败时，read_quality_findings仍返回带原身份的finding/review、历史验证摘要、提案状态和准入错误，明确current_identity_unavailable及usable_for_delivery=false。不修改原失败、拒绝或费用记录；中止信号仍传播。
+- 报告预览、原始分页及verify_app正常输出采用逐字符串脱敏后JSON编码；试验记录复用同一serializeRedactedJson，不再维护独立序列化实现。凭据字段的字符串值也明确脱敏，保留原对象与数字/布尔/null类型。
+- 定向12项回归通过（4文件）：诊断准入失败、嵌套JSON/转义/凭据、试验旧损坏记录保留，以及真实CLI验证、旧PASS失效、受控Agent修复交付。focused复验5项与此重叠，不相加。类型检查通过。
+- 证据：run-artifacts/engineering-repair-diagnostics-20261109.log、engineering-repair-diagnostics-focused-20261109.log、engineering-repair-diagnostics-typecheck-20261109.log。
+- 边界：这是第3批的诊断子项；修正裁定分离、完整失败原因分布、尝试/完成计数、安全扫描精确例外尚未完成。不能称为全平台脱敏已统一。
