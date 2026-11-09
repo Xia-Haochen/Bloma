@@ -288,3 +288,11 @@ Get-FileHash "$closeoutTrial\monetary-policy.json.state.json"
 P0 首批：新增 tests/fixtures/delivery-convergence-20261109.json，只读白名单提取第121/124/128/145/168/190/194/195条请求的时序、发送数、用量、工具反馈与原始文件哈希，以及原finding触发/未知/checks。全量输入、配置和隐藏推理未复制。quality-settlement 回放确认旧套件通过不会结算两条无绑定 high 疑点，原 checks 仍为空。quality-settlement / quality-closeout / engineering-partner 定向测试36项通过。该批仅固化证据和结算反例；P0的真实Pi优先级反例、遥测量化及期限/恢复组合仍待完成，不能据此宣布P0全部退出。
 
 P0 优先级反例补充：真实 Pi 执行器、CLI 子进程和正式发布路径，供应商与伙伴建议受控替身；旧实现于 run-artifacts/delivery-convergence-p0-priority-before.log 失败：本机验证后制作请求达到2次而预期1次。测试暂以 it.fails 固化已知失败，P1修复后改为普通正向断言。该反例不代表真实供应商行为或GUI验收。
+
+P1 控制顺序子批次（验证进行中）：beforeComplete / afterTools 优先检查当前回执，advanceCloseout 在等待必要子任务前停车伙伴；普通建议不再先行返回制作方。下一次必要C/V的读取材料保留工程伙伴意见，由独立审查判断，不按关键词造finding。复用既有requestGuard对已停车伙伴的发送拒绝，不增加状态文件、Agent或额度。
+
+旧路径反例 maker=2（失败），修复路径单独运行 maker=1、C=1、delivered且存在活动发布（62.9秒）。运行真实Pi执行器和CLI子进程，模型/伙伴消息受控；不是供应商或Electron业务验证。并发扩大验证的原始失败保留在 run-artifacts/delivery-convergence-p1-regression.log（37通过、7失败）及 delivery-convergence-offline.log（类型/文档/构建通过，189通过、2失败）。失败含30/60/120秒测试超时及60/90秒取消后未交付断言；正在相同源码、原时限下单worker复验，不能先称全绿。
+
+尚未退出的计划范围：P0遥测量化、软硬期限与跨进程组合；P1已排队/在途/迟到重要事实的组合闭环及所有权反例；P2缺绑定调查义务、受信证据类型、定向复验和原校园隔离副本；P3–P6均未实施。本子批次不是P0–P6完成声明。下一批仍先完成P0/P1剩余反例再进入P2；不以文案更具体代替执行/绑定接线。
+
+验证收口：delivery-convergence-serial-retest.log 在相同运行源码和原时限下串行复验9项全部通过（6项quality-review、1项新增优先级、2项verification-tool），用时369.19秒；新增优先级用例43.46秒完成。未调整生产截止、测试超时、取消信号或业务断言。扩大运行中其余用例通过，原9项失败仍保留；不把失败运行改写成一次全绿。标准离线命令本次退出非零，类型/文档/构建已通过，失败项已定向复验通过。

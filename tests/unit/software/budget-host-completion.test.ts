@@ -83,7 +83,7 @@ it.each([{ output: 5, rules: true, cancel: false, passed: true }, { output: 999,
   if (monetary && !rules) expect(findProject(project.project_id).desktop_blocked?.note).toContain('上次宿主观察之后的修改')
 }, 60000)
 
-it.fails('hands a verified candidate to C despite continuously available optional advice, without another maker request',async()=>{
+it('hands a verified candidate to C despite continuously available optional advice, without another maker request',async()=>{
  const project=createProject({request_id:'create',mode:'quick'},{workflowVersion:'software-v1'})
  const parsed=parseLeanBrief(JSON.stringify({action:'brief',goal:'Print 5',ui:'none',delivery:'command',requirements:[{description:'输出5',expected:'输出5'}]}),{projectId:project.project_id,sessionId:'s',source:'输出5',previous:readPrdBackplane(project.project_id),software:true})!
  if(parsed.action!=='brief')throw Error('fixture')
@@ -105,7 +105,7 @@ it.fails('hands a verified candidate to C despite continuously available optiona
  try{
   await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'r',content:'实现输出5',signal:AbortSignal.timeout(90000),maxTokens:4096},query,{}, {publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
   expect(maker).toBe(1);expect(review).toBe(1)
-  expect(findProject(project.project_id).desktop_phase).toBe('delivered')
+  expect(findProject(project.project_id).desktop_phase,findProject(project.project_id).desktop_blocked?.note).toBe('delivered')
   expect(await activeSoftwareRelease(project.project_id)).toBeTruthy()
  }finally{advisory.enabled=false}
 },120000)

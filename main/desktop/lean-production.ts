@@ -171,7 +171,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     facts:()=>({current_request:{text:publicRequest.length<=4000?publicRequest:publicRequest.slice(0,2000)+'[中段省略]'+publicRequest.slice(-2000),truncated:publicRequest.length>4000},working_state:renderSoftwareWorkingContext(input.projectId),development:engineeringObservations(input.projectId,input.sessionId)}),
     recover:recoverEngineeringMonitor,attached:recordEngineeringMonitor,history:recentProductionObservations,
   })
-  const quality = createQualityReview(input.projectId, input.sessionId, collaboration, input.env)
+  const quality = createQualityReview(input.projectId, input.sessionId, collaboration, input.env, ()=>partner.latest())
   const observeRuntime = (observation: import('../agent/loop/runtime-observation').RuntimeObservation) => {
     const review = readQualityLedger(input.projectId).reviews.find(r => r.child === observation.session_id)
     recordEvaluationEvent(input.projectId, 'runtime_identity', { observation: { ...observation,
@@ -351,12 +351,12 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
       const checked=await verifySoftwareCandidate(input.projectId,input.requestId,ctx.signal)
       if(checked.status!=='passed')return JSON.stringify(verificationResponse(input.projectId,checked))
     }
-    const waiting = await waitForProductionChildren(ctx)
-    if (waiting) return waiting
     // A maker stopping is not evidence of a stable candidate. Let the common
     // verifier/repair loop observe failures before purchasing any review.
     if (!locallyChecked && !await recentSoftwareVerification(input.projectId, input.requestId, ctx.signal)) return
     partner.suspend()
+    const waiting = await waitForProductionChildren(ctx)
+    if (waiting) return waiting
     const attemptedReviews=new Set<string>()
     for (;;) {
       const action = await quality.completionAction(ctx.signal), gap = action.gate
@@ -418,10 +418,15 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
         initialMessagePersisted: initial ? input.initialMessagePersisted : false,
         shouldPause: () => scopePending,
         beforeComplete: async ctx=>{
-          // Ready advice gets a decision opportunity; an unfinished observer
-          // never becomes a prerequisite or an approval gate for closeout.
-          const advice=partner.isObserving()?partner.take(ctx):undefined
-          if(advice)return advice
+          // A current receipt gives the host priority over optional advice.
+          // Advice remains available in the existing public observation record.
+          const verified=await recentSoftwareVerification(input.projectId,input.requestId,ctx.signal)
+          if(!verified){
+            const waiting=await waitForProductionChildren(ctx)
+            if(waiting)return waiting
+            const advice=partner.isObserving()?partner.take(ctx):undefined
+            if(advice)return advice
+          }
           const feedback=await advanceCloseout(ctx)
           if(feedback){partner.begin(ctx);return feedback}
           return undefined
@@ -435,11 +440,9 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
             const rejected=testCorrectionRejectionFeedback(input.projectId)
             if(rejected)return{feedback:JSON.stringify(testCorrectionFacts(input.projectId)),verification:rejected}
           }
-          const advice=partner.take(ctx)
-          if(advice)return{feedback:advice}
-          if(!calls.some(c=>c.status==='ok'&&!c.pending&&['verify_app','inspect_app'].includes(c.name)))return
-          const verified=await recentSoftwareVerification(input.projectId,input.requestId,ctx.signal)
-          if(!verified)return
+          const verified=calls.some(c=>c.status==='ok'&&!c.pending&&['verify_app','inspect_app'].includes(c.name))
+            ?await recentSoftwareVerification(input.projectId,input.requestId,ctx.signal):undefined
+          if(!verified){const advice=partner.take(ctx);return advice?{feedback:advice}:undefined}
           const feedback = await advanceCloseout(ctx)
           if(feedback)partner.begin(ctx)
           return feedback ? { feedback,verification:verificationToolFeedback(verified) } : { complete: true,verification:verificationToolFeedback(verified) }
