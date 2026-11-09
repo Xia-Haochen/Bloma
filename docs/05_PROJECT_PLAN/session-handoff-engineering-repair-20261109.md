@@ -190,3 +190,10 @@ Get-Content "$repairTrialRoot\monetary-policy.json.state.json" -Raw | ConvertFro
 - package-lock.json的Electron精确版本优先于package.json兼容范围；锁文件与声明不一致时明确拒绝。新增反例证明^33.2.0且锁定33.2.0时不能选择33.3.0。当前实现覆盖npm锁文件，未增加其它包管理器锁文件解析。
 - Electron运行时用例2项通过，包含真实启动/重开/快照/篡改拒绝；另以SOFTWARE_RUNTIME_SOURCE_TEST只读指定校园项目原目录，在隔离PROMA_HOME导入其33.2.0发行目录并实际探测，源目录前后完整摘要一致，无fetch调用。未运行校园产品代码或更改原项目绑定。
 - 证据：run-artifacts/engineering-repair-electron-lock-20261109.log、engineering-repair-campus-runtime-import-20261109.log、engineering-repair-lock-types-20261109.log。第一次外部源验证使用BLOMA前缀，被测试全局环境守卫清除而跳过；原日志engineering-repair-campus-runtime-20261109.log保留，不计作校园源验证通过。
+
+### 离线标准检查结果与未结项
+
+- npm run check:offline的类型、文档、renderer/main构建通过；标准回归19文件/179项中178项通过，1项旧原生Electron夹具因依赖隐式宿主回退而失败。保留完整原日志run-artifacts/engineering-repair-offline-20261109.log，不宣称此次命令退出成功。
+- 该夹具改为声明实际版本并调用prepareSoftwareRuntime显式准备；原案例、GUI断言及正式verifySoftwareCandidate通过要求不变。定向真实Electron正式验收复验通过，见engineering-repair-native-electron-20261109.log（1通过、25未选中）。其后类型检查通过，见engineering-repair-types-closeout-20261109.log。没有重复整套标准回归；178项原通过与该项复验分别保留。
+- 当前完成的是1a运行时绑定和3a可读诊断子项。第1批完整实例上下文、第2批多文件修正事务、第3批独立裁定/失败分布/动作计数/静态扫描、第4批伙伴调度与进展治理、第5批校园组合反例复现均未完成，不能关闭本次工程修复任务。
+- 暂停标记仍在；账本读取仍430 reported、1 unknown；未发送付费模型请求，未改原失败/提案/冻结预期/费用记录，未push。保护文档hash-object仍为53c7abb3aef8497d8b0522b8aab806c82b2ec164。

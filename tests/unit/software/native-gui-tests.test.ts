@@ -18,6 +18,7 @@ import { buildSoftwareVerifyTool } from '../../../main/software/verification-too
 import { createSoftwareCollaborationPolicy } from '../../../main/software/collaboration-policy';
 import { createToolState } from '../../../main/agent/loop/agent-loop';
 import { saveSoftwareRegressionBaseline } from '../../../main/software/regression-baseline';
+import { prepareSoftwareRuntime } from '../../../main/software/runtime-manager';
 let home: string, previous: string | undefined, project: ReturnType<typeof createProject>;
 const script = `export default async({test,page,expect,assert,phase,evidenceDir})=>{
  assert.ok(evidenceDir);await page.screenshot({path:'shots/acceptance.png'});await page.locator('body').screenshot({path:'shots/body.png'});
@@ -239,7 +240,9 @@ it.skipIf(process.platform!=='win32'||!existsSync(resolve('node_modules/electron
  const brief=readPrdBackplane(project.project_id);brief.lean_brief!.delivery='desktop'
  syncDocuments({request_id:'desktop-test-scope',project_id:project.project_id,session_id:'s',checkpoint:'requirement_confirmed'},brief)
  const confirmed=markPrdUserConfirmed(project.project_id)!,scope=prdScopeFingerprint(confirmed);updateProject(project.project_id,{ux_confirmation:{prd_fingerprint:scope,design_hash:scope,html_hash:null}})
- writeFileSync(join(root,'package.json'),JSON.stringify({name:'native-fixture',main:'main.cjs'}))
+ const electronVersion=readFileSync(resolve('node_modules/electron/dist/version'),'utf8').trim()
+ writeFileSync(join(root,'package.json'),JSON.stringify({name:'native-fixture',main:'main.cjs',devDependencies:{electron:electronVersion}}))
+ await prepareSoftwareRuntime(project.project_id,root,'electron')
  writeFileSync(join(root,'main.cjs'),`const{app,BrowserWindow}=require('electron');app.whenReady().then(()=>new BrowserWindow({width:1000,height:700}).loadFile('index.html'));app.on('window-all-closed',()=>app.quit())`)
  writeFileSync(join(root,'index.html'),'<title>Names native</title>'+readFileSync(join(root,'index.html'),'utf8'))
  writeFileSync(join(root,'LAUNCH.json'),JSON.stringify({schema_version:2,ui:'electron',command:['electron','.'],window_title:'Names native'}))
