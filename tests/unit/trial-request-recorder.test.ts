@@ -2,7 +2,7 @@ import {mkdtempSync,readFileSync,rmSync,mkdirSync,writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {expect,it} from 'vitest'
-import {createTrialRequestRecorder,serializeTrialRecord} from '../../scripts/trial-request-recorder'
+import {summarizeTrialCloseout,createTrialRequestRecorder,serializeTrialRecord} from '../../scripts/trial-request-recorder'
 import {redactSoftwareOutput} from '../../main/software/process-manager'
 it('redacts nested command text without breaking the enclosing JSON',()=>{
   const input={trigger:JSON.stringify({result:{text:'COMMAND_REQUIRES_SEPARATE_AUTHORIZATION: refused'}}),message:'password="synthetic-secret"\ncookie: session=synthetic-cookie\nnext line',path:'C:\\test\\file'}
@@ -41,4 +41,16 @@ it('records actual sends, associates tool IDs and excludes credentials and hidde
     expect(readFileSync(join(root,'events.jsonl'),'utf8')).not.toContain('DO_NOT_LOG')
     expect(row.transports.filter((r:any)=>r.state==='started')).toHaveLength(1);expect(row.tool_events).toHaveLength(1);expect(row.reported_price_micro_rmb).toBe(26)
   }finally{rmSync(root,{recursive:true,force:true})}
+})
+
+it('measures readiness from host receipts and keeps unknown sends and absent publication visible',()=>{
+ const rows=[{sequence:1,started_at:'2026-11-09T00:00:00Z',tool_events:[{type:'tool_call_completed',at:'2026-11-09T00:01:00Z',payload:{tool:'verify_app',feedback:{verification:'passed',scope:'software_candidate'}}}]},
+ {sequence:2,role:'research',started_at:'2026-11-09T00:02:00Z',transports:[{state:'started'}],unreported_physical_attempts:1},
+ {sequence:3,role:'code',started_at:'2026-11-09T00:03:00Z',transports:[{state:'started'}],reported_price_micro_rmb:123,unreported_physical_attempts:0},
+ {sequence:4,role:'orchestrator',started_at:'2026-11-09T00:04:00Z',transports:[],assistant_output:['delivered'],unreported_physical_attempts:0}]
+ const report=summarizeTrialCloseout(rows)
+ expect(report.first_code).toEqual({sequence:3,elapsed_ms:120000})
+ expect(report.after_ready).toMatchObject({physical:2,unknown_physical:1,reported_micro_rmb:123})
+ expect(report.publication).toBeNull();expect(report.maker.physical).toBe(0)
+ expect(summarizeTrialCloseout([]).first_ready).toBeNull()
 })
