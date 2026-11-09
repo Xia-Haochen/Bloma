@@ -5,6 +5,7 @@ import ts from 'typescript';
 import { getPromaHome } from '../../storage/config-paths';
 import type { GuiAcceptanceSuite, GuiAcceptanceResult } from '../desktop/gui-acceptance';
 import { nativeTestInputs } from './native-test-inputs';
+import { checkNativeTestBindings } from './native-test-preflight';
 export interface NativeGuiTests {
     layout?: 'project';
     entry: string;
@@ -122,6 +123,7 @@ export function freezeNativeGuiTests(projectId: string, root: string, script: st
     const directory = dirname(script).replaceAll('\\', '/');
     if (directory !== '.') safe(directory);
     const testRoot = realpathSync(root), selected = nativeTestInputs(testRoot, script);
+    checkNativeTestBindings(testRoot, selected);
     const files: NativeGuiTests['files'] = [], contents = new Map<string, Buffer>(), ids = new Set<string>(), cases: NativeGuiTests['cases'] = [];
     let bytes = 0, reopened = false;
         for (const path of selected) {
@@ -286,7 +288,7 @@ export function frozenNativeEntryPreview(projectId: string, native: NativeGuiTes
 /** Retention is conservative: a failed real interaction or an explicit failed
  * assertion has executed, even when no assertion completed successfully. */
 export function nativeCheckExecuted(result:any):boolean{
-  return (result?.native_evidence?.assertions??0)>0||Boolean(result?.case_results?.some((r:any)=>r.status==='failed'&&r.interactions>0))
+  return (result?.native_evidence?.assertions??0)>0||(result?.native_evidence?.interactions_attempted??0)>0||Boolean(result?.case_results?.some((r:any)=>r.status==='failed'&&r.interactions>0))
     ||Boolean(result?.steps?.some((s:any)=>s.actual?.assertion&&(s.actual.assertion.expected!==undefined||s.actual.assertion.actual!==undefined)))
 }
 export function nativeGuiObservations(suite: GuiAcceptanceSuite, reports: Array<{
@@ -299,7 +301,7 @@ export function nativeGuiObservations(suite: GuiAcceptanceSuite, reports: Array<
         passed: boolean;
         actual: unknown;
     }> = [], covered = new Set<string>(), executed = new Set<string>();
-    let interactions = 0, assertions = 0, failed = false;
+    let interactions = 0, interactions_attempted = 0, assertions = 0, failed = false;
     const bootstrapErrors: string[] = [];
     let incompletePhase = false;
     const case_results: NonNullable<GuiAcceptanceResult['case_results']> = suite.native_tests!.cases.map(row=>({name:row.name,feature:row.feature,status:'not_run',assertions:0,interactions:0}));
@@ -311,6 +313,7 @@ export function nativeGuiObservations(suite: GuiAcceptanceSuite, reports: Array<
         if (!Number.isSafeInteger(trace.interactions) || trace.interactions < 0 || !Number.isSafeInteger(trace.assertions) || trace.assertions < 0 || !Array.isArray(trace.cases))
             throw Error('GUI_NATIVE_TRACE_INVALID');
         interactions += trace.interactions;
+        interactions_attempted += Number.isSafeInteger(trace.interactions_attempted)?trace.interactions_attempted:trace.interactions;
         assertions += trace.assertions;
         const finishedCases = new Set<string>();
         for (const line of report.events.split(/\r?\n/).filter(Boolean)) {
@@ -364,7 +367,7 @@ export function nativeGuiObservations(suite: GuiAcceptanceSuite, reports: Array<
     }
     const missing = suite.covers.filter(id => !covered.has(id));
     const assertionFailed=steps.some(s=>{const a=(s.actual as {assertion?:{expected?:unknown;actual?:unknown}})?.assertion;return!s.passed&&a&&(a.expected!==undefined||a.actual!==undefined)})
-    const finish=<T extends {status:string;error?:string}>(value:T)=>({...value,case_results,native_evidence:{interactions,assertions},
+    const finish=<T extends {status:string;error?:string}>(value:T)=>({...value,case_results,native_evidence:{interactions,assertions,interactions_attempted,interaction_count_semantics:'completed' as const},
       ...(value.status==='passed'?{}:{failure_kind:(bootstrapErrors.length&&!steps.length?'bootstrap':value.status==='failed'?assertionFailed?'assertion':'unresolved':'incomplete') as GuiAcceptanceResult['failure_kind']})})
     if (!steps.length && !assertions && failed && bootstrapErrors.length) return finish({ status: 'unverified' as const, steps,
         error: `GUI_NATIVE_BOOTSTRAP_FAILED: ${bootstrapErrors[0].slice(0, 4000)}` });

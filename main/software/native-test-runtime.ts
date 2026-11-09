@@ -1,3 +1,4 @@
+import {checkNativeTestBindings} from './native-test-preflight'
 import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, unlinkSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative } from 'node:path'
@@ -9,6 +10,7 @@ import { frozenNativeGuiRoot, type NativeGuiTests } from './native-gui-tests'
  * verified; the immutable source snapshot is never edited to repair imports. */
 export function prepareNativeTestRuntime(projectId: string, native: NativeGuiTests, sourceRoot: string, workspace: string) {
   const frozen = frozenNativeGuiRoot(projectId, native, sourceRoot)
+  checkNativeTestBindings(frozen,native.files.map(f=>f.path),sourceRoot)
   const rel = relative(join(getPromaHome(), 'software-debug-data', projectId), realpathSync(workspace))
   if (!rel || isAbsolute(rel) || rel === '..' || rel.startsWith('..\\') || rel.startsWith('../')) throw Error('GUI_NATIVE_EXECUTION_DIRECTORY_INVALID')
   const root = mkdtempSync(join(workspace, 'native-inputs-'))

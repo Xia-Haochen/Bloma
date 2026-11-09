@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { softwareProcessIssues } from './software-process-check'
+import { credentialLiterals } from './credential-literals'
 
 /**
  * A3 OWASP 安全扫描器（api-spec §12.9 `run_security_scan`）。
@@ -202,11 +203,15 @@ export function runSecurityScan(input: SecurityScanInput): SecurityScanResult {
     const rel = relative(input.root_path, file).replace(/\\/g, '/')
     const isServerFile = rel === 'server.js' || rel.startsWith('server/')
     const isPyFile = rel.endsWith('.py')
+    const structuredCredentials=input.profile==='local-software'&&/\.[cm]?[jt]sx?$/i.test(rel)
+    if(structuredCredentials)for(const finding of credentialLiterals(rel,content))issues.push({file:rel,line:finding.line,category:'sensitive_data',severity:finding.synthetic?'medium':'high',
+      user_visible_summary:finding.synthetic?'测试回调中使用了明确标记的合成凭据；仅作测试数据记录':'代码绑定了固定密码或密钥，请移除或改为安全存储'})
     if (input.profile === 'local-software' && /\.(?:[cm]?js|[jt]sx?)$/i.test(rel)) issues.push(...softwareProcessIssues(content, rel))
     const pythonCode = isPyFile ? maskPythonStringsAndComments(content).split('\n') : []
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index]
       for (const rule of SCAN_RULES) {
+        if(structuredCredentials&&rule.category==='sensitive_data')continue
         if (input.profile === 'local-software' && rule.serverOnly) continue
         if (input.profile === 'local-software' && rule.nonPyOnly && /\.(?:[cm]?js|[jt]sx?)$/i.test(rel)) continue // syntax-aware software execution checks above
         if (rule.serverOnly && !isServerFile) continue

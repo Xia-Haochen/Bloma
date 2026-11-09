@@ -35,7 +35,7 @@ export interface GuiAcceptanceResult {
   failure_kind?: 'assertion'|'runtime'|'bootstrap'|'incomplete'|'unresolved'
   version: 1; scope: 'host_native_gui_business'; status: 'passed' | 'failed' | 'unverified'
   method?: 'action_steps' | 'node:test'
-  native_evidence?: {interactions:number;assertions:number}
+  native_evidence?: {interactions:number;assertions:number;interactions_attempted?:number;interaction_count_semantics?:'completed'}
   evidence_dir?: string
   evidence_warnings?: string[]
   suite_hash: string; covers: string[]; steps: Array<{ id: string; passed: boolean; actual?: unknown }>; error?: string

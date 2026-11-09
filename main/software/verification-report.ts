@@ -45,6 +45,18 @@ export function verificationCases(result:SoftwareVerification){
   const rank=(status:string)=>status==='failed'?0:status==='passed'?2:1
   return [...gui,...cli,...independent].sort((a,b)=>rank(a.status)-rank(b.status))
 }
+/** Complete distribution precedes paged stacks. These are recorded symptoms,
+ * not a root-cause verdict; missing errors remain explicitly unknown. */
+function failureDistribution(rows:ReturnType<typeof verificationCases>){
+  const groups=new Map<string,{kind:string;status:string;reason:string;reason_hash:string;count:number;cases:string[]}>()
+  for(const row of rows){if(row.status==='passed')continue
+    const error='error' in row&&typeof row.error==='string'?row.error:'not_recorded'
+    const reason=error.split('\n')[0].slice(0,1000),key=JSON.stringify([row.kind,row.status,error])
+    const group=groups.get(key)??{kind:row.kind,status:row.status,reason,reason_hash:digest(error),count:0,cases:[]}
+    group.count++;group.cases.push(row.name);groups.set(key,group)
+  }
+  return [...groups.values()]
+}
 /** One projection for immediate feedback and later diagnostics. Raw facts stay
  * in the host receipt; bounded pages explicitly identify omitted information. */
 export function verificationReportView(result:SoftwareVerification,options:{historical?:boolean;offset?:number;limit?:number;at?:number;persisted?:boolean;error?:unknown}={}){
@@ -64,6 +76,7 @@ export function verificationReportView(result:SoftwareVerification,options:{hist
     recorded_failure:result.failure&&{category:result.failure.category,code:result.failure.code,classification_basis:result.failure.classification_basis,interpretation:'recorded diagnosis, not independently confirmed root cause'},
     failure:failure&&{category:failure.category,code:failure.code,step:failure.step,classification_basis:failure.classification_basis,
       expected:pv(failure.expected),actual:pv(failure.actual),paths:failure.paths.length?failure.paths:result.failure?.paths,allowed_changes:failure.allowed_changes,next_tool:failure.next_tool,next_action:failure.next_action,next:failure.next},
+    failure_distribution:failureDistribution(rows),action_counts:result.core?.host_gui?.native_evidence,
     cases:selected,case_count:rows.length,counts:{failed:rows.filter(r=>r.status==='failed').length,unverified:rows.filter(r=>!['passed','failed'].includes(r.status)).length,passed:rows.filter(r=>r.status==='passed').length},
     pagination:{offset,returned:selected.length,omitted:rows.length-selected.length,next:offset+limit<rows.length?readMore(reportHash,offset+limit):undefined},
     details:options.persisted===false?{available:false,reason:'前置错误未生成验收记录，不能读取旧报告冒充本次结果'}:{...readMore(reportHash),note:'完整原始记录可按section=raw和offset分页读取；report_hash变化时拒绝混读。'},
@@ -97,13 +110,13 @@ export function verificationToolReport(projectId:string,observed:SoftwareVerific
  * Keep audit detail in the bound report, not duplicated throughout model input. */
 export function verificationResponse(projectId:string,result:SoftwareVerification,persisted=true,error?:unknown){
   const view=persisted?verificationToolReport(projectId,result):verificationReportView(result,{persisted:false,error})
-  const {report_hash,report_available,freshness,candidate_id,input_identity,counts,case_count}=view
+  const {report_hash,report_available,freshness,candidate_id,input_identity,counts,case_count,failure_distribution,action_counts}=view
   const cases=view.cases.slice(0,4)
   const failure=view.failure&&{category:view.failure.category,code:view.failure.code,step:view.failure.step,
     classification_basis:view.failure.classification_basis,expected:view.failure.expected,actual:view.failure.actual,paths:view.failure.paths,allowed_changes:view.failure.allowed_changes}
   return {status:result.status,summary:redactSoftwareOutput(result.summary).slice(0,1600),reused:Boolean(result.reused),
     failure,
-    evidence:{report_hash,report_available,freshness,candidate_id,input_identity,counts,case_count,cases,
+    evidence:{report_hash,report_available,freshness,candidate_id,input_identity,counts,case_count,cases,failure_distribution,action_counts,
       omitted:case_count-cases.length,details:view.details},
     warnings:[...(result.core?.host_gui?.evidence_warnings??[]),...(result.independent?.case_results??[]).flatMap(row=>row.evidence_warnings??[])].slice(0,4),
     next_action:result.status==='passed'?undefined:view.failure?.next_action,

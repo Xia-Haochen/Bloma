@@ -66,13 +66,13 @@ export function softwareEnvironment(projectId: string, dataDir?: string, root?:s
 
 export function resolveSoftwareCommand(root: string, value: unknown, environment: Record<string, string>): { command: string[]; env: Record<string, string> } {
   let command = validateSoftwareCommand(value)
-  if (isLocalElectronAlias(command) || command[0] === 'electron') {
+  if (isLocalElectronAlias(command) || /^electron(?:\.exe|\.cmd)?$/i.test(command[0])) {
     const entry = electronEntry(root, command, environment.BLOMA_RUNTIME_PROJECT)
     command = [entry.executablePath, ...entry.args]
   }
   const name = basename(command[0]).replace(/\.(exe|cmd|bat)$/i, '').toLowerCase()
   const env = { ...environment }
-  if (isLocalElectronAlias(value as string[]) || (value as string[])[0] === 'electron') delete env.ELECTRON_RUN_AS_NODE
+  if (isLocalElectronAlias(value as string[]) || /^electron(?:\.exe|\.cmd)?$/i.test((value as string[])[0])) delete env.ELECTRON_RUN_AS_NODE
   const runtimeProject = environment.BLOMA_RUNTIME_PROJECT
   const node = runtimeProject ? managedRuntime(runtimeProject, 'node')?.executable : undefined
   if (['python', 'python3'].includes(name)) {
@@ -126,6 +126,7 @@ export async function executeSoftwareCommand(input: { root: string; projectId: s
   const resolved = resolveSoftwareCommand(input.root, input.command, softwareEnvironment(input.projectId, input.dataDir,input.root))
   resolved.command=bindSoftwareProfile(resolved.command,resolved.env)
   if (input.browserBinding) {
+    resolved.env.BLOMA_PRODUCT_ROOT = input.root
     const evidence = input.browserBinding.evidenceDir
     if (!isAbsolute(evidence)) throw Error('EVIDENCE_DIRECTORY_REQUIRED')
     mkdirSync(evidence, { recursive: true })

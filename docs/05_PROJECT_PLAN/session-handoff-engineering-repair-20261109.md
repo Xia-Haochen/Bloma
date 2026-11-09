@@ -217,3 +217,19 @@ Get-Content "$repairTrialRoot\monetary-policy.json.state.json" -Raw | ConvertFro
 提案后置裁定通过现有afterTools反馈进入原无进展守卫；登记成功不再遮住随后拒绝。相同拒绝可停止，普通写文件成功不会清除该阻塞。费用、unknown、请求累计与invocation生命周期仍由原实现持有。
 
 验证：伙伴/恢复/进展39项通过；工作区与队列12项通过，最后补充的显式活跃路径拒绝已包含在最终定向45项中的工作区9项。另17项委派故障注入、继续、恢复通过。范围有重叠，不相加。日志engineering-repair-partner-20261109.log、engineering-repair-scheduling-20261109.log、engineering-repair-final-targeted-20261109.log、engineering-repair-lifecycle-20261109.log；真实供应商模型调度效果仍未付费复验。
+
+### 批次1b/3：执行上下文、冻结前检查与证据归属
+
+开发观察和原生正式验收共享app上下文：origin来自当前实际窗口，waitForWindow仅观察产品正常动作产生的新窗口，readProductFile读取当前候选文件；测试夹具仍来自冻结快照。重开仍关闭本次拥有实例、保留数据并走正常入口，不替产品登录或清遮罩。Windows Electron.exe别名与npx共用解析；已有项目安装也检查版本声明，不能因未绑定而静默使用不兼容版本。
+
+冻结及执行前复用词法作用域检查，报告未绑定的宿主context/expect/assert等名字；Electron的context.newPage在执行前明确拒绝。它不是完整JavaScript类型证明。继续完整冻结原生代码，不引入业务DSL或第二份断言。动作尝试与完成分别记录，历史记录缺尝试数时保留旧完成语义；0 completed不能推断未尝试。
+
+报告先提供完整失败原因分布和计数，再分页堆栈，未知原因明确not_recorded；历史记录仍不能作为交付凭据。JS凭据扫描改为检查实际绑定，避免把注释/清理脚本文本当运行凭据；只有测试回调内明确synthetic/test/fixture前缀的合成值降为medium，生产文件、导出凭据和未标记值仍high。
+
+固定源码后的原生/修正48项全部通过，其中真实Electron组合覆盖动态origin、产品生成的随机凭据、正常新开窗口、跨窗口数据、退出、刷新、完整重开及保留数据；另检查不同重开凭据不能复用。正常启动标题缺失的夹具已修正，原失败保留。新增已知适配拒绝等检查已进入随后19文件/187项全绿的check:offline。安全扫描16项通过。证据：engineering-repair-combined-final-20261109.log、engineering-repair-offline-complete-20261109.log、engineering-repair-security-20261109.log。
+
+### 批次5离线：原校园材料与组合反例
+
+校园原冻结测试d8c288fe4d02165b55e3435838268fff247dd8333aa337ffe0f38321b1e73e4d共46643字节。在临时副本复现作用域错误，将测试助手归入入口闭包并补context绑定后检查通过；原案例正文完整保留，新增资源可封存，案例集合一致。真实项目提案及费用账本前后字节完全一致。证据engineering-repair-campus-candidate-20261109.log；这不是原校园产品整体验收，原提案未被批准或重写。
+
+真实浏览器另证明助手修正获批后仍可暴露产品断言失败：正式复验继续failed，无发布指针，旧失败保持；不能把“修正获准”当作产品PASS。证据engineering-repair-contract-product-separation-20261109.log。完整校园真实模型/C/V/发布/独立手测仍属于用户明确恢复付费后的阶段。

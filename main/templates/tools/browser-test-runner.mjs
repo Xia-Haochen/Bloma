@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { expect } from 'playwright/test';
-import { connectApp } from './browser-context.mjs';
+import { connectApp, appExecutionContext } from './browser-context.mjs';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { bindScreenshotEvidence } from './browser-evidence.mjs';
 import { createNativeTestScope } from './native-test-scope.mjs';
@@ -11,7 +11,7 @@ await test('Bloma native application suite', async () => {
     const { browser, page, context } = await connectApp();
     const evidenceDir = bindScreenshotEvidence(page, context);
     const lifecycle = createNativeTestScope();
-    const counts = { interactions: 0, assertions: 0, cases: [] }, cache = new WeakMap(), originals = new WeakMap(), current = new AsyncLocalStorage();
+    const counts = { interactions: 0, interactions_attempted: 0, assertions: 0, cases: [] }, cache = new WeakMap(), originals = new WeakMap(), current = new AsyncLocalStorage();
     const persistCounts = () => writeFileSync(process.env.BLOMA_NATIVE_TEST_TRACE, JSON.stringify(counts));
     // Playwright compares Locator/Frame identities (e.g. filter({has})). Keep
     // observation wrappers transparent when values re-enter the native API.
@@ -37,6 +37,7 @@ await test('Bloma native application suite', async () => {
                 if (typeof member !== 'function')
                     return object(member);
                 return (...args) => {
+                    if (actions.has(String(key))) { observed('interactions_attempted'); persistCounts(); }
                     const result = member.apply(target, args.map(unwrap));
                     if (actions.has(String(key)))
                         return Promise.resolve(result).then(actual => { observed('interactions'); return actual; });
@@ -62,7 +63,7 @@ await test('Bloma native application suite', async () => {
         if (typeof callback !== 'function')
             return lifecycle.register(() => method(...args));
         return lifecycle.register(() => method(...args.slice(0, -1), async (t) => {
-            const record = { name: String(args[0]), interactions: 0, assertions: 0 };
+            const record = { name: String(args[0]), interactions: 0, interactions_attempted: 0, assertions: 0 };
             counts.cases.push(record);
             persistCounts();
             return current.run(record, async () => { try { await lifecycle.run(() => callback(new Proxy(t, { get(target, key) { if (key === 'assert')
@@ -77,7 +78,7 @@ await test('Bloma native application suite', async () => {
         if (typeof script.default !== 'function')
             throw Error('GUI_NATIVE_DEFAULT_FUNCTION_REQUIRED');
         const checkedExpect = new Proxy(expect, { apply(target, self, args) { return matcher(Reflect.apply(target, self, args.map(unwrap))); }, get(target, key) { const member = Reflect.get(target, key); return key === 'poll' ? (...args) => matcher(member(...args.map(unwrap))) : member; } });
-        await lifecycle.run(() => script.default({ test: checkedTest, page: object(page), context: object(context), expect: checkedExpect, assert: checkedAssert,
+        await lifecycle.run(() => script.default({ test: checkedTest, page: object(page), context: object(context), app: appExecutionContext(object(page),object(context)), expect: checkedExpect, assert: checkedAssert,
             dataDir: process.env.APP_DATA_DIR, evidenceDir, phase: process.env.BLOMA_NATIVE_TEST_PHASE }));
     }
     finally {

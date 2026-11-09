@@ -52,6 +52,7 @@ it('refuses implicit host Electron fallback, resolves local aliases and removes 
   const name=process.platform==='win32'?'electron.exe':process.platform==='darwin'?'Electron.app/Contents/MacOS/Electron':'electron'
   const local=join(project.root_path,'node_modules/electron/dist',name);mkdirSync(join(local,'..'),{recursive:true});writeFileSync(local,'fixture executable')
   expect(resolveSoftwareCommand(project.root_path,['electron','main.cjs'],environment).command[0]).toBe(realpathSync(local))
+  expect(resolveSoftwareCommand(project.root_path,['Electron.exe','main.cjs'],environment).command[0]).toBe(realpathSync(local))
   const alias = resolveSoftwareCommand(project.root_path, ['npx', 'electron', 'main.cjs'], environment)
   expect(alias.command).toEqual([realpathSync(local), 'main.cjs']); expect(alias.env.ELECTRON_RUN_AS_NODE).toBeUndefined()
 })

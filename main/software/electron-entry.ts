@@ -1,6 +1,6 @@
 import { managedRuntime } from './runtime-bindings'
 import { assertElectronVersion } from './electron-runtime'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { basename, isAbsolute, join, resolve } from 'node:path'
 
 export function isLocalElectronAlias(command: readonly string[]): boolean {
@@ -21,9 +21,15 @@ export function electronEntry(root: string, command: readonly string[], projectI
     throw Error('ELECTRON_DIRECT_ENTRY_REQUIRED: 不解析任意包管理器脚本；LAUNCH.command填写项目Electron与实际应用路径，或已打包exe。')
   }
   if (!head) throw Error('ELECTRON_DIRECT_ENTRY_REQUIRED: 缺少实际应用入口')
+  if (/^electron(?:\.exe|\.cmd)?$/i.test(head)) head='electron'
   if (head === 'electron' && projectId) {
     const bound = managedRuntime(projectId, 'electron')
     if (bound) { assertElectronVersion(root, bound.version); head = bound.executable }
+  }
+  if (head === 'electron') {
+    const version=join(root,'node_modules/electron/dist/version'),pkg=join(root,'node_modules/electron/package.json')
+    const installed=existsSync(version)?readFileSync(version,'utf8').trim().replace(/^v/,''):existsSync(pkg)?JSON.parse(readFileSync(pkg,'utf8')).version:undefined
+    if(installed)assertElectronVersion(root,installed)
   }
   if (head === 'electron') head = join(root, 'node_modules/electron/dist', process.platform === 'win32' ? 'electron.exe' : process.platform === 'darwin' ? 'Electron.app/Contents/MacOS/Electron' : 'electron')
   const executablePath = isAbsolute(head) ? head : resolve(root, head)

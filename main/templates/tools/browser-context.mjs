@@ -1,5 +1,5 @@
-import { join } from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { join, resolve, relative, isAbsolute } from 'node:path';
+import { mkdirSync, realpathSync, readFileSync } from 'node:fs';
 import { chromium } from 'playwright';
 export async function connectApp() {
     const endpoint = new URL(process.env.BLOMA_DEBUG_CDP ?? '');
@@ -30,4 +30,29 @@ export async function connectApp() {
     }
     page.setDefaultTimeout(5000);
     return { browser, page, context: page.context() };
+}
+
+/** Actual owned app facts. This observes product-created windows and reads the
+ * current candidate's documents; it never logs in or creates a window for it. */
+export function appExecutionContext(page, context) {
+    return {
+        get origin() { const url = new URL(page.url()); return ['http:', 'https:'].includes(url.protocol) ? url.origin : undefined; },
+        get url() { return page.url(); },
+        phase: process.env.BLOMA_NATIVE_TEST_PHASE,
+        async waitForWindow(action, options = {}) {
+            if (typeof action !== 'function') throw Error('APP_WINDOW_ACTION_REQUIRED');
+            const window = context.waitForEvent('page', { timeout: 10000, ...options });
+            window.catch(() => {});
+            await action();
+            const created = await window;
+            await created.waitForLoadState('domcontentloaded');
+            return created;
+        },
+        readProductFile(path) {
+            if (!process.env.BLOMA_PRODUCT_ROOT || typeof path !== 'string' || isAbsolute(path)) throw Error('APP_PRODUCT_PATH_REQUIRED');
+            const root = realpathSync(process.env.BLOMA_PRODUCT_ROOT), file = realpathSync(resolve(root, path)), rel = relative(root, file);
+            if (!rel || isAbsolute(rel) || rel === '..' || rel.startsWith('../') || rel.startsWith('..\\')) throw Error('APP_PRODUCT_PATH_OUTSIDE_CANDIDATE');
+            return readFileSync(file, 'utf8');
+        },
+    };
 }

@@ -345,3 +345,52 @@ it.each(['empty', 'skip'])('does not accept %s tests or a console PASS as native
       expect(()=>registerNativeGuiTests(project.project_id,'tests/acceptance.mjs')).not.toThrow()
     }
 }, 120000);
+
+it.skipIf(process.platform!=='win32'||!existsSync(resolve('node_modules/electron/dist/electron.exe')))('combines owned dynamic origin, product credentials, normal multiwindow actions, refresh, logout and full reopen',async()=>{
+ const root=project.root_path,brief=readPrdBackplane(project.project_id);brief.lean_brief!.delivery='desktop'
+ syncDocuments({request_id:'combined',project_id:project.project_id,session_id:'s',checkpoint:'requirement_confirmed'},brief)
+ const confirmed=markPrdUserConfirmed(project.project_id)!,scope=prdScopeFingerprint(confirmed);updateProject(project.project_id,{ux_confirmation:{prd_fingerprint:scope,design_hash:scope,html_hash:null}})
+ writeFileSync(join(root,'package.json'),JSON.stringify({name:'combined-fixture',main:'main.cjs',devDependencies:{electron:readFileSync(resolve('node_modules/electron/dist/version'),'utf8').trim()}}))
+ await prepareSoftwareRuntime(project.project_id,root,'electron')
+ writeFileSync(join(root,'README.md'),'candidate document version two')
+ writeFileSync(join(root,'main.cjs'),`const {app,BrowserWindow}=require('electron'),http=require('http'),fs=require('fs'),path=require('path');
+ const accessCode=require('crypto').randomUUID(),data=path.join(process.env.APP_DATA_DIR,'names.json');let origin;
+ const server=http.createServer((q,s)=>{if(q.url==='/'){s.setHeader('Content-Type','text/html');return s.end(fs.readFileSync('index.html','utf8').replace('CODE_PLACEHOLDER',accessCode))}
+ if(q.headers['x-access-code']!==accessCode){s.statusCode=401;return s.end('unauthorized')}
+ if(q.method==='POST'){let body='';q.on('data',b=>body+=b);q.on('end',()=>{if(!body.trim()){s.statusCode=400;return s.end('required')}fs.writeFileSync(data,body);s.end(body)})}
+ else s.end(fs.existsSync(data)?fs.readFileSync(data):'')});
+ app.whenReady().then(()=>server.listen(0,'127.0.0.1',()=>{origin='http://127.0.0.1:'+server.address().port;const w=new BrowserWindow();w.webContents.setWindowOpenHandler(()=>({action:'allow'}));w.loadURL(origin)}));
+ app.on('window-all-closed',()=>{server.close();app.quit()})`)
+ writeFileSync(join(root,'index.html'),`<title>Names</title><h1>Names</h1><output id="code">CODE_PLACEHOLDER</output><input id="password"><button id="login">Login</button><button id="logout">Logout</button><button id="new-window">New window</button><input id="name"><button id="save">Save</button><button id="refresh">Refresh</button><output id="status"></output><output id="list"></output><script>
+ let access='';const el=id=>document.getElementById(id);async function load(){const r=await fetch('/names',{headers:{'x-access-code':access}});el('status').textContent=r.ok?'ready':'unauthorized';if(r.ok)el('list').textContent=await r.text()}
+ el('login').onclick=()=>{access=el('password').value;load()};el('logout').onclick=()=>{access='';el('list').textContent='';el('status').textContent='logged out'};el('new-window').onclick=()=>window.open(location.href);el('refresh').onclick=load;
+ el('save').onclick=async()=>{const r=await fetch('/names',{method:'POST',headers:{'x-access-code':access},body:el('name').value});el('status').textContent=await r.text();if(r.ok)load()};</script>`)
+ writeFileSync(join(root,'LAUNCH.json'),JSON.stringify({schema_version:2,ui:'electron',command:['npx','electron','.'],window_title:'Names'}))
+ writeFileSync(join(root,'tests/acceptance.mjs'),`import fs from 'node:fs';import path from 'node:path';
+ export default async({test,page,expect,assert,app,phase,dataDir})=>{
+ const login=async window=>{await window.locator('#password').fill(await window.locator('#code').innerText());await window.locator('#login').click();await expect(window.locator('#status')).toHaveText('ready')};
+ await test('F-001 save and reopen',async()=>{
+ assert.equal(app.origin,new URL(page.url()).origin);assert.match(app.origin,/^http:\\/\\/127[.]0[.]0[.]1:/);assert.equal(app.readProductFile('README.md'),'candidate document version two');
+ const current=await page.locator('#code').innerText(),record=path.join(dataDir,'previous-code');
+ if(phase==='reopened'){assert.notEqual(current,fs.readFileSync(record,'utf8'));await login(page);await expect(page.locator('#list')).toHaveText('Alice');return}
+ fs.writeFileSync(record,current);await login(page);await page.locator('#name').fill('Alice');await page.locator('#save').click();await expect(page.locator('#list')).toHaveText('Alice');
+ const second=await app.waitForWindow(()=>page.locator('#new-window').click());await login(second);await expect(second.locator('#list')).toHaveText('Alice');await second.locator('#logout').click();await expect(second.locator('#status')).toHaveText('logged out');await second.close();
+ await page.reload();await login(page);await expect(page.locator('#list')).toHaveText('Alice');});
+ await test('F-002 reject blank',async()=>{await page.locator('#name').fill('');await page.locator('#save').click();await expect(page.locator('#status')).toHaveText('required');await expect(page.locator('#list')).toHaveText('Alice')});}`)
+ registerNativeGuiTests(project.project_id,'tests/acceptance.mjs',true)
+ const checked=await verifySoftwareCandidate(project.project_id,'combined-native',AbortSignal.timeout(150000))
+ expect(checked.status,JSON.stringify({summary:checked.summary,gui:checked.core?.host_gui})).toBe('passed')
+ expect(checked.core?.host_gui?.native_evidence?.interactions_attempted).toBeGreaterThan(0)
+},180000)
+it('rejects missing host bindings before freezing rather than calling a scope error a product failure',()=>{
+ writeFileSync(join(project.root_path,'tests/acceptance.mjs'),`const helper=()=>context.newPage();export default async({test,page,expect})=>{await test('F-001 missing',async()=>{helper();await expect(page.locator('#list')).toHaveText('Alice')});await test('F-002 blank',async()=>{await page.click('#save');await expect(page.locator('#status')).toHaveText('required')})}`)
+ expect(()=>registerNativeGuiTests(project.project_id,'tests/acceptance.mjs')).toThrow('GUI_NATIVE_BINDING_UNDEFINED')
+ expect(existsSync(guiSuitePath(project.project_id))).toBe(false)
+})
+
+it('rejects a known unsupported Electron adapter before freezing',()=>{
+ writeFileSync(join(project.root_path,'LAUNCH.json'),JSON.stringify({schema_version:2,ui:'electron',command:['electron','.'],window_title:'Names'}))
+ writeFileSync(join(project.root_path,'tests/acceptance.mjs'),script.replace('test,page,expect,assert,phase,evidenceDir','test,page,context,expect,assert,phase,evidenceDir').replace("assert.ok(evidenceDir);","await context.newPage();assert.ok(evidenceDir);"))
+ expect(()=>registerNativeGuiTests(project.project_id,'tests/acceptance.mjs')).toThrow('GUI_NATIVE_CAPABILITY_UNSUPPORTED')
+ expect(existsSync(guiSuitePath(project.project_id))).toBe(false)
+})
