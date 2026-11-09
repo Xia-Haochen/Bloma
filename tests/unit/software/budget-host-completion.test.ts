@@ -15,6 +15,14 @@ import { debugWorkspace } from '../../../main/software/debug-workspace'
 import { softwareVerificationFingerprint } from '../../../main/desktop/verification-fingerprint'
 import { buildLeanCliTool } from '../../../main/desktop/lean-cli-check'
 import { createToolState } from '../../../main/agent/loop/agent-loop'
+const advisory = vi.hoisted(()=>({enabled:false}))
+vi.mock('../../../main/software/engineering-partner',async original=>{
+  const actual=await original<typeof import('../../../main/software/engineering-partner')>()
+  return {...actual,createEngineeringPartner:(...args:Parameters<typeof actual.createEngineeringPartner>)=>{
+    const partner=actual.createEngineeringPartner(...args)
+    return {...partner,take:(ctx:Parameters<typeof partner.take>[0])=>advisory.enabled?'Optional documentation suggestion':partner.take(ctx),isObserving:()=>advisory.enabled||partner.isObserving()}
+  }}
+})
 
 let home: string, previous: string | undefined
 beforeEach(() => { previous = process.env.PROMA_HOME; home = mkdtempSync(join(tmpdir(), 'bloma-budget-host-')); process.env.PROMA_HOME = home })
@@ -74,3 +82,30 @@ it.each([{ output: 5, rules: true, cancel: false, passed: true }, { output: 999,
   if (cancel) expect(existsSync(join(project.root_path, '00_VERIFY/launch-smoke.json'))).toBe(false)
   if (monetary && !rules) expect(findProject(project.project_id).desktop_blocked?.note).toContain('上次宿主观察之后的修改')
 }, 60000)
+
+it.fails('hands a verified candidate to C despite continuously available optional advice, without another maker request',async()=>{
+ const project=createProject({request_id:'create',mode:'quick'},{workflowVersion:'software-v1'})
+ const parsed=parseLeanBrief(JSON.stringify({action:'brief',goal:'Print 5',ui:'none',delivery:'command',requirements:[{description:'输出5',expected:'输出5'}]}),{projectId:project.project_id,sessionId:'s',source:'输出5',previous:readPrdBackplane(project.project_id),software:true})!
+ if(parsed.action!=='brief')throw Error('fixture')
+ syncDocuments({request_id:'sync',project_id:project.project_id,session_id:'s',checkpoint:'requirement_confirmed'},parsed.brief);markPrdUserConfirmed(project.project_id)
+ writeFileSync(join(project.root_path,'app.cjs'),'console.log(5)')
+ writeFileSync(join(project.root_path,'ARCHITECTURE.md'),'Single CLI prints five. No persistence or shared resources. Normal entry tested.')
+ writeFileSync(join(project.root_path,'LAUNCH.json'),JSON.stringify({schema_version:2,command:['node','app.cjs'],mode:'command'}))
+ await buildLeanCliTool(project.project_id).execute({expectations:{'F-001':'输出5'},cases:[{name:'five',covers:['F-001'],args:[],stdout:'5',exit_code:0}]},{projectId:project.project_id,sessionId:'s',requestId:'r',signal:AbortSignal.timeout(10000),state:createToolState()})
+ let maker=0,review=0
+ const use=(id:string,name:string,input:Record<string,unknown>)=>({type:'tool_use' as const,id,name,input})
+ const query:SDKQuery=async function*(_prompt,options){
+  const isMaker=options.sessionId==='s'
+  if(isMaker&&++maker>1)throw Error('OPTIONAL_ADVICE_STARVED_CLOSEOUT')
+  if(!isMaker)review++
+  yield{type:'assistant',message:{role:'assistant',content:isMaker?[use('verify','verify_app',{})]:[use('materials','read_quality_review',{}),use('source','read_file',{path:'app.cjs'}),use('submit','submit_quality_findings',{findings:[],engineering:{status:'supported',evidence:'Single CLI, no state or resources.',limitations:'CLI fixture only'}})]}}
+  yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
+ }
+ advisory.enabled=true
+ try{
+  await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'r',content:'实现输出5',signal:AbortSignal.timeout(90000),maxTokens:4096},query,{}, {publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
+  expect(maker).toBe(1);expect(review).toBe(1)
+  expect(findProject(project.project_id).desktop_phase).toBe('delivered')
+  expect(await activeSoftwareRelease(project.project_id)).toBeTruthy()
+ }finally{advisory.enabled=false}
+},120000)

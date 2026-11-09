@@ -286,3 +286,5 @@ Get-FileHash "$closeoutTrial\monetary-policy.json.state.json"
 接手 HEAD 25ca096，保护文件 hash-object 53c7abb3aef8497d8b0522b8aab806c82b2ec164。新旧费用账本和测试纠正文件 SHA256 与第2节一致；新轮 pause-generation 保留。无付费请求、未修改真实产品或原台账。
 
 P0 首批：新增 tests/fixtures/delivery-convergence-20261109.json，只读白名单提取第121/124/128/145/168/190/194/195条请求的时序、发送数、用量、工具反馈与原始文件哈希，以及原finding触发/未知/checks。全量输入、配置和隐藏推理未复制。quality-settlement 回放确认旧套件通过不会结算两条无绑定 high 疑点，原 checks 仍为空。quality-settlement / quality-closeout / engineering-partner 定向测试36项通过。该批仅固化证据和结算反例；P0的真实Pi优先级反例、遥测量化及期限/恢复组合仍待完成，不能据此宣布P0全部退出。
+
+P0 优先级反例补充：真实 Pi 执行器、CLI 子进程和正式发布路径，供应商与伙伴建议受控替身；旧实现于 run-artifacts/delivery-convergence-p0-priority-before.log 失败：本机验证后制作请求达到2次而预期1次。测试暂以 it.fails 固化已知失败，P1修复后改为普通正向断言。该反例不代表真实供应商行为或GUI验收。
