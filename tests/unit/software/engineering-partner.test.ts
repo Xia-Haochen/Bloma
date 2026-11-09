@@ -124,3 +124,14 @@ it('does not purchase investigation for successful reads or unrelated source cha
  expect(h.resume).not.toHaveBeenCalled()
  peer.observeTool({...event('failure'),isError:true});expect(h.resume).toHaveBeenCalledTimes(1)
 })
+
+it('parks synchronously on a trusted complete candidate receipt before a new optional wake can enter the queue',()=>{
+ const peer=createEngineeringPartner(true,undefined,{needsEvidence:()=>true});peer.begin(ctx());peer.context('child');peer.observed('child',{turn:1,toolCalls:[]});h.record.status='completed'
+ const receipt='<tool-feedback>'+JSON.stringify({schema_version:1,source:'host',scope:'software_candidate',verification:'passed',execution:'completed',recovery:'none'})+'</tool-feedback>\n{}'
+ peer.observeTool({...event('ready','verify_app',receipt),isError:false})
+ expect(peer.isObserving()).toBe(false);expect(h.resume).not.toHaveBeenCalled()
+ expect(JSON.stringify(peer.context('child'))).toContain('software_candidate')
+ peer.begin(ctx());h.record.status='completed';const resumed=h.resume.mock.calls.length
+ peer.observeTool({...event('same-receipt','verify_app',receipt),isError:false})
+ expect(peer.isObserving()).toBe(false);expect(h.resume).toHaveBeenCalledTimes(resumed)
+})
