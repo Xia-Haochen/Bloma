@@ -4,16 +4,25 @@ import { tmpdir } from 'node:os'
 import { afterEach, expect, it, vi } from 'vitest'
 import { createProject } from '../../../main/project/project-service'
 import { prepareSoftwareRuntime } from '../../../main/software/runtime-manager'
-import { hostElectronDistribution } from '../../../main/software/electron-runtime'
+import { hostElectronDistribution, electronConstraint, assertElectronVersion } from '../../../main/software/electron-runtime'
 import { electronEntry } from '../../../main/software/electron-entry'
 import { resolveSoftwareCommand, softwareEnvironment } from '../../../main/software/command-runtime'
-import { managedRuntime } from '../../../main/software/runtime-bindings'
+import { managedRuntime, runtimeDirectoryDigest } from '../../../main/software/runtime-bindings'
 import { prepareSoftwareRelease, validateSoftwareRelease } from '../../../main/software/release-store'
 
 const previous = process.env.PROMA_HOME
 let home: string | undefined
 afterEach(() => { vi.restoreAllMocks(); if (previous === undefined) delete process.env.PROMA_HOME; else process.env.PROMA_HOME = previous
   if (home) rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }) })
+it('honors the npm lock instead of upgrading within a compatible declared range', () => {
+  home = mkdtempSync(join(tmpdir(), 'bloma-electron-lock-'))
+  writeFileSync(join(home, 'package.json'), JSON.stringify({devDependencies:{electron:'^33.2.0'}}))
+  writeFileSync(join(home, 'package-lock.json'), JSON.stringify({packages:{'node_modules/electron':{version:'33.2.0'}}}))
+  expect(electronConstraint(home)).toBe('33.2.0')
+  expect(() => assertElectronVersion(home!, '33.3.0')).toThrow('RUNTIME_PROJECT_ENGINE_MISMATCH')
+  writeFileSync(join(home, 'package-lock.json'), JSON.stringify({packages:{'node_modules/electron':{version:'39.8.10'}}}))
+  expect(() => electronConstraint(home!)).toThrow('PROJECT_ELECTRON_LOCK_MISMATCH')
+})
 it.skipIf(process.platform !== 'win32' || !hostElectronDistribution())('imports a complete Electron offline, launches and reopens it, pins snapshots and rejects incompatible or modified resources', async () => {
   home = mkdtempSync(join(tmpdir(), 'bloma-electron-binding-')); process.env.PROMA_HOME = home
   const project = createProject({ request_id: 'electron', mode: 'quick' }, { workflowVersion: 'software-v1' }), root = project.root_path, id = project.project_id
@@ -49,3 +58,13 @@ it.skipIf(process.platform !== 'win32' || !hostElectronDistribution())('imports 
   await expect(validateSoftwareRelease(id, release)).rejects.toThrow('MANAGED_RUNTIME_DIRECTORY_CHANGED')
   expect(fetch).not.toHaveBeenCalled()
 }, 120000)
+it.skipIf(!process.env.SOFTWARE_RUNTIME_SOURCE_TEST)('imports the existing failure fixture runtime without changing its source or upgrading its version', async () => {
+  home = mkdtempSync(join(tmpdir(), 'bloma-electron-source-')); process.env.PROMA_HOME = home
+  const root = process.env.SOFTWARE_RUNTIME_SOURCE_TEST!, source = join(root, 'node_modules/electron/dist')
+  const before = runtimeDirectoryDigest(source), version = readFileSync(join(source, 'version'), 'utf8').trim()
+  const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(Error('network forbidden'))
+  const runtime = await prepareSoftwareRuntime('isolated-source-import', root, 'electron')
+  expect(runtime.version).toBe(version); expect(runtime.source).toBe(source)
+  expect(runtime.directory_sha256).toBe(before); expect(runtime.executable).toContain(home)
+  expect(runtimeDirectoryDigest(source)).toBe(before); expect(fetch).not.toHaveBeenCalled()
+}, 60000)

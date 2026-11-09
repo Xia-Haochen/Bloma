@@ -15,6 +15,15 @@ export function electronConstraint(root: string): string | undefined {
   const pkg = JSON.parse(readFileSync(file, 'utf8'))
   const value = pkg.dependencies?.electron ?? pkg.devDependencies?.electron
   if (value !== undefined && (typeof value !== 'string' || !semver.validRange(value))) throw Error('PROJECT_ELECTRON_VERSION_INVALID')
+  const lockFile = join(root, 'package-lock.json')
+  if (value !== undefined && existsSync(lockFile)) {
+    const lock = JSON.parse(readFileSync(lockFile, 'utf8'))
+    const pinned = lock.packages?.['node_modules/electron']?.version ?? lock.dependencies?.electron?.version
+    if (pinned !== undefined) {
+      if (typeof pinned !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(pinned) || !semver.satisfies(pinned, value)) throw Error('PROJECT_ELECTRON_LOCK_MISMATCH')
+      return pinned
+    }
+  }
   return value
 }
 export function assertElectronVersion(root: string, version: string) {

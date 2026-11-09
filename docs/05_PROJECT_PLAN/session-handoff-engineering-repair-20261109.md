@@ -184,3 +184,9 @@ Get-Content "$repairTrialRoot\monetary-policy.json.state.json" -Raw | ConvertFro
 - 定向12项回归通过（4文件）：诊断准入失败、嵌套JSON/转义/凭据、试验旧损坏记录保留，以及真实CLI验证、旧PASS失效、受控Agent修复交付。focused复验5项与此重叠，不相加。类型检查通过。
 - 证据：run-artifacts/engineering-repair-diagnostics-20261109.log、engineering-repair-diagnostics-focused-20261109.log、engineering-repair-diagnostics-typecheck-20261109.log。
 - 边界：这是第3批的诊断子项；修正裁定分离、完整失败原因分布、尝试/完成计数、安全扫描精确例外尚未完成。不能称为全平台脱敏已统一。
+
+### 1a 补充：npm锁定版本与校园原运行时复用
+
+- package-lock.json的Electron精确版本优先于package.json兼容范围；锁文件与声明不一致时明确拒绝。新增反例证明^33.2.0且锁定33.2.0时不能选择33.3.0。当前实现覆盖npm锁文件，未增加其它包管理器锁文件解析。
+- Electron运行时用例2项通过，包含真实启动/重开/快照/篡改拒绝；另以SOFTWARE_RUNTIME_SOURCE_TEST只读指定校园项目原目录，在隔离PROMA_HOME导入其33.2.0发行目录并实际探测，源目录前后完整摘要一致，无fetch调用。未运行校园产品代码或更改原项目绑定。
+- 证据：run-artifacts/engineering-repair-electron-lock-20261109.log、engineering-repair-campus-runtime-import-20261109.log、engineering-repair-lock-types-20261109.log。第一次外部源验证使用BLOMA前缀，被测试全局环境守卫清除而跳过；原日志engineering-repair-campus-runtime-20261109.log保留，不计作校园源验证通过。
