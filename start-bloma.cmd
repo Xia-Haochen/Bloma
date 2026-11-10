@@ -1,4 +1,6 @@
 @echo off
+setlocal
+chcp 65001 >nul
 cd /d "%~dp0"
 where node >nul 2>nul
 if errorlevel 1 (
@@ -7,4 +9,6 @@ if errorlevel 1 (
   exit /b 1
 )
 node scripts\start.mjs %*
-if errorlevel 1 pause
+set "BLOMA_EXIT_CODE=%ERRORLEVEL%"
+if not "%BLOMA_EXIT_CODE%"=="0" pause
+exit /b %BLOMA_EXIT_CODE%

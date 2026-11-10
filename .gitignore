@@ -22,3 +22,6 @@ bench/runs/
 # 运行产物统一收纳（狗粮报告/驾驶日志/临时实验输出；scripts/dogfood-*.mjs 写入）
 run-artifacts/
 __pycache__/
+
+# Content proofs and local startup timings (never project/usage state)
+.bloma-build/

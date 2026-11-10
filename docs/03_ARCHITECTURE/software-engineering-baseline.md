@@ -156,3 +156,10 @@ Git 使用独立索引与 `bloma-history` 分支。首次新建仓库为 main �
 - `status_only`复用原交付IPC返回有界只读状态，不执行检查或增加费用。公开消息使用`public_message_id`和独立呈现边界，不能偷换`message_completed`的流程语义；原审计与Pi transcript保留各自职责。
 - 渲染按消息固化、历史同ID去重，停止/旧generation/旧无key终态不能关闭新run；合法终态后确认卡保留。普通完整答复不按关键词隐藏，首句不再充当状态大标题。
 - 实施、实测及隔离边界见[UX工程交接](../05_PROJECT_PLAN/session-handoff-ux-action-first-20261110.md)。这不等于原生成产品已交付，也不恢复历史付费试验。
+
+
+## 根目录CMD的生产增量启动（2026-11-10）
+
+用户使用`start-bloma.cmd`；该入口与npm start统一通过内容新鲜度门禁。按renderer/main/worker/preload/templates复用产物，正式npm run build仍强制生产全量。源码、实际打包输入、包解析元数据/布局、配置/lock/工具链及输出按字节核对，不以时间戳或已有dist存在代替证明。构建失败或严格skip发现过期时不启动旧版。
+
+构建缓存与测量保存在忽略的`.bloma-build/`，与项目质量/费用账本无关。执行互斥保护依赖修复及构建写入；不宣称已完成运行中App的不可变资源快照或并发加载认证。见[启动修复交接](../05_PROJECT_PLAN/session-handoff-startup-freshness-20261110.md)。本批未恢复任何原项目或付费试验。

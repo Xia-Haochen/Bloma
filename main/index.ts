@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, Notification, screen, session, type MessageBoxOptions, type WebContents } from 'electron'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync, renameSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { registerIpcHandlers } from './ipc'
@@ -58,6 +58,21 @@ async function createMainWindow(): Promise<void> {
       webviewTag: false,
     },
   })
+
+  // Optional root-launcher timing, fixed project-local path and one-time nonce.
+  // This measures first paint, not project recovery, model readiness or delivery.
+  const startupToken = process.env.BLOMA_STARTUP_TOKEN
+  if (startupToken && /^[0-9a-f-]{36}$/i.test(startupToken)) {
+    mainWindow.once('ready-to-show', () => {
+      try {
+        const dir = join(app.getAppPath(), '.bloma-build')
+        mkdirSync(dir, { recursive: true })
+        const path = join(dir, `ready-${startupToken}.json`)
+        writeFileSync(path + '.tmp', JSON.stringify({ token: startupToken, pid: process.pid, at: Date.now() }))
+        renameSync(path + '.tmp', path)
+      } catch { /* Timing must not prevent normal startup. */ }
+    })
+  }
 
   configureContentSecurity(mainWindow)
   configureOutboundAllowlist()

@@ -169,6 +169,17 @@ npm run docs:check
 
 测试写入文件时必须使用临时 `PROMA_HOME`，完整规则见 `docs/06_TESTS/testing-standards.md`。
 
+### 5.4 Windows 一键启动
+
+双击根目录 `start-bloma.cmd` 即可；它与 `npm start` / `npm run start:auto` 使用同一生产构建检查入口。
+
+- 首次、缓存缺失或依赖变化时构建；没有改动则校验源码、实际打包依赖与产物的内容指纹后直接启动。
+- 按 renderer、main、语音worker、preload、模板分别更新，普通前端改动不会重新构建主进程，反之亦然。模板删除会同步到产物。
+- `npm run build` 仍强制完整生产构建；`npm run build:main` 和 `npm run build:renderer` 保留原有范围并写入对应证明。
+- `start-bloma.cmd --force-build` 强制重建；`--build-only` 只预检/构建，不打开App；`--no-install` 不自动安装缺失依赖。
+- `--skip-build` **只允许经验证的新鲜产物**，不再绕过过期或失败构建。失败后应解决错误并重新启动，不要直接运行旧 `dist-main`。
+- 指纹和分阶段耗时保存在忽略目录 `.bloma-build/`，不是产品质量/费用台账。`window_ready_ms` 仅表示首屏绘制，不表示项目恢复、模型或产品已准备好。
+
 ## 6. 原始文档修订记录
 
 | 版本 | 日期 | 修订内容 |
