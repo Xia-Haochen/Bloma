@@ -36,7 +36,9 @@ export const RUNTIME_HEARTBEAT_MS = 5000
 const RUNTIME_LEASE_MS = 15000
 export interface ProductionLimits { requests: number; output: number; perResponse: number; phaseRequests: number }
 const PHASE_REQUESTS: Record<string, number> = { 'desktop-arch': 64, 'desktop-scaffold': 32, 'desktop-implement': 160, 'desktop-verify': 64 }
-export const PRODUCTION_LIMITS = { requests: 256, output: 262144, perResponse: 16384 }
+// Global cumulative safety tier; per-response caps and monetary authorization
+// remain independent. Changing defaults never resets durable usage/reservations.
+export const PRODUCTION_LIMITS = { requests: 1024, output: 1048576, perResponse: 16384 }
 export function productionDeadlineMs(phase: string): number {
   return ({ 'desktop-arch': 8, 'desktop-scaffold': 5, 'desktop-implement': 30, 'desktop-verify': 15 }[phase] ?? 15) * 60_000
 }

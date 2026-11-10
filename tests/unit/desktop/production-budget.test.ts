@@ -21,19 +21,47 @@ const ok: SDKQuery = async function* (_prompt, opts) {
 const limits = { requests: 3, phaseRequests: 3, output: 8192, perResponse: 2048 }
 
 describe('production admission is shared and durable', () => {
+  it('uses the fourfold global defaults across software preparation and execution', () => {
+    const project=createProject({request_id:'defaults',mode:'quick'},{workflowVersion:'software-v1'})
+    for(const phase of ['prepare','desktop-implement','desktop-verify']){
+      expect(leanBudget(project.project_id,phase).snapshot()).toMatchObject({requests:0,output:0,
+        limits:{requests:1024,phaseRequests:1024,output:1048576}})
+    }
+    expect(createProductionBudget('defaults','defaults','desktop-implement').snapshot().limits.perResponse).toBe(16384)
+  })
+  it('admits old exhausted output without resetting its used or unknown reserved counters', () => {
+    const project=createProject({request_id:'old-counters',mode:'quick'},{workflowVersion:'software-v1'})
+    const initial=leanBudget(project.project_id,'desktop-implement');initial.recordRuntime(0)
+    const before=initial.snapshot()
+    const state={version:1,requests:175,output:262144,phases:{prepare:2,'desktop-implement':173},runtimeMs:1982343}
+    writeFileSync(before.file,JSON.stringify(state))
+    const resumed=leanBudget(project.project_id,'desktop-implement')
+    expect(resumed.admission()).toEqual({allowed:true,reason:undefined})
+    expect(resumed.snapshot()).toMatchObject({...state,limits:{requests:1024,output:1048576}})
+    expect(leanBudget(project.project_id,'prepare').snapshot()).toMatchObject(state)
+  })
+  it('still stops at the new global request and output ceilings', () => {
+    const project=createProject({request_id:'new-ceilings',mode:'quick'},{workflowVersion:'software-v1'})
+    const budget=leanBudget(project.project_id,'desktop-implement');budget.recordRuntime(0)
+    const file=budget.snapshot().file
+    writeFileSync(file,JSON.stringify({version:1,requests:175,output:1048576,phases:{'desktop-implement':173,prepare:2}}))
+    expect(budget.admission()).toEqual({allowed:false,reason:'HARNESS_OUTPUT_BUDGET_EXHAUSTED'})
+    writeFileSync(file,JSON.stringify({version:1,requests:1024,output:100,phases:{'desktop-implement':1022,prepare:2}}))
+    expect(budget.admission()).toEqual({allowed:false,reason:'HARNESS_REQUEST_BUDGET_EXHAUSTED'})
+  })
   it('aligns preparation with the same funded window before exposing its budget without clearing prior usage',async()=>{
     const project=createProject({request_id:'prepare',mode:'quick'},{workflowVersion:'software-v1'})
     const initial=leanBudget(project.project_id,'prepare');initial.recordRuntime(0)
     const prior=initial.snapshot()
-    writeFileSync(prior.file,JSON.stringify({version:1,requests:256,output:prior.limits.output,phases:{prepare:256}}))
+    writeFileSync(prior.file,JSON.stringify({version:1,requests:prior.limits.requests,output:prior.limits.output,phases:{prepare:prior.limits.requests}}))
     await expect(withLeanRuntime(project.project_id,'prepare',options().signal,async(_signal,budget)=>drain(budget.wrap(ok)))).rejects.toThrow('HARNESS_REQUEST_BUDGET_EXHAUSTED')
     await withFundedExecutionWindow(()=>({remainingRequests:8,remainingRmb:1,outputRmbPerMillion:8}),()=>
       withLeanRuntime(project.project_id,'prepare',options().signal,async(_signal,budget)=>{
-        expect(budget.snapshot().limits.requests).toBe(264)
+        expect(budget.snapshot().limits.requests).toBe(prior.limits.requests+8)
         expect(budget.snapshot().limits.output).toBe(prior.limits.output+125000)
         await drain(budget.wrap(ok))
       }))
-    expect(leanBudget(project.project_id,'prepare').snapshot()).toMatchObject({requests:257,output:prior.limits.output+100})
+    expect(leanBudget(project.project_id,'prepare').snapshot()).toMatchObject({requests:prior.limits.requests+1,output:prior.limits.output+100})
   })
 
   it('releases only a typed unsent host pause, preserving attempts and any started transport reserve',async()=>{

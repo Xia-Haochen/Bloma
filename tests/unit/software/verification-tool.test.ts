@@ -135,11 +135,11 @@ it('invalidates an earlier tool PASS when final delivery checks fail, even after
 it('normal production aligns an admitted outer window without clearing old request counts',async()=>{
  await setup()
  const budget=leanBudget(project.project_id,'desktop-implement');budget.recordRuntime(0);const snapshot=budget.snapshot()
- writeFileSync(snapshot.file,JSON.stringify({version:1,requests:256,output:0,phases:{}}))
+ writeFileSync(snapshot.file,JSON.stringify({version:1,requests:snapshot.limits.requests,output:0,phases:{}}))
  const query:SDKQuery=async function*(){yield {type:'assistant',message:{role:'assistant',content:[{type:'text',text:'完成原目标。'}]}};yield {type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}}
  await withFundedExecutionWindow(()=>({remainingRequests:8,remainingRmb:1,outputRmbPerMillion:8}),()=>enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'funded',content:'完成原任务',maxTokens:4096,signal:AbortSignal.timeout(90000)},withEmptyQualityReview(query),{},
  {publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}}))
  const final=leanBudget(project.project_id,'desktop-implement').snapshot()
- expect(final.requests).toBeGreaterThan(256);expect(final.limits.requests).toBe(264)
+ expect(final.requests).toBeGreaterThan(snapshot.limits.requests);expect(final.limits.requests).toBe(snapshot.limits.requests+8)
  expect(findProject(project.project_id).status).toBe('completed')
 },120000)
