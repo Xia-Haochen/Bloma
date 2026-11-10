@@ -148,3 +148,11 @@ Git 使用独立索引与 `bloma-history` 分支。首次新建仓库为 main �
 最终提交收口验证：代码审阅27项通过；视觉7项最终通过（初次两处旧请求数断言已更新，完整GUI发布用例并行时超时，保留原时限单独复验通过）；持续建议探针下的真实Pi审阅、发布与回收再次通过。日志 `run-artifacts/review-final-submit-20261108.log`、`review-final-submit-visual-final-20261108.log`、`review-final-submit-visual-isolated-20261108.log`、`review-final-submit-advisory-20261108.log`。类型与文档检查通过。历史未完成审阅未补写批准，真实模型续跑仍须重新核对当前候选。
 
 伙伴工作方法验证：阶段消息在子任务未结束时送达、失败片段和thinking不转发、C/V不接收伙伴意见；纯收尾恢复不唤醒制作方或新伙伴；持续探针下正常审阅、发布与取消回收均已通过。环境检查与当前事实入口也由真实委派回归覆盖。日志 `run-artifacts/partner-workflow-final-unit-20261108.log`、`partner-message-final-20261108.log`（修正测试对JSON转义的读取后通过）、`partner-host-resume-20261108.log`、`partner-workflow-production-final-20261108.log`、`partner-workflow-delegation-20261108.log`。类型、文档与构建检查通过。这里验证机制，不据此宣称真实模型选题和架构质量已改善。
+
+
+## UX-001 行动优先的公开呈现（2026-11-10）
+
+- 对话主提示面向零知识用户说明“现在该做什么”，运行中明确不需操作；主动作只走原入口和权限守卫。execution、历史verification与goal继续分开；模型自述与旧PASS不能授予交付。
+- `status_only`复用原交付IPC返回有界只读状态，不执行检查或增加费用。公开消息使用`public_message_id`和独立呈现边界，不能偷换`message_completed`的流程语义；原审计与Pi transcript保留各自职责。
+- 渲染按消息固化、历史同ID去重，停止/旧generation/旧无key终态不能关闭新run；合法终态后确认卡保留。普通完整答复不按关键词隐藏，首句不再充当状态大标题。
+- 实施、实测及隔离边界见[UX工程交接](../05_PROJECT_PLAN/session-handoff-ux-action-first-20261110.md)。这不等于原生成产品已交付，也不恢复历史付费试验。

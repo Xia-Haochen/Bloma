@@ -1,6 +1,7 @@
 import { resolveProjectRoot } from '../../../shared/project-root-override'
 import { loopThinking } from './loop-thinking'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import type { AgentMessage, AgentToolResult, AgentTurnContext } from '@earendil-works/pi-agent-core'
 import type { AgentSession, ToolDefinition } from '@earendil-works/pi-coding-agent'
 import { getPromaHome } from '../../../storage/config-paths'
@@ -62,7 +63,8 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
   let termination: AgentLoopResult['termination_detail']
   let errorMessage: string | undefined
   let invalidOutputRetries = 0, cutoffRetries = 0, budgetStalls = 0, budgetHitThisTurn = false
-  let filter = createDsmlDisplayFilter()
+  let publicMessage: { id: string; at: number; message: Extract<AgentMessage, { role: 'assistant' }>;
+    filter: ReturnType<typeof createDsmlDisplayFilter> } | undefined
   const recoveryContext = () => {
     if (!input.recoveryContext) return ''
     try { const value=input.recoveryContext();return value.length<=8000?value:'【宿主工作状态摘要】摘要超过完整性约定，未按字符截断。先读取working-state现场索引；当前摘要缺失，不推断成功、不重放写入。' }
@@ -79,11 +81,45 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
       progress_files: snapshot.file_revisions,
       validation: { ...snapshot, candidate_fingerprint: candidateFingerprintOf(snapshot.file_revisions) } })
   }
-  const appendAudit = (message: AgentMessage, userOrigin: 'user' | 'system' = 'system') => {
+  const appendAudit = (message: AgentMessage, userOrigin: 'user' | 'system' = 'system', identity?: { id: string; at: number }) => {
     if (message.role !== 'user' && message.role !== 'assistant' && message.role !== 'toolResult') return
-    const blocks = auditBlocks(message)
+    let blocks = auditBlocks(message)
+    if (message.role === 'assistant') {
+      // This existing audit is also public history. Project text with the same
+      // streaming filter (including cross-block holdback); native Pi keeps the
+      // unmodified protocol/tool evidence. Never put thinking into public text.
+      const display = createDsmlDisplayFilter()
+      blocks = blocks.flatMap(block => block.type === 'text'
+        ? display.push(block.text ?? '').map(text => ({ type: 'text' as const, text })) : [block])
+      blocks.push(...display.end().map(text => ({ type: 'text' as const, text })))
+    }
     if (blocks.length) appendSessionMessage(input.sessionId, { role: message.role === 'assistant' ? 'assistant' : 'user',
-      origin: message.role === 'assistant' ? 'agent' : userOrigin, content: blocks, timestamp: Date.now() })
+      origin: message.role === 'assistant' ? 'agent' : userOrigin, content: blocks, timestamp: identity?.at ?? Date.now(),
+      ...(identity ? { public_message_id: identity.id } : {}) })
+  }
+  const closePublicMessage = (boundary: 'end' | 'interrupted') => {
+    const current = publicMessage
+    if (!current) return
+    publicMessage = undefined
+    for (const text of current.filter.end()) input.publish('message_delta', { text, public_message_id: current.id })
+    appendAudit(current.message, 'system', current)
+    input.publish('assistant_message_boundary', { public_message_id: current.id, boundary, at: Date.now() })
+  }
+  const startPublicMessage = (message: Extract<AgentMessage, { role: 'assistant' }>) => {
+    // A missing SDK end must never merge two responses or leave a streaming
+    // bubble open. Boundaries themselves contain no visible body/tool bubble.
+    closePublicMessage('interrupted')
+    publicMessage = { id: randomUUID(), at: Date.now(), message, filter: createDsmlDisplayFilter() }
+    input.publish('assistant_message_boundary', { public_message_id: publicMessage.id, boundary: 'start', at: publicMessage.at })
+  }
+  const publishHostNotice = (text: string) => {
+    // Existing host guard notices are not partner/model completions, but need
+    // their own public identity rather than appending to an ended Pi response.
+    const id = randomUUID(), at = Date.now()
+    input.publish('assistant_message_boundary', { public_message_id: id, boundary: 'start', at })
+    input.publish('message_delta', { text, public_message_id: id })
+    appendSessionMessage(input.sessionId, { role: 'assistant', origin: 'agent', content: [{ type: 'text', text }], timestamp: at, public_message_id: id })
+    input.publish('assistant_message_boundary', { public_message_id: id, boundary: 'end', at: Date.now() })
   }
   try {
     input.signal.throwIfAborted()
@@ -203,7 +239,7 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
       if (status !== 'completed') return true
       const calls = toolCalls.filter(call => call.turn === turns)
       const protocolFailure = protocolGuard(calls)
-      if(protocolFailure){status='budget_exhausted';termination={reason:'no_progress',limit:3,observed:protocolFailure.count};input.publish('message_delta',{text:'相同工具拒因或验收失败证据已重复三次，停止当前执行并保留记录；先诊断，不继续原样重试：'+protocolFailure.key});return true}
+      if(protocolFailure){status='budget_exhausted';termination={reason:'no_progress',limit:3,observed:protocolFailure.count};publishHostNotice('相同工具拒因或验收失败证据已重复三次，停止当前执行并保留记录；先诊断，不继续原样重试：'+protocolFailure.key);return true}
       if (toolResults.length && input.afterTools && !pendingSteerCount(input.sessionId)) {
         const handoff = await input.afterTools(ctx, calls)
         // Host checks run after the model tool has returned successfully. Feed
@@ -213,7 +249,7 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
         if(handoff?.verification){
           const repeated=protocolGuard([{name:'__host_after_tools_verification',turn:turns,
             status:handoff.verification.verification==='passed'?'ok':'error',failureKey:toolFailureKey('__host_after_tools_verification',hostFacts!)}])
-          if(repeated){status='budget_exhausted';termination={reason:'no_progress',limit:3,observed:repeated.count};input.publish('message_delta',{text:'同一个检查问题连续出现三次，已停止这轮制作并保留记录，需要先查清原因再继续。'});return true}
+          if(repeated){status='budget_exhausted';termination={reason:'no_progress',limit:3,observed:repeated.count};publishHostNotice('同一个检查问题连续出现三次，已停止这轮制作并保留记录，需要先查清原因再继续。');return true}
         }
         if (handoff?.complete && (!handoff.verification||handoff.verification.verification==='passed') && !pendingSteerCount(input.sessionId)) return true
         if (handoff?.feedback) activeSession.agent.steer({ role: 'user', content: (hostFacts?hostFacts+'\n':'')+handoff.feedback, timestamp: Date.now() })
@@ -270,8 +306,15 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
             ...(entry.steerId ? { steer_id: entry.steerId, status: 'merged_this_run' } : {}) })
           checkpoint('steer')
         }
-      } else if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
-        for (const text of filter.push(event.assistantMessageEvent.delta)) input.publish('message_delta', { text })
+      } else if (event.type === 'message_start' && event.message.role === 'assistant') {
+        startPublicMessage(event.message)
+      } else if (event.type === 'message_update' && event.message.role === 'assistant') {
+        if (publicMessage) {
+          publicMessage.message = event.message
+          if (event.assistantMessageEvent.type === 'text_delta') {
+            for (const text of publicMessage.filter.push(event.assistantMessageEvent.delta)) input.publish('message_delta', { text, public_message_id: publicMessage.id })
+          }
+        }
       } else if (event.type === 'message_end') {
         if (event.message.role === 'assistant') {
           finalText = event.message.content.filter(b => b.type === 'text').map(b => b.text).join('')
@@ -279,15 +322,15 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
             try{input.onAssistantMessage?.({turn:turns,text:finalText})}catch{/* Advisory channel only. */}
           }
           errorMessage = event.message.stopReason === 'error' ? event.message.errorMessage : undefined
-          for (const text of filter.end()) input.publish('message_delta', { text })
-          filter = createDsmlDisplayFilter()
+          if (publicMessage) publicMessage.message = event.message
+          closePublicMessage(input.signal.aborted || ['error', 'aborted', 'length'].includes(event.message.stopReason) ? 'interrupted' : 'end')
         }
         if (event.message.role === 'user' && initialUser) {
           initialUser = false
           if (input.initialMessagePersisted) return
           const blocks = [{ type: 'text' as const, text: input.task }, ...(input.images ?? []).map(ref => ({ type: 'image' as const, imageId: ref.imageId, media_type: ref.media_type }))]
           appendSessionMessage(input.sessionId, { role: 'user', origin: 'user', content: blocks, timestamp: Date.now() })
-        } else {
+        } else if (event.message.role !== 'assistant') {
           const text = event.message.role === 'user' ? auditBlocks(event.message).filter(b => b.type === 'text').map(b => b.text).join('') : ''
           const index = injectedSteerTexts.indexOf(text)
           if (index >= 0) injectedSteerTexts.splice(index, 1)
@@ -363,6 +406,8 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
       queuedSteers.push(...drainSteerQueue(input.sessionId).map(entry => ({ entry, text: wrapSteerContent(entry.content) })))
     }
     try {
+      // Covers aborts/SDK exceptions that bypass message_end, exactly once.
+      closePublicMessage('interrupted')
       for (const { entry, text } of queuedSteers) {
         if (!input.signal.aborted) {
           const message = { role: 'user' as const, content: text, timestamp: Date.now() }

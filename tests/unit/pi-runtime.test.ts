@@ -1,8 +1,9 @@
-import { appendFileSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { SDKMessage } from '../../shared/types'
+import type { AgentMessage, SDKMessage } from '../../shared/types'
+import { getAgentSessionPath } from '../../storage/config-paths'
 import type { SDKQueryOptions, SDKQuery } from '../../main/orchestration/stages/orchestration-contracts'
 import { runAgentLoop, type AgentLoopInput, type AgentLoopTool } from '../../main/agent/loop/agent-loop'
 import { openPiSession, piSessionPath } from '../../main/agent/loop/pi-session-store'
@@ -17,7 +18,8 @@ let home: string, oldHome: string | undefined
 beforeEach(() => { oldHome = process.env.PROMA_HOME; home = mkdtempSync(join(tmpdir(), 'bloma-pi-')); process.env.PROMA_HOME = home })
 afterEach(() => {
   if (oldHome === undefined) delete process.env.PROMA_HOME; else process.env.PROMA_HOME = oldHome
-  rmSync(home, { recursive: true, force: true })
+  // Windows may briefly retain Pi's just-closed session directory handle.
+  rmSync(home, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
 })
 const text = (text: string): SDKMessage => ({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } })
 const call = (id: string, name: string, input: Record<string, unknown> = {}): SDKMessage => ({ type: 'assistant', message: {
@@ -43,12 +45,141 @@ function tool(name: string, execute: AgentLoopTool['execute']): AgentLoopTool {
 }
 function nativeFile() { return piSessionPath('test-project', 'test-session', 'desktop-implement:', process.cwd()) }
 
+function auditMessages(sessionId = 'test-session'): AgentMessage[] {
+  const path = getAgentSessionPath(sessionId)
+  return existsSync(path) ? readFileSync(path, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)) : []
+}
+function publicText(message: AgentMessage) {
+  return message.content.filter(block => block.type === 'text').map(block => block.text).join('')
+}
+
+describe('Pi public assistant message boundaries', () => {
+  it.each(['response', 'turn'] as const)('correlates distinct responses in one run with the original audit and preserves %s partner timing', async timing => {
+    const publish = vi.fn(), partner = vi.fn(), order: string[] = []
+    const flow = scripted([
+      [text('先读取当前文件。'), call('read-one', 'read_file')],
+      [call('read-two', 'read_file')],
+      [text('已核对。'), text('这是独立的最终回复。')],
+    ])
+    const result = await runAgentLoop(input(flow.query, { publish, publicMessageTiming: timing,
+      onAssistantMessage: value => { partner(value); order.push('partner') },
+      tools: [tool('read_file', async () => { order.push('tool'); return { output: 'read receipt' } })] }))
+    expect(result.status).toBe('completed'); expect(result.turns).toBe(3)
+    expect(result.finalText).toBe('已核对。这是独立的最终回复。')
+    expect(partner.mock.calls.map(([value]) => value)).toEqual([
+      { turn: 1, text: '先读取当前文件。' }, { turn: 3, text: '已核对。这是独立的最终回复。' },
+    ])
+    expect(order[0]).toBe(timing === 'response' ? 'partner' : 'tool')
+    const boundaries = publish.mock.calls.filter(([type]) => type === 'assistant_message_boundary').map(([, payload]) => payload)
+    const starts = boundaries.filter(value => value.boundary === 'start')
+    expect(starts).toHaveLength(3)
+    expect(new Set(starts.map(value => value.public_message_id)).size).toBe(3)
+    const audit = auditMessages().filter(message => message.role === 'assistant')
+    expect(audit).toHaveLength(3)
+    for (const [index, start] of starts.entries()) {
+      expect(start).toEqual({ public_message_id: expect.any(String), boundary: 'start', at: expect.any(Number) })
+      expect(start.public_message_id).not.toBe('r1')
+      expect(boundaries.filter(value => value.public_message_id === start.public_message_id)).toEqual([
+        start, { public_message_id: start.public_message_id, boundary: 'end', at: expect.any(Number) },
+      ])
+      const deltas = publish.mock.calls.filter(([type, payload]) => type === 'message_delta' && payload.public_message_id === start.public_message_id)
+      expect(deltas.map(([, payload]) => payload.text).join('')).toBe(publicText(audit[index]))
+      expect(audit[index]).toMatchObject({ public_message_id: start.public_message_id, timestamp: start.at })
+      if (index === 1) {
+        expect(deltas).toHaveLength(0)
+        expect(audit[index].content).toMatchObject([{ type: 'tool_use', id: 'read-two' }])
+      }
+    }
+    let activeId: string | undefined
+    for (const [type, payload] of publish.mock.calls) {
+      if (type === 'assistant_message_boundary') {
+        if (payload.boundary === 'start') { expect(activeId).toBeUndefined(); activeId = payload.public_message_id }
+        else { expect(activeId).toBe(payload.public_message_id); activeId = undefined }
+      } else if (type === 'message_delta') expect(payload.public_message_id).toBe(activeId)
+    }
+    expect(activeId).toBeUndefined()
+    expect(publish.mock.calls.filter(([type]) => type === 'message_completed')).toHaveLength(0)
+    expect(result.usage).toMatchObject({ inputTokens: 90, outputTokens: 15, turnsWithUsage: 3 })
+  })
+
+  it('uses the same DSML projection for live text and the original audit, preserves native tool evidence and excludes thinking', async () => {
+    const publish = vi.fn(), partner = vi.fn()
+    const raw = '公开计划。<｜｜DSML｜｜ calls>PRIVATE_PROTOCOL'
+    const flow = scripted([
+      [{ type: 'thinking', thinking: 'PRIVATE_REASONING' }, text('公开计划。<｜'), call('read', 'read_file'), text('｜DSML｜｜ calls>PRIVATE_PROTOCOL')],
+      [text('普通尾部前缀<｜')],
+    ])
+    await runAgentLoop(input(flow.query, { publish, onAssistantMessage: partner, publicMessageTiming: 'response',
+      tools: [tool('read_file', async () => ({ output: 'read receipt' }))] }))
+    const audit = auditMessages().filter(message => message.role === 'assistant')
+    const deltas = publish.mock.calls.filter(([type]) => type === 'message_delta')
+    expect(audit).toHaveLength(2)
+    for (const message of audit) {
+      const streamed = deltas.filter(([, payload]) => payload.public_message_id === message.public_message_id).map(([, payload]) => payload.text).join('')
+      expect(publicText(message)).toBe(streamed)
+    }
+    expect(publicText(audit[0])).toContain('公开计划。'); expect(publicText(audit[0])).toContain('已过滤')
+    expect(audit[0].content).toContainEqual(expect.objectContaining({ type: 'tool_use', id: 'read' }))
+    expect(publicText(audit[1])).toBe('普通尾部前缀<｜')
+    expect(JSON.stringify(audit)).not.toMatch(/PRIVATE_REASONING|PRIVATE_PROTOCOL|<｜｜DSML｜｜/)
+    expect(JSON.stringify(deltas)).not.toContain('PRIVATE_REASONING')
+    expect(readFileSync(nativeFile(), 'utf8')).toContain('PRIVATE_PROTOCOL')
+    // The existing advisory callback and model/runtime result keep their raw-response semantics.
+    expect(partner.mock.calls[0][0]).toEqual({ turn: 1, text: raw })
+  })
+
+  it.each(['abort', 'incomplete', 'error', 'length'] as const)('closes a %s response as interrupted and preserves partial text/start-time audit correlation', async stop => {
+    const publish = vi.fn(), partner = vi.fn(), beforeComplete = vi.fn()
+    const abort = new AbortController()
+    const query: SDKQuery = async function* () {
+      yield text('保留这一段。<｜')
+      if (stop === 'abort') { abort.abort('test-cancel'); await new Promise(() => {}) }
+      else if (stop === 'error') throw Object.assign(new Error('controlled permanent failure'), { nonRetryable: true })
+      else if (stop === 'length') yield { type: 'result', stop_reason: 'max_tokens', usage: { input_tokens: 8, output_tokens: 1000 } }
+    }
+    const run = runAgentLoop(input(query, { publish, signal: abort.signal, maxTurns: stop === 'incomplete' ? 4 : 1, onAssistantMessage: partner,
+      publicMessageTiming: 'response', beforeComplete }))
+    if (stop === 'incomplete') await expect(run).rejects.toThrow('PI_TRANSPORT_INCOMPLETE')
+    else if (stop === 'error') await expect(run).rejects.toThrow('controlled permanent failure')
+    else {
+      const result = await run
+      expect(result.status).toBe(stop === 'abort' ? 'cancelled' : 'turn_limit')
+      if (stop === 'length') expect(result.termination_detail?.reason).toBe('output_token_limit')
+    }
+    const boundaries = publish.mock.calls.filter(([type]) => type === 'assistant_message_boundary').map(([, payload]) => payload)
+    const starts = boundaries.filter(value => value.boundary === 'start')
+    // Pi retries an incomplete stream under its existing policy; each physical
+    // response must still close independently, never concatenate retry text.
+    expect(starts).toHaveLength(stop === 'incomplete' ? 3 : 1)
+    expect(new Set(starts.map(value => value.public_message_id)).size).toBe(starts.length)
+    const audit = auditMessages().filter(message => message.role === 'assistant')
+    expect(audit).toHaveLength(starts.length)
+    const deltas = publish.mock.calls.filter(([type]) => type === 'message_delta')
+    expect(deltas.every(([, payload]) => typeof payload.public_message_id === 'string')).toBe(true)
+    for (const [index, start] of starts.entries()) {
+      expect(boundaries.filter(value => value.public_message_id === start.public_message_id)).toEqual([
+        { public_message_id: start.public_message_id, boundary: 'start', at: expect.any(Number) },
+        { public_message_id: start.public_message_id, boundary: 'interrupted', at: expect.any(Number) },
+      ])
+      expect(audit[index]).toMatchObject({ public_message_id: start.public_message_id, timestamp: start.at })
+      expect(publicText(audit[index])).toBe('保留这一段。<｜')
+      expect(deltas.filter(([, payload]) => payload.public_message_id === start.public_message_id).map(([, payload]) => payload.text).join('')).toBe(publicText(audit[index]))
+    }
+    expect(partner).not.toHaveBeenCalled(); expect(beforeComplete).not.toHaveBeenCalled()
+    expect(publish.mock.calls.some(([type]) => type === 'message_completed')).toBe(false)
+  })
+})
+
 describe('real upstream Pi AgentSession integration', () => {
   it('lets an advisory Agent end quietly only after a successful complete response',async()=>{
     let calls=0
-    const quiet:SDKQuery=async function*(){calls++;yield{...done,subtype:'success'}}
-    expect((await runAgentLoop(input(quiet,{allowSilentCompletion:true,runtimeScope:'engineering-peer',accountingRole:'research'}))).status).toBe('completed')
+    const publish=vi.fn()
+    const quiet:SDKQuery=async function*(){calls++;yield{type:'thinking',thinking:'PRIVATE_MONITOR_REASONING'};yield{...done,subtype:'success'}}
+    expect((await runAgentLoop(input(quiet,{publish,allowSilentCompletion:true,runtimeScope:'engineering-peer',accountingRole:'research'}))).status).toBe('completed')
     expect(calls).toBe(1)
+    expect(publish.mock.calls.filter(([type])=>type==='message_delta')).toHaveLength(0)
+    expect(publish.mock.calls.filter(([type])=>type==='assistant_message_boundary').map(([,payload])=>payload.boundary)).toEqual(['start','end'])
+    expect(auditMessages().filter(message=>message.role==='assistant')).toHaveLength(0)
     const failed:SDKQuery=async function*(){yield{type:'result',subtype:'error'}}
     await expect(runAgentLoop(input(failed,{allowSilentCompletion:true,sessionId:'failed-monitor'}))).rejects.toThrow('EMPTY_MODEL_STREAM')
     const incomplete:SDKQuery=async function*(){}
@@ -127,10 +258,19 @@ describe('real upstream Pi AgentSession integration', () => {
     expect(requests).toBe(3)
   })
   it('stops an unchanged review submission protocol failure in read-only mode before the turn ceiling',async()=>{
-    const q=scripted([[call('submit','submit_quality_findings')]])
-    const result=await runAgentLoop(input(q.query,{maxTurns:48,tools:[tool('submit_quality_findings',async()=>({output:'INTENT_CONCERN_FINDING_REQUIRED',isError:true}))]}))
+    const publish=vi.fn(),partner=vi.fn(),q=scripted([[call('submit','submit_quality_findings')]])
+    const result=await runAgentLoop(input(q.query,{publish,onAssistantMessage:partner,maxTurns:48,tools:[tool('submit_quality_findings',async()=>({output:'INTENT_CONCERN_FINDING_REQUIRED',isError:true}))]}))
     expect(q.received).toHaveLength(3);expect(result.status).toBe('budget_exhausted')
     expect(result.termination_detail).toMatchObject({reason:'no_progress',observed:3})
+    // The existing host stop notice is not a model/partner completion and must
+    // not be appended to the preceding tool-only response's closed identity.
+    const deltas=publish.mock.calls.filter(([type])=>type==='message_delta')
+    expect(deltas).toHaveLength(1);expect(partner).not.toHaveBeenCalled()
+    const notice=deltas[0][1],audit=auditMessages().filter(message=>message.role==='assistant')
+    expect(audit).toHaveLength(4)
+    expect(audit.at(-1)).toMatchObject({public_message_id:notice.public_message_id})
+    expect(publicText(audit.at(-1)!)).toBe(notice.text)
+    expect(publish.mock.calls.filter(([type,payload])=>type==='assistant_message_boundary'&&payload.public_message_id===notice.public_message_id).map(([,payload])=>payload.boundary)).toEqual(['start','end'])
   })
   it('hands verified tool work to the host without buying a final parent declaration', async () => {
     const q=scripted([[call('check','verify_app')],[text('this extra model call must not happen')]])

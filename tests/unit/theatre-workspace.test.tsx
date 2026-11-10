@@ -23,7 +23,7 @@ describe('软件剧场的完整性', () => {
     expect(screen.getByRole('heading', { name: '确认需求' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '按这份做' })); expect(select).toHaveBeenCalledTimes(1)
   })
-  it('the footer keeps the real sketch confirmation callback and disables it only while confirming', () => {
+  it('the action-first region keeps the sole real sketch confirmation callback and disables it while confirming', () => {
     const store = createStore()
     store.set(currentProjectAtom, { project_id: 'footer-project', name: '测试草图', mode: 'quick' } as Project)
     store.set(workflowStageAtom, 'sketch_ready')
@@ -31,7 +31,7 @@ describe('软件剧场的完整性', () => {
     const view = render(<Provider store={store}><WorkspaceShell previewUrl="bloma-file://footer-project/00_UX/ux-sketch.html" onConfirmSketch={confirm} /></Provider>)
     const button = document.querySelector('[data-ai-id="confirm-sketch-button"]') as HTMLButtonElement
     expect(document.querySelectorAll('[data-ai-id="confirm-sketch-button"]')).toHaveLength(1)
-    expect(button.closest('.studio-footer')).toBeTruthy()
+    expect(button.closest('.action-guidance')).toBeTruthy()
     fireEvent.click(button)
     expect(confirm).toHaveBeenCalledTimes(1)
     view.rerender(<Provider store={store}><WorkspaceShell previewUrl="bloma-file://footer-project/00_UX/ux-sketch.html" onConfirmSketch={confirm} confirming /></Provider>)

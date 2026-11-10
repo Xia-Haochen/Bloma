@@ -110,6 +110,9 @@ export function registerProjectDeliverablesIpc(ipcMain: IpcMain, _mainWindow: Br
     return safeInvoke(extractRequestId(payload), async () => {
       const input = requireFields<ProjectDeliverablesInput>(payload, ['project_id'])
       const project = findProject(input.project_id)
+      // The conversation needs facts, not the heavyweight launch/file inspection.
+      if (input.status_only === true) return { files: [], launch: { declared: false, parse_ok: false }, can_launch: false,
+        status_view: softwareStatusView(project.project_id, hasRunForProject(project.project_id)) } satisfies ProjectDeliverablesResult
       const result: ProjectDeliverablesResult = {
         files: listFiles(project.root_path),
         launch: { declared: false, parse_ok: false },

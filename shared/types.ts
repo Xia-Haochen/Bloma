@@ -454,12 +454,17 @@ export interface DesktopArtifactSubscribeResult {
 
 /** 交付面板输入（2026-10-04 呈现层收口）。 */
 export interface ProjectDeliverablesInput extends RequestEnvelope {
+  /** Read-only, bounded status projection; never enumerate/build/verify/launch a product. */
+  status_only?: boolean
   project_id: string
 }
 
 /** 交付面板快照：文件清单 + 交付说明 + 启动声明。 */
 export interface SoftwareStatusView {
-  execution: { status: string; label: string; reason?: string }
+  observed_at?: number
+  operation_id?: string
+  guidance?: { headline: string; detail: string; action?: 'continue' | 'settings' | 'inspect' | 'open'; action_label?: string }
+  execution: { status: string; label: string; reason?: string; review_purpose?: 'candidate' | 'binding' | 'coverage' }
   verification: { status: 'not_run' | 'running' | 'last_passed' | 'last_failed' | 'last_unverified' | 'unavailable'; label: string; at?: number; scope_note?: string }
   goal: { status: 'not_delivered' | 'waiting_confirmation' | 'delivered' | 'archived'; label: string }
   active_commands: number
@@ -877,6 +882,8 @@ export interface SpeechTranscribeResult {
 }
 
 export interface AgentMessage {
+  /** Stable identity shared by streamed public text and the existing audit record. Not a run/receipt ID. */
+  public_message_id?: string
   /** Display-only provenance when recovering consecutive project conversations. */
   source_session_id?: string
   /** SDK role is independent of the human origin of a persisted message. */
@@ -1257,6 +1264,7 @@ export interface AgentEvent {
   session_id: string
   project_id?: string
   type:
+    | 'assistant_message_boundary'
     | 'message_delta'
     | 'message_completed'
     | 'stage_changed'

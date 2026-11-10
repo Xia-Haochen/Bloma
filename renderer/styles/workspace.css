@@ -245,3 +245,16 @@
 .workspace-theatre [data-ai-id="mvp-status-banner"][data-compact="true"] [data-ai-id="export-project-done"] { max-width: 100% !important; }
 
 .progress-card-actions > button { white-space: nowrap; flex-shrink: 0; }
+
+/* UX-001: action first; no acknowledgement headline or fixed character stage. */
+.action-guidance{flex-shrink:0;margin:0 12px 8px;padding:12px;border:1px solid var(--glass-border);border-radius:12px;background:var(--glass-bg-soft);overflow-wrap:anywhere}
+.action-guidance h3{margin:0;font-size:15px;line-height:1.55;font-weight:650;color:var(--color-text)}
+.action-guidance p{margin:5px 0 0;font-size:12px;line-height:1.65;color:var(--color-text-muted)}
+.action-guidance-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:10px}
+.action-guidance-actions button{max-width:100%;white-space:normal;min-height:32px}
+.conversation-character-scene{min-height:0!important;height:40px;margin:4px 0 8px!important;display:flex;align-items:center;gap:8px}
+.conversation-character-scene .conversation-character-lead{width:auto;padding:0;order:2;font-size:12px}
+.conversation-character-scene .conversation-character-lead small{font-size:11px}
+.conversation-character-scene .conversation-reply-character{position:relative!important;inset:auto!important;width:36px!important;height:40px!important;order:1;flex-shrink:0}
+.conversation-new-messages{flex-shrink:0;align-self:center;margin:2px 0 6px}
+@media(prefers-reduced-motion:reduce){.theatre-chat *{scroll-behavior:auto!important;animation:none!important;transition:none!important}}

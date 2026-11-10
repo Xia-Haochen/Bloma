@@ -42,6 +42,7 @@ import { DESKTOP_PHASE_ACTION_LABELS } from '../lib/desktop-stages'
 import { mapDesktopPhaseToSteps } from './ProgressCard'
 
 export interface ChatPanelProps {
+  guidanceSlot?: React.ReactNode
   actionSlot?: React.ReactNode
   presentation?: 'full' | 'theatre'
   /** 向导 Agent 发出的卡片选项（由上层从 AgentEvent 中解析） */
@@ -110,6 +111,7 @@ const glassTile: React.CSSProperties = {
 
 export const ChatPanel: React.FC<ChatPanelProps> = ({
   presentation = 'full',
+  guidanceSlot,
   actionSlot,
   cardOptions,
   decisionTitle,
@@ -174,7 +176,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     let lastWelcome = -1
     publicMessages.forEach((message, index) => {
       if (message.role === 'user' && (message.content.some(block => block.type === 'text' && block.text?.trim() || block.type === 'image') || message.attachments?.length)) lastUser = index
-      if (message.role === 'assistant' && !message.content.some(block => block.type === 'tool_use')) lastAssistant = index
+      if (message.role === 'assistant' && message.content.some(block => block.type === 'text' && block.text?.trim())) lastAssistant = index
       if (message.role === 'system' && message.content.some(block => block.type === 'text' && block.text?.startsWith('[welcome-hint]'))) lastWelcome = index
     })
     // The dock shows the current result, never an abbreviated long reply.
@@ -186,6 +188,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   }, [messages, compact])
 
   const messagesEndRef = React.useRef<HTMLDivElement>(null)
+  const scrollRef = React.useRef<HTMLDivElement>(null)
+  const following = React.useRef(true)
+  const [unseen, setUnseen] = React.useState(false)
   const streamingContent = hasActiveStream && streamState ? streamState.content : ''
 
   // 思考呈现（2026-10-04 窄栏适配）：从事件流派生三态——waiting（发消息后首个事件
@@ -221,9 +226,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     return map
   }, [messages])
 
-  React.useEffect(() => {
-    if (compact) { if (messagesEndRef.current?.parentElement) messagesEndRef.current.parentElement.scrollTop = 0; return }
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  React.useEffect(() => { following.current = true; setUnseen(false) }, [activeSessionId, compact])
+  React.useLayoutEffect(() => {
+    const element = scrollRef.current
+    if (!element) return
+    if (following.current) { element.scrollTop = element.scrollHeight; setUnseen(false) }
+    else setUnseen(true)
   }, [messages, streamingContent, cardOptions, compact])
 
   // 本地流计时兜底：App 未传 waitStartTime 时以流启动时刻起算，保证 WaitingFeedback
@@ -282,6 +290,44 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     [onForkFromMessage],
   )
 
+  const decisionCard = cardOptions && cardOptions.length > 0 && onCardOptionSelect && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+                {decisionTitle && (
+                  <p
+                    style={{
+                      margin: 0,
+                      fontSize: 'var(--font-size-xs)',
+                      lineHeight: 1.5,
+                      color: 'var(--color-text-muted)',
+                    }}
+                  >
+                    {decisionTitle}
+                  </p>
+                )}
+                {decisionBody && (
+                  <div
+                    data-ai-id="decision-card-body"
+                    style={{
+                      margin: 0,
+                      padding: '8px 12px',
+                      fontSize: 'var(--font-size-xs)',
+                      lineHeight: 1.6,
+                      color: 'var(--color-text-secondary, #5b6472)',
+                      background: 'var(--color-bg-subtle, #f6f8fb)',
+                      borderRadius: 'var(--radius-sm)',
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                      maxHeight: 180,
+                      overflowY: 'auto',
+                    }}
+                  >
+                    {decisionBody}
+                  </div>
+                )}
+                <CardOptions options={cardOptions} onSelect={onCardOptionSelect} disabled={busy} />
+              </div>
+            )
+
   return (
     <div data-ai-id="chat-panel" className={presentation === 'theatre' ? 'theatre-chat' : undefined} data-history-expanded={historyExpanded} data-quiet={quiet} style={presentation === 'theatre' ? undefined : glassTile}>
       {/* 磁贴头 */}
@@ -303,8 +349,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         {presentation === 'theatre' ? <button type="button" className="theatre-tool" data-ai-id="conversation-toggle" aria-expanded={historyExpanded} onClick={() => setHistoryExpanded(previous => !previous)}><Conversation size={14} />{historyExpanded ? '返回当前' : '历史'}</button> : <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>Enter 发送</span>}
       </div>
 
+      {guidanceSlot}
+      {presentation === 'theatre' && decisionCard}
+
       {/* 消息列表 */}
-      <div className={presentation === 'theatre' ? 'theatre-messages' : undefined}
+      <div ref={scrollRef} data-ai-id="message-scroll" onScroll={event => { const element = event.currentTarget; following.current = element.scrollHeight - element.scrollTop - element.clientHeight < 56; if (following.current) setUnseen(false) }} className={presentation === 'theatre' ? 'theatre-messages' : undefined}
         style={{
           flex: 1,
           overflowY: 'auto',
@@ -459,7 +508,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
               </div>
             )}
 
-            {globalError && (
+            {globalError && (guidanceSlot ? <details className="production-notice-details"><summary>查看上次执行提示</summary><Markdown text={globalError} /></details> : (
               <div
                 role="alert"
                 style={{
@@ -473,54 +522,19 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
               >
                 {globalError}
               </div>
-            )}
+            ))}
 
-            {cardOptions && cardOptions.length > 0 && onCardOptionSelect && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-                {decisionTitle && (
-                  <p
-                    style={{
-                      margin: 0,
-                      fontSize: 'var(--font-size-xs)',
-                      lineHeight: 1.5,
-                      color: 'var(--color-text-muted)',
-                    }}
-                  >
-                    {decisionTitle}
-                  </p>
-                )}
-                {decisionBody && (
-                  <div
-                    data-ai-id="decision-card-body"
-                    style={{
-                      margin: 0,
-                      padding: '8px 12px',
-                      fontSize: 'var(--font-size-xs)',
-                      lineHeight: 1.6,
-                      color: 'var(--color-text-secondary, #5b6472)',
-                      background: 'var(--color-bg-subtle, #f6f8fb)',
-                      borderRadius: 'var(--radius-sm)',
-                      whiteSpace: 'pre-wrap',
-                      wordBreak: 'break-word',
-                      maxHeight: 180,
-                      overflowY: 'auto',
-                    }}
-                  >
-                    {decisionBody}
-                  </div>
-                )}
-                <CardOptions options={cardOptions} onSelect={onCardOptionSelect} disabled={busy} />
-              </div>
-            )}
+            {presentation !== 'theatre' && decisionCard}
           </>
         )}
 
         {activeSessionId && <SteerStatusBar sessionId={activeSessionId} onStopGeneration={onStopGeneration} />}
         {activeSessionId && <MessageReceipts key={activeSessionId} sessionId={activeSessionId} />}
 
-        <div ref={messagesEndRef} style={compact ? { display: 'none' } : undefined} />
+        <div ref={messagesEndRef} />
       </div>
 
+      {unseen && <button type="button" className="conversation-new-messages theatre-tool" onClick={() => { following.current = true; if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; setUnseen(false) }}>有新消息，点击查看</button>}
       {actionSlot}
       <MessageComposer onSendMessage={onSendMessage} onMessageSent={() => setIdeaHint(false)} busy={busy} onStopGeneration={onStopGeneration} onOpenSettings={onOpenSettings}
         placeholder={compact ? '告诉我，还想改些什么…' : undefined}
@@ -695,7 +709,13 @@ const HistoryMessages: React.FC<{
       message.role === 'user' && message.content.some((block) => block.type === 'text' && !!block.text?.trim())
     const hasTool = message.content.some((block) => block.type === 'tool_use' || block.type === 'tool_result')
     if (!isUserInput && hasTool) {
-      buffer.push(message)
+      // Identified public prose stays prose after reload too. Only typed tool
+      // blocks go into the execution fold; legacy records retain their grouping.
+      if (message.role === 'assistant' && message.public_message_id && message.content.some(block => block.type === 'text' && block.text?.trim())) {
+        flush()
+        nodes.push(<MessageBubble key={`public-${message.public_message_id}`} message={{ ...message, content: message.content.filter(block => block.type === 'text') }} mode={mode} compact={compact} onOpenSettings={onOpenSettings} />)
+        buffer.push({ ...message, content: message.content.filter(block => block.type !== 'text') })
+      } else buffer.push(message)
       return
     }
     flush()
@@ -1043,11 +1063,6 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ characterCue, characterKi
   // Recognized platform stop templates only; preserve the complete original and copy text.
   const notice = !isUser && !isStreaming ? productionNotice(rawText) : undefined
   const displayText = notice ?? text
-  const firstParagraph = displayText.split(/\n\s*\n/)[0] ?? ''
-  const clause = displayText.match(/^[^，。！？：:\n]{1,40}[，。！？：:]/)?.[0] ?? ''
-  const firstClause = /[`*_\[\]<>]/.test(clause) ? '' : clause
-  const lead = characterCue && !isUser ? firstParagraph.length <= 90 ? firstParagraph : firstClause : ''
-  const bodyText = lead ? displayText.slice(lead.length).replace(/^\s*\n/, '') : displayText
   return (
     <div
       data-ai-id="message-bubble"
@@ -1082,9 +1097,9 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ characterCue, characterKi
           wordBreak: 'break-word',
         }}
       >
-        {characterCue && !isUser && <div className="conversation-character-scene"><div className="conversation-character-lead"><small>当前回复</small>{lead && <Markdown text={lead} />}</div><ReplyCharacter cue={characterCue} kind={characterKind} /></div>}
+        {characterCue && !isUser && <div className="conversation-character-scene"><div className="conversation-character-lead"><small>Bloma 的回复</small></div><ReplyCharacter cue={characterCue} kind={characterKind} /></div>}
         {/* assistant 旁白/完成总结渲染 Markdown（模型输出天然带 md）；user 输入保持纯文本语义 */}
-        {isUser || !text ? text || (isStreaming ? '…' : '') : compact ? <CompactReply text={bodyText} /> : <Markdown text={bodyText} />}
+        {isUser || !text ? text || (isStreaming ? '…' : '') : compact ? <CompactReply text={displayText} /> : <Markdown text={displayText} />}
         {notice && <details className="production-notice-details"><summary>查看停止原因与检查详情</summary><Markdown text={text} /></details>}
         {textAttachments?.length ? <MessageAttachments attachments={textAttachments} /> : null}
         {imageBlocks.length > 0 && (

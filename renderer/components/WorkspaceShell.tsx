@@ -16,7 +16,8 @@ import { DeliveryPanel } from './DeliveryPanel'
 import type { AgentMessage } from './atoms'
 import { PreviewPanel } from './PreviewPanel'
 import { TimelinePanel } from './TimelinePanel'
-import { MvpStatusBanner } from './MvpStatusBanner'
+import { ActionGuidance } from './ActionGuidance'
+import { useSoftwareStatus } from '../hooks/use-software-status'
 import { DocumentPanel } from './DocumentPanel'
 import { CollaborationPanel } from './CollaborationPanel'
 import { HistoryAttachments } from './HistoryAttachments'
@@ -116,13 +117,18 @@ export const WorkspaceShell: React.FC<WorkspaceShellProps> = (props) => {
     : workspaceScene(project, stage, phase ?? project?.desktop_phase ?? null, Boolean(props.previewUrl && props.onConfirmSketch && !props.deliveryPanel), busy)
   const stream = useAtomValue(agentStreamStateFamily(activeSession ?? '__workspace-empty__'))
   const last = stream.events[stream.events.length - 1]
+  const statusSignal = [...stream.events].reverse().find(event => ['stage_changed', 'completed', 'error', 'delegation_started', 'delegation_completed', 'delegation_failed', 'tool_call_completed', 'user_decision_required'].includes(event.type))?.event_id ?? ''
+  const status = useSoftwareStatus(project?.project_id, project?.lean_operation_id, statusSignal, busy)
+  const [actionResult, setActionResult] = React.useState('')
+  React.useEffect(() => setActionResult(''), [project?.project_id])
+
   const decision = scopePending || requirementDialog || prdDialog || clarificationDialog ? 'requirements' : canConfirmSketch ? 'design' : undefined
   const progress = deriveWorkspaceProgress({ project, stage, phase: phase ?? project?.desktop_phase ?? null, busy, decision, hasSketch: Boolean(props.previewUrl), error: last?.type === 'error' ? stream.last_error : undefined })
   const live = pickLiveLine(buildProgressLines(stream.events, []))
   const liveDetail = busy && live ? `${live.label}${live.detail ? ` · ${live.detail}` : ''}` : undefined
   const toolTrigger = React.useRef<HTMLElement | null>(null)
   const openTool = (name: 'documents' | 'collaboration' | 'versions' | 'materials' | 'records') => {
-    if (document.activeElement instanceof HTMLElement && document.activeElement.closest('.workspace-project-tools, .studio-footer')) toolTrigger.current = document.activeElement
+    if (document.activeElement instanceof HTMLElement && document.activeElement.closest('.workspace-project-tools, .studio-footer, .action-guidance')) toolTrigger.current = document.activeElement
     previewTarget.current?.querySelectorAll<HTMLDetailsElement>('details.workspace-delivery-inspector[open]').forEach(details => { details.open = false })
     setDocuments(name === 'documents' ? !documents : false)
     setCollaboration(name === 'collaboration' ? !collaboration : false)
@@ -198,8 +204,25 @@ export const WorkspaceShell: React.FC<WorkspaceShellProps> = (props) => {
       <section className="theatre-conversation" aria-label="向导与下一步">
 
         <ChatPanel presentation="theatre"
-          actionSlot={<footer className="studio-footer"><button type="button" className="theatre-tool" aria-pressed={localPanel === 'records'} onClick={() => openTool('records')}><Activity />工作记录</button><div className="studio-status-slot"><MvpStatusBanner suppressBlocked compact /></div>{canConfirmSketch && <button type="button" data-ai-id="confirm-sketch-button" className="studio-primary" disabled={props.confirming} onClick={props.onConfirmSketch}>{props.confirming ? '正在开始制作…' : '开始制作'}<Play size={13} /></button>}{project?.desktop_blocked && <button type="button" className="studio-primary" disabled={busy} onClick={() => props.onSendMessage?.('继续')}>继续制作</button>}</footer>}
-          cardOptions={scopePending ? undefined : props.cardOptions}
+          guidanceSlot={<ActionGuidance view={status.view} loading={status.loading} failed={status.failed} busy={busy} onRefresh={status.refresh} onRecords={() => openTool('records')}
+            override={scopePending ? { headline: '请核对这次要做的功能，再确认制作范围。', detail: '确认后才会开始制作；不准确的地方可以继续调整。', actions: <button type="button" className="studio-primary" onClick={() => { setMobileView('preview'); previewTarget.current?.querySelector<HTMLElement>('button, h3')?.focus() }}>查看制作范围</button> }
+              : canConfirmSketch ? { headline: '请确认这个界面是否符合你的想法。', detail: '确认后，我会按这个方向制作程序。', actions: <><button type="button" data-ai-id="confirm-sketch-button" className="studio-primary" disabled={props.confirming || busy} onClick={props.onConfirmSketch}>{props.confirming ? '正在开始制作…' : '按这个界面制作'}<Play size={13} /></button>{props.cardOptions?.filter(option => option.id !== 'ux_confirm_go').map(option => <button type="button" key={option.id} className="theatre-tool" disabled={busy} onClick={() => props.onCardOptionSelect?.(option)}>{option.label}</button>)}</> }
+              : props.cardOptions?.length ? { headline: props.decisionTitle || '请选择接下来怎么做。', detail: '请在下方选择，或直接输入你的要求。' }
+              : requirementDialog || prdDialog || clarificationDialog ? { headline: '请先确认这次想做的功能。', detail: '请在当前确认框中核对要求；不会替你确认。' } : undefined}
+            onAction={async action => {
+              if (action === 'continue') { if (!props.onSendMessage) throw Error('SEND_UNAVAILABLE'); await props.onSendMessage('继续') }
+              else if (action === 'settings') props.onOpenSettings?.()
+              else if (action === 'inspect') openTool('records')
+              else if (action === 'open') {
+                const api = window.electronAPI?.projectDeliverables
+                if (!project || !api) throw Error('LAUNCH_UNAVAILABLE')
+                const result = await api.launch({ request_id: crypto.randomUUID(), project_id: project.project_id })
+                setActionResult(result.ok ? result.data.detail ?? (result.data.started ? '程序已打开。' : '程序未启动，请查看交付面板中的处理说明。') : result.error.user_visible_message ?? '未能打开程序，请查看交付面板。')
+              }
+              status.refresh()
+            }} />}
+          actionSlot={actionResult ? <p className="studio-notice" role="status">{actionResult}</p> : undefined}
+          cardOptions={scopePending || canConfirmSketch ? undefined : props.cardOptions}
           decisionTitle={props.decisionTitle}
           decisionBody={props.decisionBody}
           onCardOptionSelect={props.onCardOptionSelect}

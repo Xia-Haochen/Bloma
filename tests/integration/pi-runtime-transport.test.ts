@@ -10,6 +10,8 @@ import { createProject } from '../../main/project/project-service'
 import { savePastedImage } from '../../main/platform/shell/pasted-images'
 import { buildSoftwareImageTool } from '../../main/software/image-tool'
 import { piSessionPath } from '../../main/agent/loop/pi-session-store'
+import { getAgentSessionPath } from '../../storage/config-paths'
+import type { AgentMessage } from '../../shared/types'
 
 let home: string, originalHome: string | undefined
 beforeEach(() => { originalHome = process.env.PROMA_HOME; home = mkdtempSync(join(tmpdir(), 'bloma-pi-http-')); process.env.PROMA_HOME = home })
@@ -51,6 +53,7 @@ it.each(['anthropic-compatible','zhipu'])('actual image bytes traverse attachmen
 },45000)
 it.each(['anthropic-compatible', 'zhipu'])('real Pi → guarded local HTTP/SSE → %s tools → durable file → ledger', async providerType => {
   const bodies: Array<Record<string, unknown>> = []
+  const events: Array<{ type: string; payload: Record<string, unknown> }> = []
   const frame = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`
   const server = createServer(async (req, res) => {
     const parts: Buffer[] = []
@@ -83,7 +86,8 @@ it.each(['anthropic-compatible', 'zhipu'])('real Pi → guarded local HTTP/SSE �
       projectId: 'wire-project', sessionId: 'wire-session', requestId: 'wire-run', query: budget.wrap(anthropicMessagesQueryViaProviders),
       env: { PATH: process.env.PATH ?? process.env.Path ?? '', ANTHROPIC_AUTH_TOKEN: 'local-test-credential', ANTHROPIC_MODEL: 'local-test-model',
         ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`, ANTHROPIC_PROVIDER_TYPE: providerType }, providerType,
-      maxTokens: 1000, maxTurns: 4, permissionMode: 'allow-all', signal: new AbortController().signal, publish: () => {},
+      maxTokens: 1000, maxTurns: 4, permissionMode: 'allow-all', signal: new AbortController().signal,
+      publish: (type, payload) => events.push({ type, payload }),
       tools: [{ name: 'write_file', description: 'save', input_schema: { type: 'object', required: ['content'], properties: { content: { type: 'string' } } },
         execute: async args => { writeFileSync(join(home, 'output.txt'), String(args.content)); return { output: 'saved evidence', detail: { path: 'output.txt' } } } }] })
     expect(result.status).toBe('completed'); expect(readFileSync(join(home, 'output.txt'), 'utf8')).toBe('durable output')
@@ -93,5 +97,19 @@ it.each(['anthropic-compatible', 'zhipu'])('real Pi → guarded local HTTP/SSE �
     expect(ledger.split('\n').filter(line => line.includes('"event":"query_finished"'))).toHaveLength(2)
     expect(ledger).not.toContain('local-test-credential')
     expect(result.usage).toMatchObject({ inputTokens: 60, outputTokens: 10, turnsWithUsage: 2 })
+    const starts = events.filter(event => event.type === 'assistant_message_boundary' && event.payload.boundary === 'start')
+    expect(starts).toHaveLength(2)
+    expect(new Set(starts.map(event => event.payload.public_message_id)).size).toBe(2)
+    const audit: AgentMessage[] = readFileSync(getAgentSessionPath('wire-session'), 'utf8').trim().split('\n').map(line => JSON.parse(line))
+    const assistant = audit.filter(message => message.role === 'assistant')
+    expect(assistant).toHaveLength(2)
+    for (const [index, { payload }] of starts.entries()) {
+      expect(assistant[index]).toMatchObject({ public_message_id: payload.public_message_id, timestamp: payload.at })
+      const deltas = events.filter(event => event.type === 'message_delta' && event.payload.public_message_id === payload.public_message_id)
+      expect(deltas.map(event => event.payload.text).join('')).toBe(assistant[index].content.filter(block => block.type === 'text').map(block => block.text).join(''))
+      expect(events.filter(event => event.type === 'assistant_message_boundary' && event.payload.public_message_id === payload.public_message_id).map(event => event.payload.boundary)).toEqual(['start', 'end'])
+      if (index === 0) expect(deltas).toHaveLength(0) // Tool-only responses must not manufacture a visible bubble.
+    }
+    expect(events.some(event => event.type === 'message_completed')).toBe(false)
   } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())) }
 })

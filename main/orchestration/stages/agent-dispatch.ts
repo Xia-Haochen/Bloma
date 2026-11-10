@@ -69,7 +69,7 @@ export async function runAgent(input: AgentSendMessageInput): Promise<AgentSendM
   const runId = randomUUID()
   const publishForRun = (event: AgentEvent): void => {
     if (input.client_message_id && !isCurrentReceiptGeneration(input.client_message_id, input.run_generation ?? 1)) return
-    streamPublisher(input.client_message_id ? { ...event, payload: { ...event.payload, client_message_id: input.client_message_id, run_generation: input.run_generation ?? 1 } } : event)
+    streamPublisher({ ...event, payload: { ...event.payload, run_id: runId, ...(input.client_message_id ? { client_message_id: input.client_message_id, run_generation: input.run_generation ?? 1 } : {}) } })
   }
   const abortController = new AbortController()
   const run: ActiveRun = {
