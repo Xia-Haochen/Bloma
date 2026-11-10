@@ -152,6 +152,20 @@ export function testCorrectionView(id:string){
   return{contracts:[...contracts.values()].map(({native:n,origin,execution})=>({origin,execution,contract_digest:n.digest,entry:pathOf(n,n.entry),files:n.files.map(f=>({path:pathOf(n,f.path),sha256:f.sha256})),cases:n.cases.map(c=>({name:c.name,feature:c.feature}))})),
     proposals:read(id).proposals.filter(p=>p.scope===current).map(({replacement,before,after,...p})=>({...p,contract_digest:before.digest,replacement_digest:after.digest})),verification:'not_issued'}
 }
+/** Read-only change focus from approved, applied contracts still registered in
+ * this scope. Body equality does not prove shared inputs or old PASS remain valid. */
+export function testCorrectionChanges(id:string,includeStages=false){
+  const contracts=registeredContracts(id),path=(n:NativeGuiTests,f:string)=>pathOf(n,f)
+  return approved(id).filter(p=>p.applied_at&&contracts.has(p.after.digest)&&(includeStages||contracts.get(p.after.digest)!.origin.endsWith('formal'))).map(p=>{
+    const files=[...new Set([...p.before.files.map(f=>path(p.before,f.path)),...p.after.files.map(f=>path(p.after,f.path))])].sort().flatMap(file=>{
+      const a=p.before.files.find(f=>path(p.before,f.path)===file),b=p.after.files.find(f=>path(p.after,f.path)===file)
+      return a?.sha256===b?.sha256?[]:[{file,change:!a?'added':!b?'removed':'changed',shared_input_changed:(a?.support??a?.sha256)!==(b?.support??b?.sha256)}]
+    })
+    return{id:p.id,before:p.before.digest,after:p.after.digest,reason:p.reason,
+      cases:p.after.cases.map(c=>({name:c.name,feature:c.feature,body:p.before.cases.some(a=>a.name===c.name&&a.feature===c.feature&&a.signature===c.signature)?'unchanged':'changed'})),
+      files,verification:'not_issued' as const,authority:'独立批准的测试修订差异；正文未变不等于共享前置未变，不继承旧绑定或旧PASS。'}
+  })
+}
 export function pendingTestCorrection(id:string){return read(id).proposals.some(p=>p.scope===scope(id)&&p.status==='pending')}
 export function testCorrectionFacts(id:string){
   const current=scope(id),rows=read(id).proposals.filter(p=>p.scope===current)

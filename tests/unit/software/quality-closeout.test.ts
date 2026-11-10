@@ -1,3 +1,4 @@
+import navigationReplay from '../../fixtures/quality-convergence-replay-20261110.json'
 import { expect, it } from 'vitest'
 import { currentEngineeringFailures, unreviewedNegativeObservation, findingNeedsClosure, qualityCloseout, qualityWorkQueue, observedQualityFinding } from '../../../main/software/quality-closeout'
 import { visualCoverageComplete } from '../../../main/software/visual-review-checklist'
@@ -121,4 +122,35 @@ it('requires a new independent judgment for new typed failure facts, not ordinar
  expect(currentEngineeringFailures({updates:[{text:'ordinary suggestion'}]})).toEqual([])
  expect(currentEngineeringFailures({updates:[{workspace_facts:host},{workspace_facts:host}]})).toHaveLength(1)
  expect(currentEngineeringFailures({updates:[{workspace_facts:{...host,source_changed:true}}]})).toEqual([])
+})
+
+
+it('coverage completion cannot stand in for current case-binding review after a contract change',()=>{
+ const facts=ledger([finding({id:'original'}),finding({id:'same-trigger-copy'}),finding({id:'different-trigger',trigger:'offline then retry'})])
+ facts.reviews.push({id:'coverage',kind:'code',purpose:'coverage',rules:'coverage-rules',identity,status:'complete',at:''})
+ expect(qualityCloseout(facts,identity,{code:'investigation',message:'missing bindings'},'rules')).toMatchObject({
+  next_tool:'start_quality_review',purpose:'binding',binding_findings:['original','same-trigger-copy','different-trigger'],required_investigation:['original','same-trigger-copy','different-trigger']})
+ expect(facts.findings.every(f=>!f.retest&&f.checks.length===0)).toBe(true)
+})
+it('does not let a review of another frozen contract suppress binding work',()=>{
+ const facts=ledger([finding()]);facts.reviews.push({id:'stale',kind:'code',purpose:'binding',rules:'old-rules',identity,status:'complete',at:''})
+ expect(qualityCloseout(facts,identity,undefined,'rules').next_tool).toBe('start_quality_review')
+})
+it('lists every required binding without treating bound or similar findings as equivalent',()=>{
+ const facts=ledger([finding({id:'bound',retest:{identity,review:'binding',case_name:'saved-data',rules:'rules',evidence:'exact inputs'}}),finding({id:'unbound'}),finding({id:'another-path',trigger:'network error'})])
+ expect(qualityCloseout(facts,identity,undefined,'rules')).toMatchObject({next_tool:'verify_app',binding_findings:['unbound','another-path']})
+ facts.findings[0].disposition='not_reproduced';facts.findings[0].checks.push({at:'',identity,case_name:'saved-data',rules:'rules',grounded:true,outcome:'passed',observation:'current result'})
+ expect(qualityCloseout(facts,identity,undefined,'rules')).toMatchObject({next_tool:'start_quality_review',binding_findings:['unbound','another-path']})
+})
+
+
+it('replays the sanitized 14-finding navigation ledger without merging the three unresolved suspicions',()=>{
+ const facts=structuredClone(navigationReplay.ledger) as Ledger,before=JSON.stringify(facts)
+ const result=qualityCloseout(facts,navigationReplay.current,{code:'investigation',message:'current-case evidence missing'},navigationReplay.rules)
+ expect(facts.findings).toHaveLength(14);expect(facts.reviews).toHaveLength(4)
+ expect(result.required_investigation).toEqual(navigationReplay.expected_investigation)
+ expect(result.must_fix).toEqual(['finding-06','finding-07'])
+ expect(result.binding_findings).toEqual(['finding-06','finding-07',...navigationReplay.expected_investigation])
+ expect(result).toMatchObject({next_tool:'start_quality_review',purpose:'binding'})
+ expect(JSON.stringify(facts)).toBe(before)
 })

@@ -1,0 +1,514 @@
+{
+  "source": "Read-only 2026-11-10 local quality ledger and latest verification receipt; names, prose, paths and IDs sanitized. Decision identity/rules/outcomes retained. Not product execution or model-quality evidence.",
+  "current": {
+    "source": "677e711309bfc62bc8bdfa9b0daab2a016dc51dcb2d513eb9c922266b0685776",
+    "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+    "environment": "068a9946749e26a92bb0b05184996388ea3e4c7310785aed6573b36902c64db8"
+  },
+  "rules": "b5be4204d309d57924704b0ebd891cd07eb0dcacc091194c477add24c75ec167",
+  "expected_investigation": [
+    "finding-01",
+    "finding-02",
+    "finding-11"
+  ],
+  "ledger": {
+    "version": 1,
+    "reviews": [
+      {
+        "identity": {
+          "source": "283bb7441ecb6825dd72eec220eb1ce6a9baeeeb0fb2c66ac35921f23b2b6a81",
+          "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+          "environment": "1d3d59ccd9031d2a78cbfc256449db2486fa61b6e787cdcc0dcfdff7ccc1efe9"
+        },
+        "purpose": "coverage",
+        "kind": "code",
+        "rules": "ec2ad88a3586bca1807c4e66d6c87592c8cc220e4af495eed7b95d9417e09bf2",
+        "status": "complete",
+        "id": "review-01",
+        "at": "historical"
+      },
+      {
+        "identity": {
+          "source": "49f377884aaec560a5c3673cb6aeff6616133232a9b763d76575be0c5fd524cd",
+          "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+          "environment": "2319e641280669e53895f6e1274388a198d2ec3b2f383fe0dbdfc66872492919"
+        },
+        "purpose": "coverage",
+        "kind": "code",
+        "rules": "f777a9fad088bb1d241d89e4953f71927242c5620a12a2f3743785447c70c477",
+        "status": "complete",
+        "id": "review-02",
+        "at": "historical"
+      },
+      {
+        "identity": {
+          "source": "cc5ee9b9b766fddc0690dcdcdae2b66ff46fe561b3bf7176b54f12c2eb79324a",
+          "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+          "environment": "2319e641280669e53895f6e1274388a198d2ec3b2f383fe0dbdfc66872492919"
+        },
+        "purpose": "binding",
+        "kind": "code",
+        "rules": "bfdea18c45c5efb46f4f74e6b1f8c1a0e458413e393d1458f31d416d45c1f98b",
+        "status": "complete",
+        "id": "review-03",
+        "at": "historical"
+      },
+      {
+        "identity": {
+          "source": "677e711309bfc62bc8bdfa9b0daab2a016dc51dcb2d513eb9c922266b0685776",
+          "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+          "environment": "068a9946749e26a92bb0b05184996388ea3e4c7310785aed6573b36902c64db8"
+        },
+        "purpose": "coverage",
+        "kind": "code",
+        "rules": "f4f106ff46bbcebade3c0c9fbe8453847d135afad94ce3541271814839e1407d",
+        "status": "interrupted",
+        "failure_code": "HARNESS_OUTPUT_BUDGET_EXHAUSTED",
+        "id": "review-04",
+        "at": "historical"
+      }
+    ],
+    "findings": [
+      {
+        "identity": {
+          "source": "283bb7441ecb6825dd72eec220eb1ce6a9baeeeb0fb2c66ac35921f23b2b6a81",
+          "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+          "environment": "1d3d59ccd9031d2a78cbfc256449db2486fa61b6e787cdcc0dcfdff7ccc1efe9"
+        },
+        "requirement": "F-005",
+        "severity": "critical",
+        "review_kind": "code",
+        "disposition": "not_reproduced",
+        "requires_execution": true,
+        "id": "finding-01",
+        "review": "review-01",
+        "expected_source": "confirmed-F-005",
+        "category": "projection",
+        "location": "omitted",
+        "trigger": "original-trigger-finding-01",
+        "reproduction": "original-steps-finding-01",
+        "evidence": "omitted",
+        "unknowns": "",
+        "checks": [
+          {
+            "grounded": true,
+            "identity": {
+              "source": "cc5ee9b9b766fddc0690dcdcdae2b66ff46fe561b3bf7176b54f12c2eb79324a",
+              "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+              "environment": "2319e641280669e53895f6e1274388a198d2ec3b2f383fe0dbdfc66872492919"
+            },
+            "rules": "bfdea18c45c5efb46f4f74e6b1f8c1a0e458413e393d1458f31d416d45c1f98b",
+            "outcome": "passed",
+            "candidate": "0108055612a638a91324d8c1aae8267d4bc6f383893bb3044e0819ea84914b02",
+            "at": "historical",
+            "case_name": "case-01",
+            "observation": "omitted in sanitized projection"
+          }
+        ],
+        "retest": {
+          "identity": {
+            "source": "cc5ee9b9b766fddc0690dcdcdae2b66ff46fe561b3bf7176b54f12c2eb79324a",
+            "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+            "environment": "2319e641280669e53895f6e1274388a198d2ec3b2f383fe0dbdfc66872492919"
+          },
+          "rules": "bfdea18c45c5efb46f4f74e6b1f8c1a0e458413e393d1458f31d416d45c1f98b",
+          "review": "review-03",
+          "case_name": "case-01",
+          "evidence": "independent historical binding"
+        }
+      },
+      {
+        "identity": {
+          "source": "283bb7441ecb6825dd72eec220eb1ce6a9baeeeb0fb2c66ac35921f23b2b6a81",
+          "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+          "environment": "1d3d59ccd9031d2a78cbfc256449db2486fa61b6e787cdcc0dcfdff7ccc1efe9"
+        },
+        "requirement": "F-006",
+        "severity": "high",
+        "review_kind": "code",
+        "disposition": "suspected",
+        "requires_execution": true,
+        "id": "finding-02",
+        "review": "review-01",
+        "expected_source": "confirmed-F-006",
+        "category": "projection",
+        "location": "omitted",
+        "trigger": "original-trigger-finding-02",
+        "reproduction": "original-steps-finding-02",
+        "evidence": "omitted",
+        "unknowns": "",
+        "checks": []
+      },
+      {
+        "identity": {
+          "source": "283bb7441ecb6825dd72eec220eb1ce6a9baeeeb0fb2c66ac35921f23b2b6a81",
+          "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+          "environment": "1d3d59ccd9031d2a78cbfc256449db2486fa61b6e787cdcc0dcfdff7ccc1efe9"
+        },
+        "requirement": "F-005",
+        "severity": "medium",
+        "review_kind": "code",
+        "disposition": "suspected",
+        "requires_execution": true,
+        "id": "finding-03",
+        "review": "review-01",
+        "expected_source": "confirmed-F-005",
+        "category": "projection",
+        "location": "omitted",
+        "trigger": "original-trigger-finding-03",
+        "reproduction": "original-steps-finding-03",
+        "evidence": "omitted",
+        "unknowns": "",
+        "checks": []
+      },
+      {
+        "identity": {
+          "source": "283bb7441ecb6825dd72eec220eb1ce6a9baeeeb0fb2c66ac35921f23b2b6a81",
+          "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+          "environment": "1d3d59ccd9031d2a78cbfc256449db2486fa61b6e787cdcc0dcfdff7ccc1efe9"
+        },
+        "requirement": "F-002",
+        "severity": "medium",
+        "review_kind": "code",
+        "disposition": "suspected",
+        "requires_execution": false,
+        "id": "finding-04",
+        "review": "review-01",
+        "expected_source": "confirmed-F-002",
+        "category": "projection",
+        "location": "omitted",
+        "trigger": "original-trigger-finding-04",
+        "reproduction": "original-steps-finding-04",
+        "evidence": "omitted",
+        "unknowns": "",
+        "checks": []
+      },
+      {
+        "identity": {
+          "source": "283bb7441ecb6825dd72eec220eb1ce6a9baeeeb0fb2c66ac35921f23b2b6a81",
+          "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+          "environment": "1d3d59ccd9031d2a78cbfc256449db2486fa61b6e787cdcc0dcfdff7ccc1efe9"
+        },
+        "requirement": "F-003",
+        "severity": "medium",
+        "review_kind": "code",
+        "disposition": "suspected",
+        "requires_execution": true,
+        "id": "finding-05",
+        "review": "review-01",
+        "expected_source": "confirmed-F-003",
+        "category": "projection",
+        "location": "omitted",
+        "trigger": "original-trigger-finding-05",
+        "reproduction": "original-steps-finding-05",
+        "evidence": "omitted",
+        "unknowns": "",
+        "checks": []
+      },
+      {
+        "identity": {
+          "source": "49f377884aaec560a5c3673cb6aeff6616133232a9b763d76575be0c5fd524cd",
+          "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+          "environment": "2319e641280669e53895f6e1274388a198d2ec3b2f383fe0dbdfc66872492919"
+        },
+        "requirement": "F-005",
+        "severity": "critical",
+        "review_kind": "code",
+        "disposition": "closed",
+        "requires_execution": true,
+        "id": "finding-06",
+        "review": "review-02",
+        "expected_source": "confirmed-F-005",
+        "category": "projection",
+        "location": "omitted",
+        "trigger": "original-trigger-finding-06",
+        "reproduction": "original-steps-finding-06",
+        "evidence": "omitted",
+        "unknowns": "",
+        "checks": [
+          {
+            "grounded": true,
+            "identity": {
+              "source": "49f377884aaec560a5c3673cb6aeff6616133232a9b763d76575be0c5fd524cd",
+              "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+              "environment": "2319e641280669e53895f6e1274388a198d2ec3b2f383fe0dbdfc66872492919"
+            },
+            "rules": "bfdea18c45c5efb46f4f74e6b1f8c1a0e458413e393d1458f31d416d45c1f98b",
+            "outcome": "failed",
+            "candidate": "08280b1bb8226ccb1a65ba1ac5745bca224e3f660b7cffddbc05ef8f85c7abb3",
+            "at": "historical",
+            "case_name": "case-01",
+            "observation": "omitted in sanitized projection"
+          },
+          {
+            "grounded": true,
+            "identity": {
+              "source": "cc5ee9b9b766fddc0690dcdcdae2b66ff46fe561b3bf7176b54f12c2eb79324a",
+              "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+              "environment": "2319e641280669e53895f6e1274388a198d2ec3b2f383fe0dbdfc66872492919"
+            },
+            "rules": "bfdea18c45c5efb46f4f74e6b1f8c1a0e458413e393d1458f31d416d45c1f98b",
+            "outcome": "passed",
+            "candidate": "0108055612a638a91324d8c1aae8267d4bc6f383893bb3044e0819ea84914b02",
+            "at": "historical",
+            "case_name": "case-01",
+            "observation": "omitted in sanitized projection"
+          }
+        ],
+        "retest": {
+          "identity": {
+            "source": "49f377884aaec560a5c3673cb6aeff6616133232a9b763d76575be0c5fd524cd",
+            "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+            "environment": "2319e641280669e53895f6e1274388a198d2ec3b2f383fe0dbdfc66872492919"
+          },
+          "rules": "bfdea18c45c5efb46f4f74e6b1f8c1a0e458413e393d1458f31d416d45c1f98b",
+          "review": "review-02",
+          "case_name": "case-01",
+          "evidence": "independent historical binding"
+        }
+      },
+      {
+        "identity": {
+          "source": "49f377884aaec560a5c3673cb6aeff6616133232a9b763d76575be0c5fd524cd",
+          "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+          "environment": "2319e641280669e53895f6e1274388a198d2ec3b2f383fe0dbdfc66872492919"
+        },
+        "requirement": "F-006",
+        "severity": "high",
+        "review_kind": "code",
+        "disposition": "closed",
+        "requires_execution": true,
+        "id": "finding-07",
+        "review": "review-02",
+        "expected_source": "confirmed-F-006",
+        "category": "projection",
+        "location": "omitted",
+        "trigger": "original-trigger-finding-07",
+        "reproduction": "original-steps-finding-07",
+        "evidence": "omitted",
+        "unknowns": "",
+        "checks": [
+          {
+            "grounded": true,
+            "identity": {
+              "source": "49f377884aaec560a5c3673cb6aeff6616133232a9b763d76575be0c5fd524cd",
+              "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+              "environment": "2319e641280669e53895f6e1274388a198d2ec3b2f383fe0dbdfc66872492919"
+            },
+            "rules": "bfdea18c45c5efb46f4f74e6b1f8c1a0e458413e393d1458f31d416d45c1f98b",
+            "outcome": "failed",
+            "candidate": "08280b1bb8226ccb1a65ba1ac5745bca224e3f660b7cffddbc05ef8f85c7abb3",
+            "at": "historical",
+            "case_name": "case-02",
+            "observation": "omitted in sanitized projection"
+          },
+          {
+            "grounded": true,
+            "identity": {
+              "source": "cc5ee9b9b766fddc0690dcdcdae2b66ff46fe561b3bf7176b54f12c2eb79324a",
+              "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+              "environment": "2319e641280669e53895f6e1274388a198d2ec3b2f383fe0dbdfc66872492919"
+            },
+            "rules": "bfdea18c45c5efb46f4f74e6b1f8c1a0e458413e393d1458f31d416d45c1f98b",
+            "outcome": "passed",
+            "candidate": "0108055612a638a91324d8c1aae8267d4bc6f383893bb3044e0819ea84914b02",
+            "at": "historical",
+            "case_name": "case-02",
+            "observation": "omitted in sanitized projection"
+          }
+        ],
+        "retest": {
+          "identity": {
+            "source": "49f377884aaec560a5c3673cb6aeff6616133232a9b763d76575be0c5fd524cd",
+            "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+            "environment": "2319e641280669e53895f6e1274388a198d2ec3b2f383fe0dbdfc66872492919"
+          },
+          "rules": "bfdea18c45c5efb46f4f74e6b1f8c1a0e458413e393d1458f31d416d45c1f98b",
+          "review": "review-02",
+          "case_name": "case-02",
+          "evidence": "independent historical binding"
+        }
+      },
+      {
+        "identity": {
+          "source": "49f377884aaec560a5c3673cb6aeff6616133232a9b763d76575be0c5fd524cd",
+          "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+          "environment": "2319e641280669e53895f6e1274388a198d2ec3b2f383fe0dbdfc66872492919"
+        },
+        "requirement": "F-003",
+        "severity": "medium",
+        "review_kind": "code",
+        "disposition": "not_reproduced",
+        "requires_execution": true,
+        "id": "finding-08",
+        "review": "review-02",
+        "expected_source": "confirmed-F-003",
+        "category": "projection",
+        "location": "omitted",
+        "trigger": "original-trigger-finding-08",
+        "reproduction": "original-steps-finding-08",
+        "evidence": "omitted",
+        "unknowns": "",
+        "checks": [
+          {
+            "grounded": true,
+            "identity": {
+              "source": "cc5ee9b9b766fddc0690dcdcdae2b66ff46fe561b3bf7176b54f12c2eb79324a",
+              "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+              "environment": "2319e641280669e53895f6e1274388a198d2ec3b2f383fe0dbdfc66872492919"
+            },
+            "rules": "bfdea18c45c5efb46f4f74e6b1f8c1a0e458413e393d1458f31d416d45c1f98b",
+            "outcome": "passed",
+            "candidate": "0108055612a638a91324d8c1aae8267d4bc6f383893bb3044e0819ea84914b02",
+            "at": "historical",
+            "case_name": "case-03",
+            "observation": "omitted in sanitized projection"
+          }
+        ],
+        "retest": {
+          "identity": {
+            "source": "49f377884aaec560a5c3673cb6aeff6616133232a9b763d76575be0c5fd524cd",
+            "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+            "environment": "2319e641280669e53895f6e1274388a198d2ec3b2f383fe0dbdfc66872492919"
+          },
+          "rules": "bfdea18c45c5efb46f4f74e6b1f8c1a0e458413e393d1458f31d416d45c1f98b",
+          "review": "review-02",
+          "case_name": "case-03",
+          "evidence": "independent historical binding"
+        }
+      },
+      {
+        "identity": {
+          "source": "49f377884aaec560a5c3673cb6aeff6616133232a9b763d76575be0c5fd524cd",
+          "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+          "environment": "2319e641280669e53895f6e1274388a198d2ec3b2f383fe0dbdfc66872492919"
+        },
+        "requirement": "F-002",
+        "severity": "medium",
+        "review_kind": "code",
+        "disposition": "disputed",
+        "requires_execution": false,
+        "id": "finding-09",
+        "review": "review-02",
+        "expected_source": "confirmed-F-002",
+        "category": "projection",
+        "location": "omitted",
+        "trigger": "original-trigger-finding-09",
+        "reproduction": "original-steps-finding-09",
+        "evidence": "omitted",
+        "unknowns": "",
+        "checks": []
+      },
+      {
+        "identity": {
+          "source": "49f377884aaec560a5c3673cb6aeff6616133232a9b763d76575be0c5fd524cd",
+          "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+          "environment": "2319e641280669e53895f6e1274388a198d2ec3b2f383fe0dbdfc66872492919"
+        },
+        "requirement": "F-005",
+        "severity": "medium",
+        "review_kind": "code",
+        "disposition": "disputed",
+        "requires_execution": true,
+        "id": "finding-10",
+        "review": "review-02",
+        "expected_source": "confirmed-F-005",
+        "category": "projection",
+        "location": "omitted",
+        "trigger": "original-trigger-finding-10",
+        "reproduction": "original-steps-finding-10",
+        "evidence": "omitted",
+        "unknowns": "",
+        "checks": []
+      },
+      {
+        "identity": {
+          "source": "cc5ee9b9b766fddc0690dcdcdae2b66ff46fe561b3bf7176b54f12c2eb79324a",
+          "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+          "environment": "2319e641280669e53895f6e1274388a198d2ec3b2f383fe0dbdfc66872492919"
+        },
+        "requirement": "F-006",
+        "severity": "high",
+        "review_kind": "code",
+        "disposition": "suspected",
+        "requires_execution": true,
+        "id": "finding-11",
+        "review": "review-03",
+        "expected_source": "confirmed-F-006",
+        "category": "projection",
+        "location": "omitted",
+        "trigger": "original-trigger-finding-11",
+        "reproduction": "original-steps-finding-11",
+        "evidence": "omitted",
+        "unknowns": "",
+        "checks": []
+      },
+      {
+        "identity": {
+          "source": "cc5ee9b9b766fddc0690dcdcdae2b66ff46fe561b3bf7176b54f12c2eb79324a",
+          "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+          "environment": "2319e641280669e53895f6e1274388a198d2ec3b2f383fe0dbdfc66872492919"
+        },
+        "requirement": "F-005",
+        "severity": "medium",
+        "review_kind": "code",
+        "disposition": "disputed",
+        "requires_execution": true,
+        "id": "finding-12",
+        "review": "review-03",
+        "expected_source": "confirmed-F-005",
+        "category": "projection",
+        "location": "omitted",
+        "trigger": "original-trigger-finding-12",
+        "reproduction": "original-steps-finding-12",
+        "evidence": "omitted",
+        "unknowns": "",
+        "checks": []
+      },
+      {
+        "identity": {
+          "source": "cc5ee9b9b766fddc0690dcdcdae2b66ff46fe561b3bf7176b54f12c2eb79324a",
+          "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+          "environment": "2319e641280669e53895f6e1274388a198d2ec3b2f383fe0dbdfc66872492919"
+        },
+        "requirement": "F-002",
+        "severity": "medium",
+        "review_kind": "code",
+        "disposition": "disputed",
+        "requires_execution": false,
+        "id": "finding-13",
+        "review": "review-03",
+        "expected_source": "confirmed-F-002",
+        "category": "projection",
+        "location": "omitted",
+        "trigger": "original-trigger-finding-13",
+        "reproduction": "original-steps-finding-13",
+        "evidence": "omitted",
+        "unknowns": "",
+        "checks": []
+      },
+      {
+        "identity": {
+          "source": "cc5ee9b9b766fddc0690dcdcdae2b66ff46fe561b3bf7176b54f12c2eb79324a",
+          "target": "956da4db3fea8f74a541ec1acd1c378d31d07a6a923cd596802f12f1ba4c444b",
+          "environment": "2319e641280669e53895f6e1274388a198d2ec3b2f383fe0dbdfc66872492919"
+        },
+        "requirement": "F-003",
+        "severity": "medium",
+        "review_kind": "code",
+        "disposition": "suspected",
+        "requires_execution": true,
+        "id": "finding-14",
+        "review": "review-03",
+        "expected_source": "confirmed-F-003",
+        "category": "projection",
+        "location": "omitted",
+        "trigger": "original-trigger-finding-14",
+        "reproduction": "original-steps-finding-14",
+        "evidence": "omitted",
+        "unknowns": "",
+        "checks": []
+      }
+    ]
+  }
+}

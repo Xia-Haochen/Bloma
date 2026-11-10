@@ -48,8 +48,11 @@ export function qualityCloseout(ledger: Ledger, current: Identity, block: Delive
   const contractChange=mustFix.find(f=>qualityFailureBaseline(f)?.rules!==(f.independent?independentRules:rules) && !(f.retest&&sameIdentity(f.retest.identity,current)&&f.retest.rules===rules))
   const priority = contractChange??investigate.find(importantFinding)
   const reviewKind=priority?.review_kind??'code'
-  const latestReview=ledger.reviews.filter(r=>(r.kind??'code')===reviewKind&&sameIdentity(r.identity,current)).at(-1)
-  const freshReview=Boolean(latestReview?.status==='complete'&&(!observationDigest||latestReview.observation?.digest===observationDigest))
+  // Coverage judges test adequacy, not whether these suspicions have a case.
+  // Keep the latest interruption authoritative; never fall back to an older PASS.
+  const latestReview=ledger.reviews.filter(r=>(r.kind??'code')===reviewKind&&r.purpose!=='coverage'&&sameIdentity(r.identity,current)).at(-1)
+  const freshReview=Boolean(latestReview?.status==='complete'&&(!latestReview.rules||latestReview.rules===rules)&&(!observationDigest||latestReview.observation?.digest===observationDigest))
+  const bindingFindings=[...mustFix,...investigate.filter(importantFinding)].filter(f=>!f.independent&&!findingCaseBinding(f,current,rules))
   const boundPriority=priority&&findingCaseBinding(priority,current,rules)
   const purpose=priority?'binding' as const:'candidate' as const
   let next = 'verify_app'
@@ -62,7 +65,7 @@ export function qualityCloseout(ledger: Ledger, current: Identity, block: Delive
   else if (block?.code==='visual_review') next = 'start_visual_review'
   else if (block) next = 'inspect_app'
   return { halt: Boolean(block?.code==='independent' || block?.code==='visual_route' || block?.code==='correction_review'), purpose, identity: current, verification: 'not_issued', gate, next_tool: next,
-    must_fix: mustFix.map(f => f.id), investigate: investigate.map(f => f.id), required_investigation: investigate.filter(importantFinding).map(f => f.id), deferred: deferred.map(f => f.id),
+    must_fix: mustFix.map(f => f.id), investigate: investigate.map(f => f.id), required_investigation: investigate.filter(importantFinding).map(f => f.id), binding_findings: bindingFindings.map(f=>f.id), deferred: deferred.map(f => f.id),
   }
 }
 

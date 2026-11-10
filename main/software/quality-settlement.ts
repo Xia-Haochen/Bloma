@@ -21,12 +21,12 @@ export async function settleObservedQuality(projectId: string, result: SoftwareV
     const outcome = observedQualityFinding(result, finding, binding.case_name)
     if (outcome === 'unverified' || outcome === 'passed' && result.status !== 'passed') continue
     const last = finding.checks.at(-1)
-    if (last?.grounded && last.candidate === result.candidate.id && last.outcome === outcome && sameIdentity(last.identity, current)) continue
+    if (last?.grounded && last.candidate === result.candidate.id && last.outcome === outcome && last.rules === rules && last.case_name === binding.case_name && sameIdentity(last.identity, current)) continue
     finding.checks.push({ grounded:Boolean(finding.retest&&binding===finding.retest || baseline?.grounded), at: new Date().toISOString(), identity: current, rules, case_name: binding.case_name,
       outcome, candidate: result.candidate.id, report: result.report_path,
       observation: serializeRedactedJson({ source: 'host_verification', status: result.status, case_name: binding.case_name, outcome,
-        gui: result.core?.host_gui?.case_results?.filter(c => c.name === binding.case_name),
-        cli: result.core?.host_cli?.cases.filter(c => c.name === binding.case_name) },redactSoftwareOutput) })
+        gui: result.core?.host_gui?.case_results?.filter(c => c.name === binding.case_name && c.feature === finding.requirement),
+        cli: result.core?.host_cli?.cases.filter(c => c.name === binding.case_name && c.covers.includes(finding.requirement)) },redactSoftwareOutput) })
     const grounded=finding.checks.at(-1)?.grounded
     finding.disposition = outcome === 'failed' && grounded ? 'confirmed' : baseline ? 'closed' : outcome==='passed'&&grounded?'not_reproduced':'suspected'
     changed = true

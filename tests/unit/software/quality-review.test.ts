@@ -123,7 +123,9 @@ it('host verification settles a bound defect after repair without another model 
 }, 120000)
 it('parent cannot forge a C submission; no-source opinions remain disputed/suggestions and cannot be reproduced as defects', async () => {
   await expect(quality.childProtocol[1].execute({ findings: [] }, ctx())).rejects.toThrow('DENIED')
-  await review([{ ...finding, requirement_id: finding.requirement, expected_source: '应当自动增加备份功能' }, { ...finding, requirement: 'unscoped', kind: 'suggestion' }])
+  // Suggestions have no confirmed runtime expectation and must not claim a sum binding.
+  const {case_name,...unbound}=finding
+  await review([{ ...unbound, requirement_id: finding.requirement, expected_source: '应当自动增加备份功能' }, { ...unbound, requirement: 'unscoped', kind: 'suggestion' }])
   const ledger = readQualityLedger(project.project_id)
   expect(ledger.findings.map(f => f.disposition)).toEqual(['disputed', 'suggestion'])
   const read = quality.parentTools.find(t => t.name === 'read_quality_findings')!
@@ -330,8 +332,11 @@ it('keeps uncertain experience observations open and permits a new current revie
   await review([], [observation])
   expect(await quality.gate()).toContain('INTENT_UNRESOLVED')
   await review([], [{...observation,status:'supported',evidence:'已读实现输出具体结果',limitations:'真实行为仍由宿主验证'}])
-  expect(await quality.gate()).toContain('REPRODUCTION_REQUIRED')
-  await verifySoftwareCandidate(project.project_id,'r',ctx().signal)
+  // No finding was submitted: review qualification clears, not runtime verification.
+  expect(await quality.gate()).toBeUndefined()
+  // Intent confirmation also changed scope: the old CLI contract cannot issue PASS.
+  expect((await verifySoftwareCandidate(project.project_id,'r',ctx().signal)).status).toBe('unverified')
+  expect(readQualityLedger(project.project_id).findings).toEqual([])
   expect(await quality.gate()).toBeUndefined()
   writeFileSync(join(project.root_path,'app.cjs'),'console.log(7)')
   expect(await quality.gate()).toContain('REVIEW_REQUIRED')
@@ -498,4 +503,38 @@ it('routes a late current-version partner execution failure to C without promoti
  advice.updates.push(advice.updates[0]);expect(await quality.gate()).toBeUndefined()
  advice.updates[0].workspace_facts.recent_runs=[{...run,record_sha256:'b'.repeat(64)}]
  expect(await quality.gate()).toContain('NEW_EXECUTION_REVIEW_REQUIRED')
+},120000)
+
+
+it('one current binding review settles several same-case suspicions but cannot close an unbound different trigger or replace final C',async()=>{
+ writeFileSync(join(project.root_path,'app.cjs'),'console.log(5)')
+ const {case_name,...unbound}=finding
+ await review([unbound,{...unbound,location:'same-trigger second report'},{...unbound,location:'same-trigger third report'},{...unbound,trigger:'network failure then retry',reproduction:'different path not present in sum'}],undefined,undefined,undefined,'coverage')
+ let facts=readQualityLedger(project.project_id)
+ const ids=facts.findings.map(f=>f.id)
+ expect(await quality.completionAction(ctx().signal)).toMatchObject({next_tool:'start_quality_review',purpose:'binding',binding_findings:ids})
+ const first=await verifySoftwareCandidate(project.project_id,'r',ctx().signal)
+ expect(first.status).toBe('passed');expect(readQualityLedger(project.project_id).findings.every(f=>f.checks.length===0)).toBe(true)
+ register(async function*(_prompt,options){
+  const packet=JSON.parse((await quality.childProtocol.find(t=>t.name==='read_quality_review')!.execute({},ctx(options.sessionId))).output)
+  expect(packet.binding_work).toEqual(ids)
+  expect(packet.test_coverage.authority).toContain('错误实现')
+  expect(packet.test_coverage.contract_changes).toEqual([])
+  const contract=JSON.parse((await quality.childProtocol[0].execute({test_file:'cli'},ctx(options.sessionId))).output)
+  expect(JSON.parse(contract.text).cases[0]).toMatchObject({name:'sum',args:['2','3'],stdout:'5'})
+  yield{type:'assistant',message:{role:'assistant',content:[{type:'tool_use',id:'source',name:'read_file',input:{path:'app.cjs'}},{type:'tool_use',id:'submit',name:'submit_quality_findings',input:{findings:[],resolutions:ids.slice(0,3).map(finding_id=>({finding_id,case_name:'sum',evidence:'独立核对：此条触发为2和3，冻结sum保留该输入和预期5；第四条网络路径不覆盖。'}))}}]}}
+  yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
+ })
+ const child=await quality.begin(ctx(),'code',undefined,'binding');await findDelegation(parent,child.delegation_id)!.completion;await settleParentDelegationRuns(parent)
+ facts=readQualityLedger(project.project_id)
+ expect(facts.reviews.at(-1)?.status).toBe('complete');expect(facts.findings.every(f=>f.checks.length===0)).toBe(true)
+ const checked=await verifySoftwareCandidate(project.project_id,'r',ctx().signal)
+ expect(checked.candidate?.id).toBe(first.candidate?.id)
+ await verifySoftwareCandidate(project.project_id,'r',ctx().signal)
+ facts=readQualityLedger(project.project_id)
+ expect(facts.findings.map(f=>f.checks.length)).toEqual([1,1,1,0])
+ expect(facts.findings.map(f=>f.disposition)).toEqual(['not_reproduced','not_reproduced','not_reproduced','suspected'])
+ expect(new Set(facts.findings.slice(0,3).map(f=>f.checks[0].candidate)).size).toBe(1)
+ expect(await quality.gate()).toContain('REPRODUCTION_REQUIRED')
+ expect(facts.reviews.map(r=>r.purpose)).toEqual(['coverage','binding'])
 },120000)

@@ -1,3 +1,4 @@
+import {testCorrectionChanges} from '../../../main/software/test-corrections'
 import {runAgentLoop} from '../../../main/agent/loop/agent-loop'
 import {buildSoftwareAgentTools} from '../../../main/software/agent-tools'
 import {testCorrectionRejectionFeedback} from '../../../main/software/test-corrections'
@@ -290,6 +291,8 @@ it('approves a helper-only repair that exposes a product failure, retains the fa
  applyApprovedTestCorrections(id)
  const result=await verifyProjectStage(id,'first','acceptance.mjs',AbortSignal.timeout(60000))
  expect(result.status).toBe('failed');expect(readProjectStages(id).attempts[0].status).toBe(first.status)
+ const changes=testCorrectionChanges(id,true)
+ expect(changes).toEqual([expect.objectContaining({cases:[{name:'F-001 original record',feature:'F-001',body:'unchanged'}],files:[{file:'helper.mjs',change:'changed',shared_input_changed:true}],verification:'not_issued'})])
  expect((await import('../../../main/project/project-service')).findProject(id).software_release_id).toBeUndefined()
 },180000)
 
@@ -344,3 +347,51 @@ it('a real Pi session submits two edited files as one complete correction withou
  const candidates=pendingTestCorrectionInputs(p.project_id);expect(candidates,JSON.stringify(outputs)).toHaveLength(1);expect(candidates[0].native.files.map(f=>f.path)).toEqual(['acceptance.mjs','helper.mjs'])
  expect(readTestContractFile(p.project_id,before.digest,'acceptance.mjs').text).toBe(original)
 },90000)
+
+
+it('projects only applied independently approved test deltas without granting binding or PASS',()=>{
+ const a=proposal()
+ expect(testCorrectionChanges(p.project_id,true)).toEqual([])
+ decideTestCorrection(p.project_id,a.id,decision(a.id))
+ expect(testCorrectionChanges(p.project_id,true)).toEqual([])
+ applyTestCorrection(p.project_id,a.id)
+ const current=freezeNativeGuiTests(p.project_id,p.root_path,'acceptance.mjs',['F-001'])
+ const state=readProjectStages(p.project_id);state.attempts.push({...state.attempts[0],id:'current-registration',native:current})
+ writeFileSync(join(home,'software-stage-checks',p.project_id,'state.json'),JSON.stringify({...state,checksum:sha(JSON.stringify(state))}))
+ expect(testCorrectionChanges(p.project_id)).toEqual([]) // not the formal suite yet
+ expect(testCorrectionChanges(p.project_id,true)).toEqual([expect.objectContaining({id:a.id,before:before.digest,after:current.digest,
+  cases:[{name:'F-001 original record',feature:'F-001',body:'changed'}],verification:'not_issued'})])
+ expect(readProjectStages(p.project_id).attempts[0].status).toBe('failed')
+})
+
+it('real browser: weak text checks accept stale rewrite, strengthened approved checks reject it and pass only the repaired journey',async()=>{
+ const project=createProject({request_id:'rewrite-replay',mode:'longterm'},{workflowVersion:'software-v1'}),id=project.project_id,root=project.root_path
+ const expected='第二次内容被拒绝后正文和保存状态均回退规则模式，不保留上一轮改写'
+ const parsed=parseLeanBrief(JSON.stringify({action:'brief',goal:'拒绝改写后回退规则',ui:'required',delivery:'browser',requirements:[{description:'拒绝后清除旧改写',expected}],project_plan:{version:1,current:'first',stages:[{id:'first',title:'连续改写',feature_ids:['F-001']}]}}),{projectId:id,sessionId:'s',source:expected,previous:readPrdBackplane(id),software:true})!
+ if(parsed.action!=='brief')throw Error('fixture');parsed.brief.lean_brief!.preview='skip'
+ syncDocuments({request_id:'confirm',project_id:id,session_id:'s',checkpoint:'requirement_confirmed'},parsed.brief)
+ const brief=markPrdUserConfirmed(id)!,scope=prdScopeFingerprint(brief);updateProject(id,{ux_confirmation:{prd_fingerprint:scope,design_hash:scope,html_hash:null}})
+ const listener=createServer();await new Promise<void>(r=>listener.listen(0,'127.0.0.1',r));const port=(listener.address() as {port:number}).port;await new Promise<void>(r=>listener.close(()=>r()))
+ const server=(fixed:boolean)=>{
+  const html=`<button id="rewrite">Rewrite</button><p id="reply"></p><p id="status"></p><script>let calls=0;let reply={text:'能申请什么：规则原文。依据：知识库',state:'ready',engine:'rules'};document.getElementById('rewrite').onclick=()=>{if(++calls===1)reply={text:'能申请什么：模型专有措辞。依据：知识库',state:'rewritten',engine:'model'};else{reply.state='rejected';if(${fixed}){reply.text='能申请什么：规则原文。依据：知识库';reply.engine='rules'}}localStorage.setItem('reply',JSON.stringify(reply));document.getElementById('reply').textContent=reply.text;document.getElementById('status').textContent=reply.state}</script>`
+  return `require('http').createServer((q,s)=>{s.setHeader('content-type','text/html; charset=utf-8');s.end(${JSON.stringify(html)})}).listen(${port},'127.0.0.1')`
+ }
+ writeFileSync(join(root,'server.cjs'),server(false))
+ writeFileSync(join(root,'LAUNCH.json'),JSON.stringify({schema_version:2,ui:'browser',command:['node','server.cjs'],url:`http://127.0.0.1:${port}`}))
+ const weak=`export default async({test,page,expect})=>{await test('F-001 rejection clears prior rewrite',async()=>{await page.click('#rewrite');await expect(page.locator('#reply')).toContainText('模型专有措辞');await page.click('#rewrite');await expect(page.locator('#status')).toHaveText('rejected');await expect(page.locator('#reply')).toContainText('能申请什么');await expect(page.locator('#reply')).toContainText('依据：知识库')})}`
+ writeFileSync(join(root,'acceptance.mjs'),weak)
+ expect((await verifyProjectStage(id,'first','acceptance.mjs',AbortSignal.timeout(60000))).status).toBe('passed')
+ const baseline=readProjectStages(id).attempts[0];registerNativeGuiTests(id,'acceptance.mjs')
+ const oldText="await expect(page.locator('#reply')).toContainText('依据：知识库')"
+ const added=oldText+";await expect(page.locator('#reply')).not.toContainText('模型专有措辞');await expect(page.locator('#reply')).toContainText('规则原文');const saved=await page.evaluate(()=>JSON.parse(localStorage.getItem('reply')));expect(saved.state).toBe('rejected');expect(saved.engine).toBe('rules');expect(saved.text).not.toContain('模型专有措辞')"
+ const proposed=proposeTestCorrection(id,{contract_digest:baseline.native.digest,file:'acceptance.mjs',old_text:oldText,new_text:added,feature_ids:['F-001'],reason:'保留两次操作和原断言，增加区分残留正文与真实规则回退的可见及持久状态断言'})
+ const evidence=join(home,'rewrite-independent.json');writeFileSync(evidence,JSON.stringify({expected,counterexample:'旧正文包含通用关键词，第二次只改状态也可通过旧断言'}))
+ decideTestCorrection(id,proposed.id,{verdict:'approve',reviewer:'independent_operator',reason:'fixture独立裁定：追加反例断言，保留原操作与预期',expected_sources:{'F-001':expected},evidence:[{path:evidence,sha256:sha(readFileSync(evidence))}]})
+ applyApprovedNativeCorrections(id)
+ expect(testCorrectionChanges(id)[0]).toMatchObject({before:baseline.native.digest,cases:[{name:'F-001 rejection clears prior rewrite',feature:'F-001',body:'changed'}],verification:'not_issued'})
+ expect((await verifyProjectStage(id,'first','acceptance.mjs',AbortSignal.timeout(60000))).status).toBe('failed')
+ writeFileSync(join(root,'server.cjs'),server(true))
+ expect((await verifyProjectStage(id,'first','acceptance.mjs',AbortSignal.timeout(60000))).status).toBe('passed')
+ expect(readProjectStages(id).attempts.map(a=>a.status)).toEqual(['passed','failed','passed'])
+ expect(readTestContractFile(id,baseline.native.digest,'acceptance.mjs').text).toBe(weak)
+},180000)

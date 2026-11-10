@@ -114,7 +114,7 @@ it.each([false,true])('hands a verified candidate to C despite optional advice w
 },120000)
 
 
-it('closes a new unbound suspicion through ordinary maker tools, independent binding, execution and final C',async()=>{
+it.each([1,3])('closes %s unbound suspicions through ordinary maker tools, one independent binding review, execution and final C',async(count)=>{
  const project=createProject({request_id:'create',mode:'quick'},{workflowVersion:'software-v1'})
  const expected='返回两个输入数之和'
  const parsed=parseLeanBrief(JSON.stringify({action:'brief',goal:'求和',ui:'none',delivery:'command',requirements:[{description:'两个数求和',expected}]}),{projectId:project.project_id,sessionId:'s',source:'求和',previous:readPrdBackplane(project.project_id),software:true})!
@@ -136,8 +136,8 @@ it('closes a new unbound suspicion through ordinary maker tools, independent bin
    else {console.info('UNEXPECTED_MAKER_CONTEXT',JSON.stringify(options.messages?.slice(-3)).slice(-10000));console.info('CHAIN_LEDGER',JSON.stringify(readQualityLedger(project.project_id)).slice(-6000));throw Error('UNEXPECTED_MAKER_REQUEST')}
   }else{
    reviews++
-   const finding=readQualityLedger(project.project_id).findings[0]
-   content=[use('materials'+reviews,'read_quality_review',{}),use('source'+reviews,'read_file',{path:'app.cjs'}),use('submit'+reviews,'submit_quality_findings',{findings:reviews===1?[{requirement:'F-001',expected_source:expected,category:'data',severity:'high',location:'app.cjs',trigger:'输入3和4',evidence:'实现固定输出5',reproduction:'正常CLI入口传3和4，预期7',unknowns:'该输入未执行',kind:'suspected'}]:[],...(reviews===2?{resolutions:[{finding_id:finding.id,case_name:'other-inputs',evidence:'独立核对已登记other-inputs传3和4并断言7，保留原sum。'}]}:{}),engineering:{status:'supported',evidence:'CLI parsing and output have one owner.',limitations:'CLI only'}})]
+   const findings=readQualityLedger(project.project_id).findings
+   content=[use('materials'+reviews,'read_quality_review',{}),use('source'+reviews,'read_file',{path:'app.cjs'}),use('submit'+reviews,'submit_quality_findings',{findings:reviews===1?Array.from({length:count},(_,i)=>({requirement:'F-001',expected_source:expected,category:'data',severity:'high',location:'app.cjs report '+i,trigger:'输入3和4',evidence:'实现固定输出5',reproduction:'正常CLI入口传3和4，预期7',unknowns:'该输入未执行',kind:'suspected'})):[],...(reviews===2?{resolutions:findings.map(finding=>({finding_id:finding.id,case_name:'other-inputs',evidence:'逐条独立核对已登记other-inputs传3和4并断言7，保留原sum。'}))}:{}),engineering:{status:'supported',evidence:'CLI parsing and output have one owner.',limitations:'CLI only'}})]
   }
   yield{type:'assistant',message:{role:'assistant',content}}
   yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
@@ -147,8 +147,10 @@ it('closes a new unbound suspicion through ordinary maker tools, independent bin
   await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'r',content:'实现求和',signal:AbortSignal.timeout(180000),maxTokens:4096},query,{}, {publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
   const ledger=readQualityLedger(project.project_id)
   expect(maker).toBe(3);expect(reviews).toBe(3)
-  expect(ledger.findings[0].disposition).toBe('not_reproduced')
-  expect(ledger.findings[0].checks.at(-1)).toMatchObject({grounded:true,outcome:'passed',case_name:'other-inputs'})
+  expect(ledger.findings).toHaveLength(count)
+  expect(ledger.findings.every(f=>f.disposition==='not_reproduced'&&f.checks.length===1)).toBe(true)
+  expect(ledger.findings.every(f=>f.checks[0].grounded&&f.checks[0].outcome==='passed'&&f.checks[0].case_name==='other-inputs')).toBe(true)
+  expect(new Set(ledger.findings.map(f=>f.checks[0].candidate)).size).toBe(1)
   expect(ledger.reviews.map(r=>r.purpose)).toEqual(['candidate','binding','candidate'])
   expect(findProject(project.project_id).desktop_phase,findProject(project.project_id).desktop_blocked?.note).toBe('delivered')
   expect(await activeSoftwareRelease(project.project_id)).toBeTruthy()

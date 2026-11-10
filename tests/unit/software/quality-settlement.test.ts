@@ -50,3 +50,29 @@ it('retests an applicable grounded case after environment changes without erasin
  expect(state.ledger.findings[0].disposition).toBe('closed')
  expect(state.ledger.findings[0].checks[0].identity.environment).toBe('previous-runtime')
 })
+
+
+it('settles each independently bound same-case finding once and leaves a similar unbound trigger open',async()=>{
+ const baseline=state.ledger.findings[0]
+ const binding={identity:{source:'new',target:'goal',environment:'env'},review:'independent',case_name:'sum',rules:'rules',evidence:'exact trigger and preserved expectation'}
+ state.ledger.findings=[baseline,{id:'copy',requirement:'F-001',disposition:'suspected',checks:[],retest:binding},{id:'other-copy',requirement:'F-001',disposition:'suspected',checks:[],retest:binding},{id:'different-path',requirement:'F-001',disposition:'suspected',checks:[]}]
+ await settleObservedQuality('p',result());await settleObservedQuality('p',result())
+ expect(state.ledger.findings.map((f:any)=>f.disposition)).toEqual(['closed','not_reproduced','not_reproduced','suspected'])
+ expect(state.ledger.findings.map((f:any)=>f.checks.length)).toEqual([2,1,1,0])
+ expect(baseline.checks[0].outcome).toBe('failed');expect(state.save).toHaveBeenCalledTimes(1)
+})
+it.each(['gui','cli'])('only retains the bound requirement in %s settlement observations',async kind=>{
+ const r=result()
+ if(kind==='cli')r.core.host_cli.cases.push({name:'sum',covers:['F-999'],passed:true,exit_code:0,stdout:'foreign record'})
+ else r.core={host_gui:{case_results:[{name:'sum',feature:'F-001',assertions:1,status:'passed'},{name:'sum',feature:'F-999',assertions:1,status:'passed',detail:'foreign record'}]}}
+ await settleObservedQuality('p',r)
+ const observation=JSON.parse(state.ledger.findings[0].checks.at(-1).observation)
+ expect(observation[kind]).toHaveLength(1);expect(JSON.stringify(observation)).not.toContain('F-999')
+})
+it('does not reuse an old-rule check just because candidate and outcome match',async()=>{
+ const f=state.ledger.findings[0]
+ f.checks.push({identity:{source:'new',target:'goal',environment:'env'},rules:'old-rules',case_name:'sum',grounded:true,outcome:'passed',candidate:'candidate'})
+ f.retest={identity:{source:'new',target:'goal',environment:'env'},rules:'rules',case_name:'sum',review:'new-binding',evidence:'current contract'}
+ await settleObservedQuality('p',result())
+ expect(f.checks).toHaveLength(3);expect(f.checks.at(-1).rules).toBe('rules');expect(state.save).toHaveBeenCalledTimes(1)
+})
