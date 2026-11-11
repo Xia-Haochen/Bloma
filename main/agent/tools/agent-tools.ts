@@ -7,8 +7,8 @@ import { extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { findProject } from '../../project/project-service';
 import { decideWrite, estimateTokenCount } from '../loop/usage-guard'
 import { toolEvidenceEnabled, writeGuardEnabled, preflightEnabled, type AgentLoopTool, type ToolContext, type ToolOutcome } from '../loop/agent-loop';
-import { commitFileWrite, fileRevisionOf, fileRevisionsOf } from './write-lease'
-import { replaceUniqueText } from './text-edit'
+import { commitFileWrite, contentRevision, fileRevisionMatches, fileRevisionOf, fileRevisionsOf } from './write-lease'
+import { replaceUniqueText, replaceMultipleTexts, type TextEdit } from './text-edit'
 import { readTextWindow, readWindowProperties, searchProjectFiles, pageFileNames, compileFileGlob } from './file-query'
 import { resolveProjectRoot } from '../../../shared/project-root-override'
 import { buildDelegationTools } from '../delegation/delegation-tools'
@@ -414,6 +414,14 @@ export function buildAgentTools(options: BuildAgentToolsOptions): AgentLoopTool[
     // + 写租约临界区互斥（并行写者冲突拒绝并教育；单会话零影响；TTL 兜底）。
     ctx.signal.throwIfAborted()
     options.assertFileWrite?.(rel, ctx)
+    const checkedPath = resolveInsideProject(root, rel)
+    if (!checkedPath.ok) return { output: checkedPath.error, isError: true }
+    let ancestor = abs
+    while (!existsSync(ancestor)) ancestor = resolve(ancestor, '..')
+    const physicalTarget = resolve(realpathSync(ancestor), relative(ancestor, abs))
+    const actual = relative(realpathSync(root), physicalTarget).replace(/\\/g, '/')
+    const normalize = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value
+    if (normalize(actual) !== normalize(rel)) return { output: 'PATH_ALIAS_WRITE_DENIED: 请使用真实路径重新读取并通过原权限检查', isError: true }
     const committed = commitFileWrite({
       projectId: ctx.projectId,
       root,
@@ -600,7 +608,7 @@ export function buildAgentTools(options: BuildAgentToolsOptions): AgentLoopTool[
     name: 'edit_file',
     description:
       editFormat === 'diff'
-        ? '精确替换修改：提供 path + old_string（当前文件中唯一存在的片段）+ new_string（替换后的片段）。old_string 未命中或不唯一都会报错，请先 read_file 定点。'
+        ? '精确替换：path+old_string+new_string，或path+edits数组（1~32处）。所有edits基于同一原文，重叠/歧义整批拒绝，一次校验写入；批量必须先read_file取得内容hash。可传expected_revision防止旧版本写入。'
         : '整文件重写修改：提供 path + content（修改后的完整文件内容）。写入前会做语法校验。',
     input_schema: {
       type: 'object',
@@ -609,9 +617,13 @@ export function buildAgentTools(options: BuildAgentToolsOptions): AgentLoopTool[
         old_string: { type: 'string', description: '（diff 模式）要替换的唯一原文片段' },
         new_string: { type: 'string', description: '（diff 模式）替换后的内容' },
         content: { type: 'string', description: '（whole 模式）修改后的完整文件内容' },
-        expected_revision: { type: 'string', description: '（可选，D4a）read_file 返回的文件版本；提供时若文件已被修改过会返回 STALE_READ 拒绝执行，需重新 read_file' },
+        expected_revision: { type: 'string', description: 'read_file返回的内容hash；旧单片段仍兼容stat版本，批量只接受hash' },
+        edits: { type: 'array', minItems: 1, maxItems: 32, items: { type: 'object', required: ['old_string', 'new_string'], properties: {
+          old_string: { type: 'string', minLength: 1 }, new_string: { type: 'string' },
+        } } },
       },
-      required: editFormat === 'whole' ? ['path'] : ['path', 'old_string', 'new_string'],
+      required: ['path'],
+      ...(editFormat === 'diff' ? { anyOf: [{ required: ['old_string', 'new_string'] }, { required: ['edits'] }, { required: ['content'] }] } : {}),
     },
     execute: async (toolInput, ctx) => {
       const project = findProject(projectId)
@@ -628,13 +640,30 @@ export function buildAgentTools(options: BuildAgentToolsOptions): AgentLoopTool[
         existsSync(resolved.abs)
       ) {
         const currentRev = fileRevisionOf(resolved.abs)
-        if (currentRev !== toolInput.expected_revision) {
+        if (!fileRevisionMatches(resolved.abs, toolInput.expected_revision)) {
           return {
             output: `STALE_READ：${resolved.rel} 在你读取后已被修改（读时版本 ${toolInput.expected_revision}，当前 ${currentRev}）。请重新 read_file 后再编辑，禁止凭旧内容修改。`,
             isError: true,
             detail: { code: 'STALE_READ', path: resolved.rel },
           }
         }
+      }
+
+      if (toolInput.edits !== undefined) {
+        if (toolInput.old_string !== undefined || toolInput.new_string !== undefined || toolInput.content !== undefined || !Array.isArray(toolInput.edits)
+          || !toolInput.edits.length || toolInput.edits.length > 32 || toolInput.edits.some(e => !e || typeof e !== 'object'
+            || typeof e.old_string !== 'string' || !e.old_string || typeof e.new_string !== 'string')) {
+          return { output: 'EDIT_BATCH_INVALID: edits含1~32个old_string/new_string，与单片段/content二选一', isError: true }
+        }
+        const revision = typeof toolInput.expected_revision === 'string' ? toolInput.expected_revision : fileRevisionsOf(ctx).get(resolved.rel)
+        if (!revision || !/^[0-9a-f]{64}$/.test(revision)) return { output: 'CONTENT_REVISION_REQUIRED: 批量编辑前先read_file取得内容hash', isError: true }
+        if (!fileRevisionMatches(resolved.abs, revision)) return { output: 'STALE_READ: 内容已改变或被删除，请重新读取', isError: true }
+        if (decideWrite(JSON.stringify(toolInput.edits)) === 'chunk') return { output: 'EDIT_BATCH_TOO_LARGE: 请减少片段大小或分批处理', isError: true }
+        const current = readFileSync(resolved.abs)
+        if (contentRevision(current) !== revision) return { output: 'STALE_READ: 内容在读取时改变', isError: true }
+        const result = replaceMultipleTexts(current.toString('utf8'), toolInput.edits as TextEdit[])
+        if (!result.ok) return { output: `${result.code}: 第${result.index + 1}项校验失败（命中${result.matches}处，要求唯一且不重叠）；未写入任何片段`, isError: true }
+        return validateAndWrite(projectRoot(), resolved.rel, result.content, ctx, revision)
       }
 
       // whole 模式：无 old_string，走整文件重写（弱渠道能力位）。
@@ -673,7 +702,7 @@ export function buildAgentTools(options: BuildAgentToolsOptions): AgentLoopTool[
       }
       const next = replacement.content
       // P1-06：模型显式 expected_revision 优先；未传时用本会话读到的版本作提交点校验基准
-      const revisionBasis = typeof toolInput.expected_revision === 'string' ? toolInput.expected_revision : undefined
+      const revisionBasis = typeof toolInput.expected_revision === 'string' ? toolInput.expected_revision : fileRevisionsOf(ctx).get(resolved.rel) ?? contentRevision(current)
       return validateAndWrite(projectRoot(), resolved.rel, next, ctx, revisionBasis)
     },
   }

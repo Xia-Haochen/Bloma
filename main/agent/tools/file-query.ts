@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ToolOutcome } from '../loop/agent-loop'
-import { fileRevisionOf } from './write-lease'
+import { contentRevision } from './write-lease'
 
 const digest = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
 export function boundedInteger(value: unknown, fallback: number, min: number, max: number): number {
@@ -41,11 +41,10 @@ export function readTextWindow(abs: string, rel: string, input: Record<string, u
     const stat = statSync(abs)
     if (!stat.isFile()) throw Error('READ_NOT_REGULAR_FILE')
     if (stat.size > 16 * 1024 * 1024) throw Error('READ_FILE_TOO_LARGE: 上限16MiB；用工程命令按需处理，不读取全文')
-    const revision = fileRevisionOf(abs)
-    if (input.expected_revision !== undefined && input.expected_revision !== revision) throw Error('STALE_READ: 文件已改变，请重新读取')
     const bytes = readFileSync(abs)
+    const revision = contentRevision(bytes)
+    if (input.expected_revision !== undefined && input.expected_revision !== revision) throw Error('STALE_READ: 文件已改变，请重新读取')
     if (bytes.subarray(0, 8192).includes(0)) throw Error('READ_BINARY_FILE: 不作为文本读取')
-    if (fileRevisionOf(abs) !== revision) throw Error('STALE_READ: 文件在读取期间改变')
     const lines = bytes.toString('utf8').split('\n'), total = lines.length
     if (offset > total) { offset = Math.max(1, total - limit + 1); charOffset = 0 }
     if (charOffset > lines[offset - 1].length || charOffset && /[\uDC00-\uDFFF]/.test(lines[offset - 1][charOffset])) throw Error('READ_CURSOR_INVALID')
