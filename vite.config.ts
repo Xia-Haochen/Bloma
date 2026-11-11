@@ -1,11 +1,16 @@
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { configDefaults, defineConfig } from 'vitest/config'
 
+const projectRoot = dirname(fileURLToPath(import.meta.url))
+
 export default defineConfig({
-  root: resolve(__dirname, 'renderer'),
+  root: resolve(projectRoot, 'renderer'),
   base: './',
+  // Never write build/test caches through a shared node_modules symlink.
+  cacheDir: resolve(projectRoot, '.cache/vite'),
   build: {
-    outDir: resolve(__dirname, 'dist'),
+    outDir: resolve(projectRoot, 'dist'),
     emptyOutDir: true,
   },
   server: {
@@ -14,7 +19,7 @@ export default defineConfig({
     strictPort: false,
   },
   test: {
-    root: __dirname,
+    root: projectRoot,
     // 运行证据可能保留旧 *.test.ts 快照，不能被路径过滤误当成当前测试执行。
     exclude: [...configDefaults.exclude, '**/run-artifacts/**'],
     // 并发上限（2026-10-03）：32 逻辑核下 vitest 默认开 ~30 个 worker，全量时 CPU/磁盘双满载、
@@ -26,8 +31,8 @@ export default defineConfig({
     // 膨胀数倍（2026-08-28 flaky 实测）。真 hang 的测试也能在 30s 内报失败。
     testTimeout: 30_000,
     // PROMA_HOME 被 teardown 写成字符串 "undefined" 时统一归位，见该文件注释
-    setupFiles: [resolve(__dirname, 'tests/support/proma-home-guard.ts')],
+    setupFiles: [resolve(projectRoot, 'tests/support/proma-home-guard.ts')],
     // 启动时回收历史泄漏的测试临时 PROMA_HOME 目录（mkdtemp 命名模式 + 距上次修改 >30min），见该文件注释
-    globalSetup: [resolve(__dirname, 'tests/support/tmp-home-sweep.ts')],
+    globalSetup: [resolve(projectRoot, 'tests/support/tmp-home-sweep.ts')],
   },
 })

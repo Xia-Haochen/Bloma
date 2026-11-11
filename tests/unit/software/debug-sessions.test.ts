@@ -214,3 +214,33 @@ it('isolates retained development data by operation and session, and rejects a r
   expect(readFileSync(join(target, 'marker'), 'utf8')).toBe('must stay')
   expect(readFileSync(join(first, 'data/count'), 'utf8')).toBe('kept old operation')
 })
+it.skipIf(process.platform !== 'win32' || !existsSync(electron)).each(['browser','electron'] as const)('exposes semantic observation/ref input on the real %s debug lifecycle without granting another session authority', async ui => {
+  const root = project.root_path, port = await freePort(), context = ctx()
+  writeFileSync(join(root, 'index.html'), html)
+  if (ui === 'electron') {
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'semantic-runtime', main: 'main.cjs' }))
+    writeFileSync(join(root, 'main.cjs'), mainSource('semantic-v1'))
+    writeFileSync(join(root, 'preload.cjs'), `const{contextBridge,ipcRenderer}=require('electron');contextBridge.exposeInMainWorld('api',{count:()=>ipcRenderer.invoke('count'),inc:()=>ipcRenderer.invoke('inc'),version:()=>ipcRenderer.invoke('version')})`)
+    writeFileSync(join(root, 'LAUNCH.json'), JSON.stringify({ schema_version: 2, ui, command: [electron, '.'], window_title: 'Debug fixture' }))
+  } else {
+    writeFileSync(join(root, 'server.cjs'), serverSource('semantic-v1'))
+    writeFileSync(join(root, 'LAUNCH.json'), JSON.stringify({ schema_version: 2, ui, command: ['node','server.cjs',String(port)], url: `http://127.0.0.1:${port}` }))
+  }
+  const tool = buildSoftwareInspectTool(project.project_id, createSoftwareCollaborationPolicy(project.project_id, root, 's'))
+  expect(JSON.parse((await tool.execute({ mode: 'capabilities' }, context)).output).capabilities.references).toContain('current observation')
+  const opened = await tool.execute({ steps: [{ id:'initial',kind:'expect',selector:'#count',equals:'0' },{ id:'ready',kind:'expect',selector:'#version',equals:'semantic-v1' }], observation: { role:'button',name:'Increment' } }, context)
+  expect(opened.isError,opened.output).not.toBe(true)
+  const initial = JSON.parse(opened.output), ref = initial.ui.nodes[0].ref, id = initial.debug_session_id
+  const foreign = await tool.execute({ mode:'act',debug_session_id:id,control:{ ref,kind:'click' } }, { ...context,sessionId:'foreign' })
+  expect(foreign.isError).toBe(true)
+  const acted = await tool.execute({ mode:'act',debug_session_id:id,control:{ ref,kind:'click' } }, context)
+  expect(acted.isError,acted.output).not.toBe(true)
+  expect(JSON.parse(acted.output).steps[0].actual).toMatchObject({execution:'completed',verification:'not_applicable'})
+  const observed = await tool.execute({ steps:[{ id:'after',kind:'expect',selector:'#count',equals:'1' }], observation:{ role:'button',name:'Increment' } }, context)
+  expect(observed.isError,observed.output).not.toBe(true)
+  const replay = await tool.execute({ control:{ref,kind:'click'} },context)
+  expect(replay.isError).toBe(true);expect(replay.output).toContain('UI_REF_STALE')
+  const mixed = await tool.execute({ control:{ref,kind:'click'},steps:[{ id:'wrong',kind:'click',selector:'#inc' }] },context)
+  expect(mixed.isError).toBe(true);expect(mixed.output).toContain('UI_CONTROL_MIXED_INPUT')
+  expect(readDebugSession(project.project_id,'s',id)).toMatchObject({stale:false,state:'ready'})
+}, 60000)

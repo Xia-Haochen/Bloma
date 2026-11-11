@@ -19,6 +19,7 @@ import { startSoftwareProcess, stopSoftwareSession, softwareProcess, ownedSoftwa
 import { softwareVerificationFingerprint as verificationFingerprint } from '../desktop/verification-fingerprint'
 import { materializeGuiFixtures } from '../desktop/gui-fixtures'
 import { observeSoftwareUi, captureDiagnosticScreenshot } from './ui-observation'
+import { actSemanticUi, invalidateSoftwareUi, type UiQuery, type UiControl } from './ui-semantics'
 import { debugWorkspace } from './debug-workspace'
 import { saveSourceCheckpoint } from './source-checkpoints'
 import { isNativeGuiTestModule } from './native-gui-tests'
@@ -164,6 +165,7 @@ export async function closeDebugSession(projectId: string, sessionId: string, id
   session.closing = (async () => {
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
+      if (session.page) await invalidateSoftwareUi(session.page)
       if (session.launch.ui === 'browser' && !session.formal && session.browser) {
         try { const state = await session.browser.storageState(); writeTextFileAtomic(join(session.workspace, 'browser-state.json'), JSON.stringify(state)) }
         catch (error) { log(session, 'state.save_failed', String(error)) }
@@ -295,8 +297,9 @@ export async function openDebugSession(input: { projectId: string; sessionId: st
     await closeDebugSession(input.projectId, input.sessionId, id); session.snapshot.state = 'failed'; persist(session); throw error
   }
 }
-export async function actDebugSession(input: { projectId: string; sessionId: string; id: string; steps?: GuiAcceptanceSuite['steps']; script?: string; scriptSource?: string; phase?:'initial'|'reopened'; nativeTests?: { file: string; phase: string; report: string; trace: string }; timeoutMs?: number; reload?: boolean; signal: AbortSignal }): Promise<DebugSnapshot> {
+export async function actDebugSession(input: { projectId: string; sessionId: string; id: string; steps?: GuiAcceptanceSuite['steps']; script?: string; scriptSource?: string; phase?:'initial'|'reopened'; nativeTests?: { file: string; phase: string; report: string; trace: string }; timeoutMs?: number; reload?: boolean; observation?: UiQuery; control?: UiControl; signal: AbortSignal }): Promise<DebugSnapshot> {
   if(input.scriptSource!==undefined&&(typeof input.scriptSource!=='string'||!input.scriptSource.trim()||Buffer.byteLength(input.scriptSource)>65536||input.script||input.nativeTests||input.steps))throw Error('BROWSER_SCRIPT_SOURCE_INVALID')
+  if (input.control && (input.script || input.scriptSource || input.steps || input.nativeTests || input.reload)) throw Error('UI_CONTROL_MIXED_INPUT: use control alone against a current observation')
   const session = owned(input.projectId, input.sessionId, input.id)
   if (session.snapshot.state !== 'ready' || !session.page || session.page.isClosed()) throw Error('DEBUG_SESSION_NOT_READY')
   if (session.busy) throw Error('DEBUG_SESSION_BUSY')
@@ -308,6 +311,7 @@ export async function actDebugSession(input: { projectId: string; sessionId: str
       const declared = readLaunchDeclaration(session.root)
       const launchKey = (launch: LaunchDeclaration) => JSON.stringify([launch.schema_version, launch.command, launch.ui, launch.mode, launch.url, launch.artifact, launch.window_title])
       if (!declared?.ok || launchKey(declared.launch) !== launchKey(session.launch)) throw Error('DEBUG_LAUNCH_CHANGED: 正常入口声明已改变，请close后重新open；不能把旧入口冒充当前程序')
+      if (session.page) await invalidateSoftwareUi(session.page)
       session.activeAction = 'reload'; session.snapshot.state = 'opening'
       if (session.launch.ui === 'electron') {
         await stopSoftwareSession(input.projectId, session.owner); await session.browserClient?.close().catch(() => {})
@@ -332,6 +336,11 @@ export async function actDebugSession(input: { projectId: string; sessionId: str
     if (input.reload) await restart()
     else if (readDebugSession(input.projectId, input.sessionId, input.id).stale) throw Error('DEBUG_SOURCE_CHANGED: 先reload以标记新版本；若每次保存业务数据都会触发，核对是否把APP_DATA_DIR覆盖到了项目内，使用宿主提供的工程外数据目录。不能把旧窗口当作新代码')
     session.snapshot.steps = []
+    if (input.control) {
+      session.activeAction = `ui:${input.control.kind}`
+      try { session.snapshot.steps.push({ id: session.activeAction, passed: true, actual: await actSemanticUi(session.page, input.control, input.signal) }) }
+      catch (error) { log(session, 'action.failed', String(error)); throw error }
+    }
     for (const step of input.steps ?? []) {
       input.signal.throwIfAborted(); session.activeAction = step.id
       if (step.kind === 'restart') { await restart(); session.snapshot.steps.push({ id: step.id, passed: true, actual: '正常入口已重启，隔离数据保留' }); continue }
@@ -376,7 +385,6 @@ export async function actDebugSession(input: { projectId: string; sessionId: str
       session.snapshot.steps.push({id:'native-tests',passed:result.code===0,actual:{exit_code:result.code,stderr:redactSoftwareOutput(result.stderr).slice(-4000)}})
     }
     session.activeAction = undefined
-    session.snapshot.ui = await observeSoftwareUi(session.page)
     if (session.launch.ui === 'browser' && !session.formal && session.browser) {
       writeTextFileAtomic(join(session.workspace, 'browser-state.json'), JSON.stringify(await session.browser.storageState()))
     }
@@ -391,6 +399,9 @@ export async function actDebugSession(input: { projectId: string; sessionId: str
         session.snapshot.checkpoint_error = undefined
       } catch (error) { session.snapshot.checkpoint_error = String(error) }
     }
+    // Observe last: diagnostic screenshots may temporarily alter page styles;
+    // a reference must describe the final view returned to this caller.
+    session.snapshot.ui = await observeSoftwareUi(session.page, input.observation)
     persist(session); return readDebugSession(input.projectId, input.sessionId, input.id)
   } catch (error) {
     if (input.reload) { session.snapshot.state = 'failed'; session.snapshot.error = String(error); await closeDebugSession(input.projectId, input.sessionId, input.id) }

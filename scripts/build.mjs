@@ -24,7 +24,7 @@ export async function buildUnit(root, unit) {
     cpSync(join(root, 'main/templates'), join(root, OUTPUTS.templates), { recursive: true, filter: path => !path.includes('__pycache__') })
   } else if (unit === 'renderer') {
     const { build } = await import('vite')
-    await build({ configFile: join(root, 'vite.config.ts'), plugins: [{ name: 'bloma-input-proof', enforce: 'pre', load(id) { track(id); return null }, buildEnd() { for (const id of this.getWatchFiles()) track(id) } }] })
+    await build({ configFile: join(root, 'vite.config.ts'), configLoader: 'runner', plugins: [{ name: 'bloma-input-proof', enforce: 'pre', load(id) { track(id); return null }, buildEnd() { for (const id of this.getWatchFiles()) track(id) } }] })
   } else {
     const { build } = await import('esbuild')
     const external = unit === 'main' ? ['electron', 'playwright', 'typescript', '@earendil-works/pi-coding-agent', '@earendil-works/pi-agent-core', '@earendil-works/pi-ai'] : unit === 'worker' ? ['electron', 'sherpa-onnx-node'] : ['electron']

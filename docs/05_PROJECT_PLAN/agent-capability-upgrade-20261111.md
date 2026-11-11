@@ -215,7 +215,7 @@ E1：复用runtime-manager、release-store、isolated-launch。定义固定候�
 - [WindowsAgentArena](https://github.com/microsoft/WindowsAgentArena)：可复现Windows评测设施，不是Bloma现成验收器。
 - Vide锁定源码、采用/改写/暂缓细项及风险见配套文档。
 
-**最新总状态见[工具升级首批交接](session-handoff-tooling-upgrade-20261111.md)：首批工具已实现并通过专项，整份B0–B8未全部完成；最终扩大整套回归仍有超时/真实音频失败，未合入原sprint2。** 各段历史验证只绑定相应批次；不能将早一版本19文件206项通过或后续单独复验拼成最终全通过。
+**首批历史见[工具升级首批交接](session-handoff-tooling-upgrade-20261111.md)；本次续接至6696d39的标准check:offline（19文件206项+11文件137项）已真实整体通过，旧超时/音频问题已取证处理，未合入原sprint2。新G1批次专项通过，最终集成后仍须再做整套；整份B0–B8尚未全部完成。** 各段历史验证只绑定相应批次；不能将早一版本19文件206项通过或后续单独复验拼成最终全通过。
 
 | 批次 | 最新进度 |
 | --- | --- |
@@ -223,7 +223,8 @@ E1：复用runtime-manager、release-store、isolated-launch。定义固定候�
 | B1 | 查询、读取、命令结果/日志首期已接线及专项验证；端到端收益未证 |
 | B2 | 局部调用与数值观测、有界只读批处理已落地；同步/异步命令同一受管理生命周期及事件等待定向通过；仍不全量开parallel |
 | B3 | 同文件多片段与hash保护完成；最多8文件全部预检后有序应用、逐项部分失败语义与真实Pi接线通过；不是跨文件原子事务 |
-| B4–B8 | GUI/Vide、独立探索、语义代码、原生/故障取证、干净环境等未实施 |
+| B4 | G1/V1首期DOM语义、当前观察refs、能力发现、浏览器/Electron真实调试接线专项通过；V2展示待做 |
+| B5–B8 | 独立探索、语义代码接线、原生/故障取证、干净环境等仍在继续；V5共享缓存边界已修复 |
 
 后续在本节按实际证据更新，不能仅因合入代码标记真实模型提效完成。
 
@@ -300,3 +301,15 @@ readSoftwareProcess去掉每次50毫秒轮询，使用同一OwnedProcess的有�
 edit_file沿原入口增加files（最多8文件、每文件1~32处，整体原输入大小门），与单文件形态二选一。所有路径/内容hash/授权/冻结保护/片段唯一性/语法先全部预检，任何预检失败不写任何文件；单文件语法只验证一次。实际依次在原写租约/CAS中提交，提交点仍重新核对路径/权限/取消/内容版本。失败或取消立即停止后续项，返回applied/failed/not_attempted各项事实；不回滚他人的并发改写，也不宣传跨文件原子事务或崩溃自动回滚。
 
 四文件48项通过，含原护栏与新增多文件全预检拒绝、重复路径、冻结拒绝、首项后外部同长改写、取消后保留已写事实。实际Pi AgentSession分别执行单文件和多文件schema各一例，仍保留读取批内失败；收紧多文件额外参数后2文件14项复测通过，typecheck通过，主构建在额外schema约束前通过（最终整套会重新构建）。证据continuation-b3-final-tests.log、continuation-b3-schema-tests.log、continuation-b3-typecheck.log、continuation-b3-build.log。未做真实模型格式/费用对照，不将工具级通过替代产品验收。
+
+### 2026-11-11 续接标准回归与G1/V1、缓存边界
+
+HEAD6696d39完整check:offline exit0：原标准19文件206项通过、工具11文件137项通过，含完整renderer/main/worker/preload/templates构建与类型/文档检查。日志continuation-standard-check.log及版本continuation-standard-version.txt。此前失败历史保留，不把这次通过外推到之后所有代码。
+
+inspect_app沿原debug生命周期新增capabilities、observation(selector/role/name/query/frame/cursor/limit)、control(ref/kind/value/key)。观察为**DOM派生的最佳努力角色/名称/状态/层级，不是完整浏览器AX树**；每frame至多4000节点、深度32、至多16 frame、最多80返回，输出<=16000字符/48000字节。显式报告扫描缺口、Canvas视觉需要、closed shadow/未渲染虚拟行不支持；开放shadow与iframe真实查询通过。区域多命中拒绝，不点击第一个。
+
+refs绑定当前观察、实际ElementHandle和document，DOM变更/路由/视口缩放与滚动/原生表单状态改变/替换/关闭后拒绝；新观察与一次动作都使旧refs失效。定位用真实元素，不写业务DOM或注入业务控件ID，不改验收/发布权威。输入取消关闭**本会话拥有的页面**防止待输入晚到，已派发输入不能撤销，明确OUTCOME_UNKNOWN而不自动重放。观察放在截图/检查点之后，避免诊断临时样式影响刚返回的refs。热更新仍是原正常入口重启+隔离数据，不假称框架热重载。
+
+3文件24项通过（9 DOM反例、9原/新debug实际运行、6原GUI协议）；新增browser及Electron各一条真实实例观察→ref点击→状态1→跨会话拒绝→旧ref拒绝，原数据保留、重启、脚本/下载/错误链均通过。typecheck和完整build通过。日志continuation-b4-all-tests.log、continuation-b4-typecheck.log、continuation-b4-build.log。UIA/原生输入及最终平台App的Cua验证尚属后续，不能把DOM/Electron夹具通过说成已完成G2或原App升级。
+
+V5边界修复：先前默认Vitest曾写共享node_modules/.vite缓存（子产物也披露），未擅自回滚未知共用缓存；实际依赖安装/包源码未改。所有管理脚本改runner configLoader，vite.config以import.meta.url确定项目根、缓存放各worktree的.cache/vite（原fingerprint已排除.cache），renderer build同样使用runner，避免.vite-temp bundling。修复后独立9项+真实renderer构建前后，两处已知共用缓存(.vite/vitest、.vite-temp)的清单/字节hash/mtime/size不变，continuation-cache-isolation.json。仅证明这两处，不伪称全共享依赖写入审计。

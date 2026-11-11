@@ -4,6 +4,7 @@ dist-main/
 coverage/
 test-results/
 .vitest/
+.cache/
 .env
 .proma-test/
 *.log
