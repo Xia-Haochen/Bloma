@@ -473,3 +473,13 @@ ownedDirectory在宿主选定base/每个自建子目录创建前后lstat/realpat
 补跑既有file-interactions与long-task-recovery **2文件14项通过**continuation-journey-recovery-tests.log约186.31s。实际owned Electron原生Open对话框取冻结文件、浏览器chooser/拖拽/下载/字节损坏门均实际执行，非skip；不冒充最终平台Cua。真两个Node宿主先exit23后不同PID恢复原Pi项目/预算，真实CLI副作用once、makerCalls=0、不重放，原harness预算requests/output累计不清。另有31分钟心跳**假时钟**用例，不能讲成31分钟实钟压力。双进程evidence保留run-artifacts/closeout-process-fixture/evidence.json；现有原发布/质量链复用，未创建新状态机。最终入口现在工具**41文件**（新journey+原file-interactions+原long-task-recovery纳入），verification原19、Python另组。
 
 只新增集成测试/入口/证据导航，没有为对照改生产实现或放松任何断言、期限/权限。六保护及原唯一dirty保持不变见continuation-protected.journey.json。当前完整offline门禁待立即执行；真实平台Cua、干净Windows和未授权付费模型收益仍为明确外部边界，不再把已补本机长程/复现/基线机制当pending重复实现。
+
+### 2026-11-12 当前整套首跑失败与Windows新鲜路径核验I/O取证
+
+26309bb实际npm run check:offline首跑：type/docs及**完整renderer/main/worker/semantic/preload/templates**构建通过，但原verification19仅203/206，三项失败（Native GUI未await case生命周期60s timeout、冻结期望纠正browser90s timeout、verify后收尾status active）。原&&正确短路，**工具41组未执行，不能当前全通过**。continuation-current-offline.log/version.txt完整保留；renderer本次约205s，不能把所有延时归因一个组件。
+
+随后实测V5新路径护栏：本机同一临时深目录1000次标准realpathSync约12818ms/native约1089ms，重复existing mkdir1734ms/lstat1434ms（owned-path-platform-probe.json）。同driver5次真实softwareEnvironment约403–624ms，3次真实Node命令约626–702ms，说明每次环境准入重复的Windows JS ancestor walk是可定位工具成本，不是只怪模型。
+
+owned-directory保留每次lstat前后/创建后类型检查、每组件realpath和relative身份核验；仅在不存在时mkdir，Windows用fresh realpathSync.native查询最终路径，非Windows仍原实现。**无路径/stat信任缓存、无放松junction/dangling/替换检查、无放宽测试/生产/模型时限**。同driver改后环境约71–113ms、真Node命令326–382ms，样本依赖负载，不作通用时间倍数。7项执行隔离/真junction反例与临时profile1项通过，type/main build通过。profile仅诊断，已移到工作台owned-directory-profile.test.txt，不常驻测试入口或算新功能。
+
+失败三case在原maxWorkers2配置下focused复测**3passed/61未选**（不是64全跑）：约40.17s/80.28s/48.65s通过，continuation-current-regression-focused.log。另一早先跑三个完整文件的外层720s工具中断记录continuation-current-regression-retest.log保留：native30/verification7有终态通过，纠正文件未终态，不能说完整64过。不提高单测期限消除噪声，不拆/串行改原verification19调度；新源码完整门禁仍须立即整体重跑，专项通过不穷尽旧失败全部根因。六保护与原唯一dirty仍不变见continuation-protected.owned-path.json。

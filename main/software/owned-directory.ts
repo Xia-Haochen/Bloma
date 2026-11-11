@@ -10,11 +10,15 @@ export function ownedDirectory(base: string, components: string[] = []): string 
     try {
       const info = lstatSync(path) // lstat also detects dangling links.
       if (info.isSymbolicLink() || !info.isDirectory()) throw Error('OWNED_DIRECTORY_LINK_OR_TYPE_UNSUPPORTED')
-    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-    mkdirSync(path, { recursive: true })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      mkdirSync(path, { recursive: true })
+    }
     const info = lstatSync(path)
     if (info.isSymbolicLink() || !info.isDirectory()) throw Error('OWNED_DIRECTORY_LINK_OR_TYPE_UNSUPPORTED')
-    return realpathSync(path)
+    // On Windows the JS fallback re-walks every ancestor for each check.
+    // Use the native final-path query, still fresh for every invocation.
+    return process.platform === 'win32' ? realpathSync.native(path) : realpathSync(path)
   }
   let path = check(base)
   for (const part of components) {
