@@ -17,8 +17,18 @@ param([string]$Data)
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
-Add-Type -ReferencedAssemblies System.Windows.Forms -TypeDefinition @'
-public class BackgroundForm : System.Windows.Forms.Form { protected override bool ShowWithoutActivation { get { return true; } } }
+Add-Type -ReferencedAssemblies @('System.Windows.Forms','System.Drawing') -TypeDefinition @'
+public class BackgroundForm : System.Windows.Forms.Form {
+ protected override bool ShowWithoutActivation { get { return true; } }
+ [System.Runtime.InteropServices.DllImport("user32.dll",CharSet=System.Runtime.InteropServices.CharSet.Unicode)] static extern System.IntPtr RemoveProp(System.IntPtr w,string key);
+ [System.Runtime.InteropServices.DllImport("user32.dll",CharSet=System.Runtime.InteropServices.CharSet.Unicode)] static extern System.IntPtr GetProp(System.IntPtr w,string key);
+ [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool ShowWindow(System.IntPtr w,int kind);
+ public void Cycle(){RecreateHandle();}
+ public void Drop(string key){RemoveProp(Handle,key+".a");}
+ public bool Has(string key){return GetProp(Handle,key+".a")!=System.IntPtr.Zero||GetProp(Handle,key+".b")!=System.IntPtr.Zero;}
+ public void Minimize(){ShowWindow(Handle,7);}
+ public void Restore(){ShowWindow(Handle,4);Location=new System.Drawing.Point(System.Windows.Forms.SystemInformation.VirtualScreen.Right+600,60);}
+}
 '@
 $form=New-Object BackgroundForm
 $form.Text='Bloma owned native test'
@@ -36,6 +46,12 @@ $save.Add_Click({[IO.File]::WriteAllText((Join-Path $Data 'saved.txt'),$entry.Te
 $form.Add_Shown({[IO.File]::WriteAllText((Join-Path $Data 'ready'),'ready')})
 $timer=New-Object Windows.Forms.Timer;$timer.Interval=150
 $timer.Add_Tick({
+ $command=Join-Path $Data 'native-command.json'
+ if([IO.File]::Exists($command)){
+  $c=[IO.File]::ReadAllText($command)|ConvertFrom-Json;[IO.File]::Delete($command)
+  switch($c.kind){'cycle'{$form.Cycle()};'drop'{$form.Drop([string]$c.key)};'has'{$result=$form.Has([string]$c.key)};'minimize'{$form.Minimize()};'restore'{$form.Restore()}}
+  [IO.File]::WriteAllText((Join-Path $Data 'native-ack.json'),(@{id=$c.id;result=$result}|ConvertTo-Json -Compress))
+ }
  $trigger=Join-Path $Data 'modal'
  if([IO.File]::Exists($trigger)){
   [IO.File]::Delete($trigger)
@@ -77,7 +93,7 @@ it.runIf(process.platform==='win32')('uses actual background WinForms UIA values
   if(process.env.NATIVE_UI_SCREENSHOT_REPORT)copyFileSync(view.screenshot!,process.env.NATIVE_UI_SCREENSHOT_REPORT)
   expect(view.nodes.filter(n=>n.name==='Duplicate')).toHaveLength(2)
   const entry=view.nodes.find(n=>n.automation_id==='Entry')!;expect(entry).toBeTruthy()
-  const foreign=native();await expect(foreign.inspect({control:{ref:String(entry.ref),kind:'fill',value:'wrong'}},signal())).rejects.toThrow('NATIVE_REFERENCE_STALE');foreign.close()
+  const foreign=native();await expect(foreign.inspect({control:{ref:String(entry.ref),kind:'fill',value:'wrong'}},signal())).rejects.toThrow('NATIVE_REFERENCE_STALE');await foreign.close()
   view=await ui.inspect({control:{ref:String(entry.ref),kind:'fill',value:'saved-Ω'}},signal())
   expect(view.method).toBe('UIA.ValuePattern');expect(view.nodes.find(n=>n.automation_id==='Entry')?.value).toBe('saved-Ω')
   await expect(ui.inspect({control:{ref:String(entry.ref),kind:'fill',value:'duplicate'}},signal())).rejects.toThrow('NATIVE_REFERENCE_STALE')
@@ -86,8 +102,8 @@ it.runIf(process.platform==='win32')('uses actual background WinForms UIA values
   view=await ui.inspect({control:{ref:String(save.ref),kind:'invoke'}},signal())
   expect(view.method).toBe('UIA.InvokePattern');expect(readFileSync(join(directory,'saved.txt'),'utf8')).toBe('saved-Ω')
   expect(view.nodes.some(n=>n.name==='Saved saved-Ω')).toBe(true)
-  ui.close();await expect(ui.inspect({},signal())).rejects.toThrow('NATIVE_OWNER_NOT_LIVE')
- }finally{ui.close()}
+  await ui.close();await expect(ui.inspect({},signal())).rejects.toThrow('NATIVE_OWNER_NOT_LIVE')
+ }finally{await ui.close()}
 },60000)
 it.runIf(process.platform==='win32')('rejects stale/new-observation refs, selects owned modal explicitly and never sends foreground input',async()=>{
  const ui=native()
@@ -101,7 +117,7 @@ it.runIf(process.platform==='win32')('rejects stale/new-observation refs, select
   const selected=modal.windows.find(w=>w.name==='Owned modal')!;expect(selected).toBeTruthy()
   modal=await ui.inspect({window_ref:selected.ref},signal());const cancel=modal.nodes.find(n=>n.automation_id==='CancelModal')!;expect(cancel).toBeTruthy()
   modal=await ui.inspect({control:{ref:String(cancel.ref),kind:'invoke'}},signal());expect(modal.windows).toHaveLength(1)
- }finally{ui.close()}
+ }finally{await ui.close()}
 },60000)
 it.runIf(process.platform==='win32')('checks actual toggle state and process start identity before input, not just label/geometry',async()=>{
  const first=native(),second=native()
@@ -132,4 +148,47 @@ it.runIf(process.platform==='win32')('serializes owned pattern dispatch and does
   const fresh=await first.inspect({},signal());expect(fresh.windows).toHaveLength(1)
   expect(readFileSync(join(directory,'late-count'),'utf8')).toBe('1')
  }finally{await first.close();await second.close()}
+},45000)
+
+interface PrivateGeneration { generationKey:string; observation?:{view:{Windows:Array<{Handle:string;Generation:string}>;Nodes:Array<{Runtime:string}>;Fingerprint:string}} }
+const privateGeneration=(ui:OwnedNativeUi)=>ui as unknown as PrivateGeneration
+async function fixtureCommand(kind:string,key?:string){
+ const id=String(Date.now())+'-'+Math.random();writeFileSync(join(directory,'native-command.json'),JSON.stringify({id,kind,key}))
+ const deadline=Date.now()+3000
+ while(Date.now()<deadline){try{const ack=JSON.parse(readFileSync(join(directory,'native-ack.json'),'utf8'));if(ack.id===id)return ack.result}catch{}await new Promise(r=>setTimeout(r,25))}
+ throw Error('Owned fixture command not acknowledged: '+kind)
+}
+const savedBytes=()=>existsSync(join(directory,'saved.txt'))?readFileSync(join(directory,'saved.txt'),'hex'):undefined
+it.runIf(process.platform==='win32')('rejects actual HWND incarnation-tag loss even with unchanged UIA runtime IDs, and removes its own metadata on close',async()=>{
+ const ui=native(),before=savedBytes()
+ try{
+  const view=await ui.inspect({},signal()),host=privateGeneration(ui),old=host.observation!.view
+  expect(await fixtureCommand('has',host.generationKey)).toBe(true)
+  await fixtureCommand('drop',host.generationKey)
+  const save=view.nodes.find(n=>n.automation_id==='Save')!
+  await expect(ui.inspect({control:{ref:String(save.ref),kind:'invoke'}},signal())).rejects.toThrow('NATIVE_REFERENCE_STALE')
+  expect(savedBytes()).toBe(before)
+  await ui.inspect({},signal());const current=host.observation!.view
+  expect(current.Windows[0]!.Handle).toBe(old.Windows[0]!.Handle)
+  expect(current.Nodes.map(n=>n.Runtime)).toEqual(old.Nodes.map(n=>n.Runtime))
+  expect(current.Windows[0]!.Generation).not.toBe(old.Windows[0]!.Generation)
+  expect(current.Fingerprint).not.toBe(old.Fingerprint)
+  expect(await ui.close()).toEqual({metadata_cleanup:'completed'})
+  expect(await fixtureCommand('has',host.generationKey)).toBe(false)
+ }finally{await ui.close()}
+},45000)
+it.runIf(process.platform==='win32')('binds a real destroyed/recreated form to a new incarnation and refuses input/screenshots while minimized',async()=>{
+ const ui=native(),before=savedBytes()
+ try{
+  let view=await ui.inspect({},signal());const host=privateGeneration(ui),old=host.observation!.view,save=view.nodes.find(n=>n.automation_id==='Save')!
+  await fixtureCommand('cycle')
+  await expect(ui.inspect({control:{ref:String(save.ref),kind:'invoke'}},signal())).rejects.toThrow(/NATIVE_(REFERENCE_STALE|WINDOW_NOT_OWNED)/)
+  view=await ui.inspect({},signal());expect(host.observation!.view.Windows[0]!.Generation).not.toBe(old.Windows[0]!.Generation)
+  const fresh=view.nodes.find(n=>n.automation_id==='Save')!
+  await fixtureCommand('minimize')
+  await expect(ui.inspect({control:{ref:String(fresh.ref),kind:'invoke'}},signal())).rejects.toThrow(/NATIVE_(REFERENCE_STALE|WINDOW_BLOCKED)/)
+  view=await ui.inspect({},signal());expect(view.windows[0]!.minimized).toBe(true)
+  expect(view.screenshot).toBeUndefined();expect(view.screenshot_error).toBe('NATIVE_SCREENSHOT_BOUNDS_UNSUPPORTED')
+  expect(savedBytes()).toBe(before)
+ }finally{await fixtureCommand('restore');await ui.close()}
 },45000)

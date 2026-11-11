@@ -29,13 +29,14 @@ export function diagnosticPage<T extends EvidenceRow>(rows:T[],cursor:number,sin
   if(!Number.isSafeInteger(since)||since<0||since>cursor)throw Error('DEBUG_CURSOR_INVALID')
   if(query)validateDiagnosticQuery(query)
   const available=rows.filter(r=>r.seq>since),matches=available.filter(r=>!query||(!query.kind||r.kind===query.kind||r.kind.startsWith(query.kind+'.'))&&(!query.action||r.action===query.action)&&(!query.operation_id||r.operation_id===query.operation_id)&&(!query.trace_id||r.trace_id===query.trace_id)&&(!query.process_id||r.process_id===query.process_id)&&(!query.source||r.source===query.source)&&(!query.version||r.version===query.version)&&(!query.from||Date.parse(r.at)>=Date.parse(query.from))&&(!query.to||Date.parse(r.at)<=Date.parse(query.to)))
-  const selected=query?matches.slice(0,query.limit??16):matches.slice(-16)
+  const forward=!!query||since>0
+  const selected=forward?matches.slice(0,query?.limit??16):matches.slice(-16)
   const bytes=()=>Buffer.byteLength(JSON.stringify(selected))
-  while(bytes()>12000&&selected.length>1){if(query)selected.pop();else selected.shift()}
+  while(bytes()>12000&&selected.length>1){if(forward)selected.pop();else selected.shift()}
   // Rows produced here are bounded below this limit. Never silently consume an
   // unexpected oversized persisted row or certify a corrupted historical log.
   if(bytes()>12000)throw Error('DIAGNOSTIC_ROW_TOO_LARGE')
-  const more=!!query&&selected.length<matches.length
+  const more=forward&&selected.length<matches.length
   return {observations:selected,observations_omitted:matches.length-selected.length,diagnostic_page:{next_seq:more?selected.at(-1)?.seq??since:cursor,more,retained_from_seq:rows[0]?.seq??cursor+1,history_gap:since<(rows[0]?.seq??cursor+1)-1,filtered_out:available.length-matches.length}}
 }
 interface FileFact {bytes:number;sha256:string}

@@ -401,3 +401,21 @@ backend改读既有owned process逻辑记录的seq，而非用stdout/stderr尾�
 保留初次5/6失败：storage扫描误包含实际electron-profile缓存，触发DATA_BYTE_LIMIT与缓存变化；没有把它当完整未变。按原“不扫描整个profile”约束改为明确排除宿主管理profile并标注scope，未提高字节/期限、未删断言。continuation-o1-tests.log、save-test2.log及save-failure.json保留；后续6、7、36项阶段通过也不替代最终43项。最早Python编辑正则转义造成TS语法失败，修源码转义后通过，typecheck失败日志保留。保护对照continuation-protected.o1.json不变。
 
 B8窗口世代/旧终态重连/隔离/E1与最新全套仍待；本批不是Cua平台或干净Windows验收，不解除费用暂停、不改生成产品/项目registry/原账本、不push或合原sprint2。
+
+### 2026-11-11 B8：自有HWND世代标签、历史终态与双读者重连
+
+不新建桌面管理器/持久daemon/事故账本。Native adapter给**已核owned PID/start的HWND**添加每OwnedNativeUi私有UUID键的两个非零63bit不透明运行时属性；同窗口跨短PS helper保持，窗口重建/标签缺失产生新cookie，纳入私有整域fingerprint。UIA行若有NativeWindowHandle也绑对应owned HWND；无HWND虚拟节点仍provider RuntimeId/视图约束，不能泛称恶意provider安全或持续AX树。模型schema不给key/value/PID/HWND/脚本/任意adapter kind。观察确有这两项**宿主运行时元数据写入**，不是零写；不改产品DOM/业务ID/源码/数据，不动外部App窗口，UIPI/非64bithelper不可用明确拒绝而非降级动作。未引入WinEvent watcher，不把异步事件迟到当同步窗口身份。
+
+pattern前重扫整域指纹后，紧邻派发再读已有cookie（不创建）、核控件HWND/PID/start/Enabled/Iconic；截图前后也核窗口身份/cookie，变动丢弃而非附上错误窗口。非原子UI/恶意进程或外部软件桌面独占保证仍不成立。close先取消/排空inFlight，再固定release分支只删当前仍活owned窗口及子窗口的该私有key；无数据HANDLE分配/无CloseHandle伪释放，重复close复用同promise。返回metadata_cleanup completed/not_needed/owner_exited/unknown；unknown在原debug日志保留，不接管失去身份的PID、不宣称全部回收。窗口自行销毁/极短重用仍不被当作全OS压力认证。
+
+实际WinForms新增两项：仅删一个真实Win32属性而**HWND和UIA RuntimeId都不变**时，旧ref被拒且没有保存副作用、新cookie/fp不同；正常close实际GetProp已清空。真实RecreateHandle销毁/重建Form后新cookie不同、旧ref拒绝；真实SW_SHOWMINNOACTIVE最小化后不派发Save，selected窗口minimized=true、无PNG且NATIVE_SCREENSHOT_BOUNDS_UNSUPPORTED，之后SW_SHOWNOACTIVATE恢复到自有屏幕外位置。它们不是手改响应mock；**未强制OS在同一PID下把完全相同数值的HWND复用**，不冒称完成该压力样本。原保存字节/模态/Toggle/start token/并发/派发后取消不重放反例保持。实际Electron继续经inspect_app→UIA Invoke→DOM独立读count与原view_image附图，非Cua最终平台验收。
+
+Windows文档核验：[SetPropW](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setpropw)、[About Window Properties](https://learn.microsoft.com/en-us/windows/win32/winmsg/about-window-properties)说明属性、UIPI与RemoveProp清理/数据自身不释放。仅用不分配资源的opaque值；显式close清理只作用仍活owned窗口，不能宣称旁路WM_NCDESTROY协作或OS内核沙箱。受管浏览器main正文提取/最终Observe成功，最终截图Page.captureScreenshot超时未成功，未宣称图像核验；该Agent草稿tab已关闭。
+
+历史debug metadata现有界2MiB读取，前后文件身份/字节计数复核，拒文件链接、真实路径逃离PROMA_HOME、异常结构/重复或倒退seq/错误高水位；不把损坏历史当成功EOF。纯历史closed/failed/interrupted保留真实终态和原错误，只有遗留opening/ready才转interrupted。runtime_attached=false/retained_snapshot=true/stale=true公开，旧PID/refs不接管、输入不重放；重复close历史closed/failed只读返回、不杀进程也不改原文件。当前活实例另有runtime_attached明确标记，历史不出PASS。
+
+seq>0接续改为从最早未读前向分页，不能默认tail截掉16条后就把cursor跳至末尾；显式since_seq=0公共工具也前向分页，未给cursor的原默认最近16条保持。两个读者各用自身next_seq，服务器不设破坏性consumer cursor；无新记录为空、滚动retained_from/history_gap明确、越界cursor拒绝。纯历史双读者实际排空90条完全同序/不重复；真Electron/Pi保存失败测试同时通过公开inspect_app由两个客户端显式cursor0读相同首批，原Pi trace查询及保存/修复/正常重开不变。
+
+**最后7文件48项通过**（Native7/debug10/save+Pi1/evidence7/recovery8/GUI6/DOM9），continuation-b8-release-tests.log约297.98s；当前release typecheck/main相关构建/docs通过，tooling入口现29文件。保留首次组合47/48失败continuation-b8-final-tests.log：Pi在原15秒窗返回cancelled；新增可选phase计时后，单独及同组合通过，未抬期限/删断言。计时当前样本显示首次query前约7.7秒、真正inspect读取约60ms；**不能用新通过穷尽断言旧cancel根因已修**，负载/冷初始化仍可明确deadline，最终大组继续检验。首次新fixture漏System.Drawing引用，setup失败/7未运行日志保留；补系统程序集后focused2通过（5未选，不冒充7全跑）。一次长Windows命令在Python解析前截断、一次测试调用参数顺序/字段拼错被typecheck拦下，均修源码后通过，未执行不明生产写入。
+
+六保护/原HEAD及唯一dirty blob对照continuation-protected.b8.json仍不变。B8剩余资源归属/隔离/E1候选交付协议、V3原伙伴长程贡献与最新全套继续，不以本批结束全部计划；Cua/干净Windows外部条件仍单列。

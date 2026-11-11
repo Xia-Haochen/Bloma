@@ -46,14 +46,20 @@ it.skipIf(process.platform!=='win32'||!existsSync(electron))('joins real rendere
  expect((await tool.execute({diagnostics:{kind:'storage'}},context)).output).toContain('DIAGNOSTIC_READ_ONLY')
  const navigation=softwareDiagnosticContext(project.project_id,'s') as {diagnostic_protocol:{protocol:string};debug:{log_cursor:number;storage:{complete:boolean}}}
  expect(navigation.diagnostic_protocol.protocol).toBe('debug-evidence-v1');expect(navigation.debug.storage.complete).toBe(true);expect(navigation.debug.log_cursor).toBeGreaterThan(0)
+ const piStart=performance.now(),piPhases:Array<{at:number;phase:string;name?:string}>=[]
  let round=0
  const query:SDKQuery=async function*(_task,options){
+  piPhases.push({at:performance.now()-piStart,phase:'query-'+round})
   if(round++===0)yield{type:'assistant',message:{role:'assistant',content:[{type:'tool_use',id:'actual-diagnostic-read',name:'inspect_app',input:{mode:'read',debug_session_id:id,diagnostics:{trace_id:trace,source:bad.observed_source,limit:80}}}]}}
   else{expect(JSON.stringify(options.messages)).toContain('application.ipc.failed');yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:'Observed application-reported IPC failures; not acceptance or an automatic root-cause verdict.'}]}}}
   yield{type:'result',stop_reason:'end_turn',usage:{input_tokens:10,output_tokens:10}}
  }
- const pi=await runAgentLoop({runtimeScope:'desktop-implement',projectId:project.project_id,sessionId:'s',requestId:'diagnostic-pi',system:'Offline controlled diagnostic tool contract',task:'Read only the real owned trace',tools:[tool],query,env:{},maxTokens:1000,maxTurns:3,permissionMode:'allow-all',signal:AbortSignal.timeout(15000),publish:()=>{}})
- expect(pi.status).toBe('completed');expect(pi.toolCalls.map(c=>c.status)).toEqual(['ok'])
+ const pi=await runAgentLoop({runtimeScope:'desktop-implement',projectId:project.project_id,sessionId:'s',requestId:'diagnostic-pi',system:'Offline controlled diagnostic tool contract',task:'Read only the real owned trace',tools:[tool],query,env:{},maxTokens:1000,maxTurns:3,permissionMode:'allow-all',signal:AbortSignal.timeout(15000),publish:type=>{piPhases.push({at:performance.now()-piStart,phase:type})},onToolObservation:event=>{piPhases.push({at:performance.now()-piStart,phase:event.phase,name:event.name})}})
+ if(process.env.DEBUG_PI_REPORT)writeFileSync(process.env.DEBUG_PI_REPORT,JSON.stringify({pi,piPhases},null,2))
+ expect(pi.status,JSON.stringify(piPhases)).toBe('completed');expect(pi.toolCalls.map(c=>c.status)).toEqual(['ok'])
+ const clientA=JSON.parse((await tool.execute({mode:'read',debug_session_id:id,since_seq:0},context)).output)
+ const clientB=JSON.parse((await tool.execute({mode:'read',debug_session_id:id,since_seq:0},context)).output)
+ expect(clientA.observations[0].seq).toBe(1);expect(clientB.observations.map((r:{seq:number})=>r.seq)).toEqual(clientA.observations.map((r:{seq:number})=>r.seq))
  const oldCursor=all.log_cursor
  writeFileSync(join(root,'main.cjs'),main(true))
  const fixed=await tool.execute({mode:'reload',debug_session_id:id,steps:[{id:'refill',kind:'fill',selector:'#note',value:'真实保存 Ω'},{id:'save-good',kind:'click',selector:'#save'},{id:'actual-success',kind:'expect',selector:'#status',equals:'Saved'}]},context)

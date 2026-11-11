@@ -119,7 +119,7 @@ export function buildSoftwareInspectTool(projectId: string, policy: ReturnType<t
               phase:input.phase as 'initial'|'reopened'|undefined,
               steps: input.script || input.script_source || input.native ? undefined : steps ?? [{ id: 'screen', kind: 'expect', selector: 'body', nonempty: true }] })
           } else if (mode === 'close') snapshot = await closeDebugSession(projectId, ctx.sessionId, args.id)
-          else if (mode === 'read') snapshot = readDebugSession(projectId, ctx.sessionId, args.id, Number(input.since_seq ?? 0),input.diagnostics as DiagnosticQuery|undefined)
+          else if (mode === 'read') snapshot = readDebugSession(projectId, ctx.sessionId, args.id, Number(input.since_seq ?? 0),(input.diagnostics??(input.since_seq!==undefined?{}:undefined)) as DiagnosticQuery|undefined)
           else { if (additions) installDebugFixtures(projectId, ctx.sessionId, args.id, additions); snapshot = await actDebugSession({ ...args, native:input.native as NativeRequest|undefined, observation: input.observation as UiQuery | undefined, control: input.control as UiControl | undefined, steps, script: input.script as string | undefined, scriptSource:input.script_source as string|undefined, phase:input.phase as 'initial'|'reopened'|undefined, timeoutMs: input.timeout_ms as number | undefined, reload: mode === 'reload' }) }
           if (mode === 'act' || mode === 'reload') snapshot = readDebugSession(projectId, ctx.sessionId, args.id, Number(cursor))
           if (mode === 'open' && snapshot.url) previewChanged?.(snapshot.url)
@@ -134,7 +134,7 @@ export function buildSoftwareInspectTool(projectId: string, policy: ReturnType<t
             try { changes = sourceCheckpointChanges(projectId, ctx.sessionId, root, snapshot.source_checkpoint.id) }
             catch (error) { changes = { error: String(error) } }
           }
-          return { output: JSON.stringify({ debug_session_id: snapshot.id, state: snapshot.state, stale: snapshot.stale, error: snapshot.error, failed_step: failed,
+          return { output: JSON.stringify({ debug_session_id: snapshot.id, state: snapshot.state, runtime_attached:snapshot.runtime_attached,retained_snapshot:snapshot.retained_snapshot, stale: snapshot.stale, error: snapshot.error, failed_step: failed,
             observed_source: snapshot.source, current_source: verificationFingerprint(root), source_checkpoint: snapshot.source_checkpoint, checkpoint_error: snapshot.checkpoint_error, source_changes: changes,
             verification_readiness: guiVerificationReadiness(projectId),
             version: snapshot.version, resumed_from: snapshot.resumed_from, capabilities: SOFTWARE_UI_CAPABILITIES, native_capabilities:NATIVE_UI_CAPABILITIES, native_ui:snapshot.native_ui, screenshot_surface:input.native?'native owned HWND (PrintWindow, unreviewed)':'renderer (not native dialog)', ui: snapshot.ui, steps: snapshot.steps, observations: snapshot.observations, log_cursor: snapshot.log_cursor,

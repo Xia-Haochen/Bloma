@@ -11,17 +11,18 @@ export const NATIVE_UI_CAPABILITIES = {
   availability: 'Live ownership, system assemblies and provider access are checked on use; no desktop-wide permission claim',
   native_screenshot: 'PrintWindow of selected owned HWND; may be unavailable/incomplete for GPU surfaces; no desktop fallback',
   actions: ['invoke','fill','toggle','select','expand','collapse'], physical_input: false,
-  ownership: 'live debug child process tree + process start time; HWND + RuntimeId + observed-view fingerprint',
+  ownership: 'live debug child process tree + process start time; HWND incarnation properties + RuntimeId + observed-view fingerprint',
+  window_generation: 'adds two host-private opaque incarnation properties to owned HWNDs; removed on close where still live; no DOM/source/data mutation; UIPI failure refuses observation',
   input_lease: 'single native action per host plus same-session Windows named mutex; not an OS-wide lock against other applications',
   limits: { windows:16, nodes:1000, depth:24, returned:80, timeout_ms:15000, output_bytes:262144 },
   gaps: ['not a complete desktop AX tree','provider hangs fail at deadline','no foreground keyboard/mouse or automatic first-name match',
-    'virtualized/unexposed controls and omitted nodes are not observed','not an atomic UI or OS sandbox guarantee'],
+    'virtualized/unexposed controls and omitted nodes are not observed','HWND-free virtual nodes remain provider RuntimeId/view-bound; incarnation tags are not a malicious-provider security boundary','not an atomic UI or OS sandbox guarantee'],
 } as const
 export interface NativeQuery { role?:string; name?:string; automation_id?:string; query?:string; limit?:number }
 export interface NativeControl { ref:string; kind:'invoke'|'fill'|'toggle'|'select'|'expand'|'collapse'; value?:string }
 export interface NativeRequest { window_ref?:string; query?:NativeQuery; control?:NativeControl }
-interface NativeWindow { Handle:string; Started:string; Name:string; Pid:number; Dpi:number; Enabled:boolean; Minimized:boolean; Modal:boolean; Bounds:number[] }
-interface NativeRow { Runtime:string; Name:string; Role:string; AutomationId:string; Value:string|null; Depth:number; Enabled:boolean; Offscreen:boolean; Password:boolean; TextTruncated:boolean; State:string; Bounds:number[]; Patterns:string[] }
+interface NativeWindow { Generation:string; Handle:string; Started:string; Name:string; Pid:number; Dpi:number; Enabled:boolean; Minimized:boolean; Modal:boolean; Bounds:number[] }
+interface NativeRow { WindowHandle:string; Generation:string|null; Runtime:string; Name:string; Role:string; AutomationId:string; Value:string|null; Depth:number; Enabled:boolean; Offscreen:boolean; Password:boolean; TextTruncated:boolean; State:string; Bounds:number[]; Patterns:string[] }
 interface NativeView { Windows:NativeWindow[]; Selected:string|null; Fingerprint:string|null; Nodes:NativeRow[]; Truncated:boolean }
 interface Reply { ok:boolean; root_started:string; view:NativeView; method?:string; error?:string; capture_error?:string; screenshot?:string }
 let activeNativeAction = false
@@ -41,6 +42,8 @@ export function validateNativeRequest(request:NativeRequest) {
 /** Internal host capability only. A model cannot provide the PID, a process
  * start time, native HWND, RuntimeId, script or arbitrary adapter command. */
 export class OwnedNativeUi {
+  private readonly generationKey=`Bloma.OwnedUi.${randomUUID()}`
+  private closing?:Promise<{metadata_cleanup:string;error?:string}>
   private started?:string
   private observation?: { id:string; view:NativeView; offered:Set<number> }
   private closed=false
@@ -51,22 +54,32 @@ export class OwnedNativeUi {
     if(!Number.isSafeInteger(rootPid)||rootPid<=0)throw Error('NATIVE_OWNER_INVALID')
   }
   invalidate(){this.observation=undefined}
-  async close(){this.closed=true;this.invalidate();this.cancellation.abort();await this.inFlight?.catch(()=>{})}
+  close(){
+    if(this.closing)return this.closing
+    this.closed=true;this.invalidate();this.cancellation.abort()
+    this.closing=(async()=>{await this.inFlight?.catch(()=>{})
+      if(!this.started)return {metadata_cleanup:'not_needed'}
+      if(!this.isLive())return {metadata_cleanup:'owner_exited'}
+      try{await this.invoke({kind:'release'},AbortSignal.timeout(15000),true);return{metadata_cleanup:'completed'}}catch(error){return{metadata_cleanup:'unknown',error:redactSoftwareOutput(String(error)).slice(0,300)}}
+    })();return this.closing
+  }
   private assertLive(){if(this.closed||!this.isLive())throw Error('NATIVE_OWNER_NOT_LIVE')}
-  private async invoke(request:Record<string,unknown>,signal:AbortSignal):Promise<Reply>{
-    signal=AbortSignal.any([signal,this.cancellation.signal])
-    this.assertLive();signal.throwIfAborted()
+  private async invoke(request:Record<string,unknown>,signal:AbortSignal,cleanup=false):Promise<Reply>{
+    signal=cleanup?signal:AbortSignal.any([signal,this.cancellation.signal])
+    if(cleanup){if(!this.isLive())throw Error('NATIVE_OWNER_NOT_LIVE')}else this.assertLive();signal.throwIfAborted()
     if(process.platform!=='win32')throw Error('NATIVE_PLATFORM_UNSUPPORTED')
     const temporary=mkdtempSync(join(tmpdir(),'bloma-owned-uia-')),file=join(temporary,'request.json')
     try{
-      writeFileSync(file,JSON.stringify({...request,root_pid:this.rootPid,root_started:this.started,...(this.evidenceDirectory&&request.kind==='observe'?{capture_path:join(temporary,'native.png')}:{})}),{flag:'wx'})
+      writeFileSync(file,JSON.stringify({...request,root_pid:this.rootPid,root_started:this.started,generation_key:this.generationKey,...(this.evidenceDirectory&&request.kind==='observe'?{capture_path:join(temporary,'native.png')}:{})}),{flag:'wx'})
       const result=await execFileDriverSpawn({command:[join(process.env.SystemRoot??'C:/Windows','System32/WindowsPowerShell/v1.0/powershell.exe'),'-NoProfile','-NonInteractive','-File',join(mainRootDir(),'templates/tools/owned_native_ui.ps1'),'-RequestPath',file],cwd:temporary,
         env:{...buildDriverEnv({env_whitelist:[]} as never,process.env),TEMP:temporary,TMP:temporary},signal,timeoutMs:15000})
-      this.assertLive();signal.throwIfAborted()
+      if(!cleanup)this.assertLive();signal.throwIfAborted()
       const reply=JSON.parse(result.stdout.trim().split(/\r?\n/).at(-1)??'{}') as Reply
       if(result.code!==0||reply.ok!==true)throw Error(/^NATIVE_[A-Z_]+$/.test(reply.error??'')?reply.error:'NATIVE_ADAPTER_ERROR')
       if(!/^\d+$/.test(reply.root_started)||!reply.view||!Array.isArray(reply.view.Windows)||reply.view.Windows.length>16||!Array.isArray(reply.view.Nodes)||reply.view.Nodes.length>1000)throw Error('NATIVE_PROTOCOL_INVALID')
       if(this.started&&this.started!==reply.root_started)throw Error('NATIVE_PROCESS_IDENTITY_CHANGED')
+      const generation=(value:unknown)=>typeof value==='string'&&/^[1-9][0-9]{0,18}:[1-9][0-9]{0,18}$/.test(value)
+      if(reply.view.Windows.some(w=>!generation(w.Generation))||reply.view.Nodes.some(n=>!/^\d+$/.test(n.WindowHandle)||(n.WindowHandle==='0'?n.Generation!==null:!generation(n.Generation))))throw Error('NATIVE_PROTOCOL_INVALID')
       if(reply.view.Selected&&!/^[a-f0-9]{64}$/.test(reply.view.Fingerprint??''))throw Error('NATIVE_PROTOCOL_INVALID')
       if(this.evidenceDirectory&&request.kind==='observe'&&existsSync(join(temporary,'native.png'))){
         const bytes=readFileSync(join(temporary,'native.png'))
@@ -100,7 +113,7 @@ export class OwnedNativeUi {
         // UIA can dispatch input before the client dies. Never retry an unknown
         // mutation, nor treat an adapter timeout as proof that no input occurred.
         if(signal.aborted||this.cancellation.signal.aborted||/timeout|timed out|deadline|cancelled|aborted/i.test(String(error)))throw Error('NATIVE_CONTROL_CANCELLED_OUTCOME_UNKNOWN')
-        if(/NATIVE_(?:REFERENCE_STALE|PROCESS_IDENTITY_CHANGED|WINDOW_NOT_OWNED|WINDOW_BLOCKED|MODAL_REQUIRES_SELECTION|CONTROL_DISABLED_OR_STALE|VALUE_READONLY|PATTERN_UNSUPPORTED|INPUT_BUSY)\b/.test(String(error)))throw error
+        if(/NATIVE_(?:REFERENCE_STALE|PROCESS_IDENTITY_CHANGED|WINDOW_NOT_OWNED|WINDOW_BLOCKED|MODAL_REQUIRES_SELECTION|CONTROL_DISABLED_OR_STALE|VALUE_READONLY|PATTERN_UNSUPPORTED|INPUT_BUSY|WINDOW_GENERATION_UNAVAILABLE|GENERATION_PLATFORM_UNSUPPORTED)\b/.test(String(error)))throw error
         throw Error(`NATIVE_CONTROL_OUTCOME_UNKNOWN: do not replay; ${String(error)}`)
       }finally{activeNativeAction=false}
     }

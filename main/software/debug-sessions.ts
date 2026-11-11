@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { constants, openSync, closeSync, readSync, fstatSync, lstatSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:net'
@@ -30,7 +30,7 @@ import { applicationDiagnostic, diagnosticPage, snapshotDebugData, compareDebugD
 
 export interface DebugObservation { seq: number; at: string; version: number; action?: string; kind: string; message: string;
   duration_ms?: number; method?: string; url?: string; status?: number; source?:string; process_id?:string; process_seq?:number; trace_id?:string; code?:string; operation_id?:string; correlation?:'temporal-only'|'request-start'|'host-dispatch'|'application-reported'; storage?:StorageDelta }
-export interface DebugSnapshot { id: string; projectId: string; sessionId: string; state: 'opening' | 'ready' | 'closed' | 'failed' | 'interrupted'; version: number; source?: string;
+export interface DebugSnapshot { runtime_attached?:boolean; retained_snapshot?:boolean; id: string; projectId: string; sessionId: string; state: 'opening' | 'ready' | 'closed' | 'failed' | 'interrupted'; version: number; source?: string;
   ui?: Awaited<ReturnType<typeof observeSoftwareUi>>; native_ui?: Awaited<ReturnType<OwnedNativeUi['inspect']>>; data_dir?: string; resumed_from?: string;
   storage?:StorageDelta; diagnostic_page?:ReturnType<typeof diagnosticPage>['diagnostic_page']; stale: boolean; url?: string; screenshot?: string; screenshot_error?: string; source_checkpoint?: { id: string; files?: number }; checkpoint_error?: string; fixtures?: GuiAcceptanceSuite['fixtures']; log_cursor?: number; observations_omitted?: number; observations: DebugObservation[]; steps: Array<{ id: string; passed: boolean; actual?: unknown }>; error?: string }
 interface DebugSession { snapshot: DebugSnapshot; root: string; temporary: string; workspace: string; data: string; file: string; owner: string; page?: Page;
@@ -48,16 +48,36 @@ function persist(session: DebugSession) {
   writeTextFileAtomic(session.file, JSON.stringify(session.snapshot))
   writeTextFileAtomic(join(session.workspace, 'checkpoint.json'), JSON.stringify(session.snapshot))
 }
-function savedSnapshot(projectId: string, sessionId: string, id: string): DebugSnapshot {
-  const previous = JSON.parse(readFileSync(metadataPath(id), 'utf8')) as DebugSnapshot
-  if (previous.projectId !== projectId || previous.sessionId !== sessionId || previous.id !== id) throw Error('DEBUG_SESSION_NOT_OWNED')
+/** Bounded historical metadata, never a capability to adopt an old PID/ref. */
+function readSnapshotFile(file:string):DebugSnapshot{
+  const stat=lstatSync(file),rel=relative(realpathSync(getPromaHome()),realpathSync(file))
+  if(isAbsolute(rel)||rel==='..'||rel.startsWith('..\\')||rel.startsWith('../'))throw Error('DEBUG_METADATA_LIMIT_OR_LINK')
+  if(stat.isSymbolicLink()||!stat.isFile()||stat.size>2*1024*1024)throw Error('DEBUG_METADATA_LIMIT_OR_LINK')
+  const fd=openSync(file,constants.O_RDONLY|(constants.O_NOFOLLOW??0))
+  try{
+    const same=(x:typeof stat,y:typeof stat)=>x.dev===y.dev&&x.ino===y.ino&&x.size===y.size&&x.mtimeMs===y.mtimeMs&&x.ctimeMs===y.ctimeMs
+    if(!same(stat,fstatSync(fd)))throw Error('DEBUG_METADATA_CHANGED')
+    const bytes=Buffer.alloc(stat.size+1);let count=0
+    while(count<bytes.length){const n=readSync(fd,bytes,count,bytes.length-count,null);if(!n)break;count+=n}
+    if(count!==stat.size||!same(stat,fstatSync(fd))||!same(stat,lstatSync(file)))throw Error('DEBUG_METADATA_CHANGED')
+    let value:DebugSnapshot;try{value=JSON.parse(bytes.subarray(0,count).toString('utf8')) as DebugSnapshot}catch{throw Error('DEBUG_METADATA_INVALID')}
+    if(!value||!['opening','ready','closed','failed','interrupted'].includes(value.state)||!Number.isSafeInteger(value.version)||value.version<1||!Array.isArray(value.observations)||value.observations.length>200||!Array.isArray(value.steps)||value.steps.length>1000||value.source!==undefined&&!/^[a-f0-9]{64}$/.test(value.source))throw Error('DEBUG_METADATA_INVALID')
+    let last=0
+    for(const row of value.observations){if(!row||!Number.isSafeInteger(row.seq)||row.seq<=last||typeof row.kind!=='string'||typeof row.message!=='string'||!Number.isFinite(Date.parse(row.at)))throw Error('DEBUG_METADATA_INVALID');last=row.seq}
+    if(value.log_cursor!==undefined&&(!Number.isSafeInteger(value.log_cursor)||value.log_cursor<last))throw Error('DEBUG_METADATA_INVALID')
+    return value
+  }finally{closeSync(fd)}
+}
+function savedSnapshot(projectId:string,sessionId:string,id:string):DebugSnapshot{
+  const previous=readSnapshotFile(metadataPath(id))
+  if(previous.projectId!==projectId||previous.sessionId!==sessionId||previous.id!==id)throw Error('DEBUG_SESSION_NOT_OWNED')
   return previous
 }
-function savedCheckpoint(projectId: string, sessionId: string): DebugSnapshot | undefined {
-  const file = join(debugWorkspace(projectId, sessionId), 'checkpoint.json')
-  if (!existsSync(file)) return
-  const previous = JSON.parse(readFileSync(file, 'utf8')) as DebugSnapshot
-  if (previous.projectId !== projectId || previous.sessionId !== sessionId) throw Error('DEBUG_CHECKPOINT_IDENTITY_INVALID')
+function savedCheckpoint(projectId:string,sessionId:string):DebugSnapshot|undefined{
+  const file=join(debugWorkspace(projectId,sessionId),'checkpoint.json')
+  if(!existsSync(file))return
+  const previous=readSnapshotFile(file)
+  if(previous.projectId!==projectId||previous.sessionId!==sessionId)throw Error('DEBUG_CHECKPOINT_IDENTITY_INVALID')
   return previous
 }
 export function retainedDebugFixtures(projectId: string, sessionId: string) {
@@ -75,7 +95,7 @@ function owned(projectId: string, sessionId: string, id: string): DebugSession {
   const session = sessions.get(id)
   if (!session) {
     let previous: DebugSnapshot | undefined
-    try { previous = JSON.parse(readFileSync(metadataPath(id), 'utf8')) } catch {}
+    try { previous = savedSnapshot(projectId,sessionId,id) } catch {}
     if (previous?.projectId === projectId && previous.sessionId === sessionId) throw Error('DEBUG_SESSION_INTERRUPTED: 重启后旧PID不会被接管，请重新打开调试会话')
     throw Error('DEBUG_SESSION_NOT_OWNED')
   }
@@ -188,6 +208,7 @@ export function assertDebugSessionProcess(projectId: string, sessionId: string, 
   if (processId !== (session.externalProcessId ?? session.ownedProcessId)) throw Error('DEBUG_PROCESS_MISMATCH: 当前调试窗口连接另一进程，请先关闭再连接指定进程')
 }
 export async function closeDebugSession(projectId: string, sessionId: string, id: string): Promise<DebugSnapshot> {
+  if(!sessions.has(id)){const previous=readDebugSession(projectId,sessionId,id);if(['closed','failed'].includes(previous.state))return previous;throw Error('DEBUG_SESSION_INTERRUPTED: 不接管旧PID，也不重放旧输入')}
   const session = owned(projectId, sessionId, id)
   if (session.closing) { await session.closing; return readDebugSession(projectId, sessionId, id) }
   observeBackend(session)
@@ -197,7 +218,7 @@ export async function closeDebugSession(projectId: string, sessionId: string, id
   session.closing = (async () => {
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
-      await session.native?.close();session.native=undefined
+      if(session.native){const cleanup=await session.native.close();if(cleanup.metadata_cleanup==='unknown')log(session,'native.cleanup',`metadata cleanup unknown: ${cleanup.error}`)}session.native=undefined
       if (session.page) await invalidateSoftwareUi(session.page)
       if (session.launch.ui === 'browser' && !session.formal && session.browser) {
         try { const state = await session.browser.storageState(); writeTextFileAtomic(join(session.workspace, 'browser-state.json'), JSON.stringify(state)) }
@@ -247,11 +268,12 @@ export function installDebugFixtures(projectId: string, sessionId: string, id: s
 export function readDebugSession(projectId:string,sessionId:string,id:string,since=0,query?:DiagnosticQuery):DebugSnapshot{
   if(!sessions.has(id)){
     const previous=savedSnapshot(projectId,sessionId,id)
-    return {...previous,...diagnosticPage(previous.observations,previous.log_cursor??previous.observations.at(-1)?.seq??0,since,query),state:'interrupted',stale:true,error:'DEBUG_SESSION_INTERRUPTED: 旧进程未接管，需显式重新打开；旧输入不会自动重放。'}
+    const interrupted=['opening','ready'].includes(previous.state)
+    return {...previous,...diagnosticPage(previous.observations,previous.log_cursor??previous.observations.at(-1)?.seq??0,since,query),runtime_attached:false,retained_snapshot:true,state:interrupted?'interrupted':previous.state,stale:true,...(interrupted?{error:'DEBUG_SESSION_INTERRUPTED: 旧进程未接管，需显式重新打开；旧输入不会自动重放。'}:{})}
   }
   const session=owned(projectId,sessionId,id),current=verificationFingerprint(session.root)
   observeBackend(session)
-  return {...session.snapshot,...diagnosticPage(session.snapshot.observations,session.seq,since,query),stale:!current||current!==session.snapshot.source,log_cursor:session.seq,steps:[...session.snapshot.steps]}
+  return {...session.snapshot,runtime_attached:!!session.page&&!session.page.isClosed()&&!session.finished&&['opening','ready'].includes(session.snapshot.state),retained_snapshot:false,...diagnosticPage(session.snapshot.observations,session.seq,since,query),stale:!current||current!==session.snapshot.source,log_cursor:session.seq,steps:[...session.snapshot.steps]}
 }
 export async function openDebugSession(input: { projectId: string; sessionId: string; root: string; launch: LaunchDeclaration; signal: AbortSignal; processId?: string; formal?:boolean }): Promise<DebugSnapshot> {
   input.signal.throwIfAborted()
@@ -334,7 +356,7 @@ export async function actDebugSession(input: { projectId: string; sessionId: str
       const declared = readLaunchDeclaration(session.root)
       const launchKey = (launch: LaunchDeclaration) => JSON.stringify([launch.schema_version, launch.command, launch.ui, launch.mode, launch.url, launch.artifact, launch.window_title])
       if (!declared?.ok || launchKey(declared.launch) !== launchKey(session.launch)) throw Error('DEBUG_LAUNCH_CHANGED: 正常入口声明已改变，请close后重新open；不能把旧入口冒充当前程序')
-      await session.native?.close();session.native=undefined;session.snapshot.native_ui=undefined
+      if(session.native){const cleanup=await session.native.close();if(cleanup.metadata_cleanup==='unknown')log(session,'native.cleanup',`metadata cleanup unknown: ${cleanup.error}`)}session.native=undefined;session.snapshot.native_ui=undefined
       if (session.page) await invalidateSoftwareUi(session.page)
       session.activeAction = 'reload'; session.snapshot.state = 'opening'
       if (session.launch.ui === 'electron') {
