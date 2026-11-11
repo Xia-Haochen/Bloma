@@ -18,8 +18,22 @@ for(const kind of ['checkbox','switch','button'])it(`checks real PCM contrast us
       const oscillator=ctx.createOscillator(),gain=ctx.createGain(),analyser=ctx.createAnalyser()
       gain.gain.value=muted?0:.2;oscillator.connect(gain);gain.connect(analyser);analyser.connect(ctx.destination);oscillator.start()
       let samples=0,peak=0,sum=0;const buffer=new Float32Array(analyser.fftSize)
-      for(let i=0;i<10;i++){await new Promise(r=>setTimeout(r,20));analyser.getFloatTimeDomainData(buffer);if(ctx.state==='running')for(const v of buffer){samples++;peak=Math.max(peak,Math.abs(v));sum+=v*v}}
-      oscillator.stop();await ctx.close();return{samples,peak,rms:Math.sqrt(sum/Math.max(samples,1))}
+      // Wall-clock timers/state=running do not prove an audio render quantum.
+      // Wait for the actual context clock, then sample distinct rendered times.
+      const deadline=performance.now()+3000,start=ctx.currentTime
+      try{
+        while(ctx.currentTime-start<.05){if(performance.now()>deadline)throw Error('AUDIO_CLOCK_NOT_ADVANCING');await new Promise(r=>setTimeout(r,10))}
+        let previous=ctx.currentTime;const measured=previous
+        while(ctx.currentTime-measured<.2||samples<2048){
+          if(performance.now()>deadline)throw Error('AUDIO_OBSERVATION_INCOMPLETE')
+          await new Promise(r=>setTimeout(r,20));const current=ctx.currentTime
+          if(current<=previous)continue
+          previous=current;analyser.getFloatTimeDomainData(buffer)
+          for(const v of buffer){samples++;peak=Math.max(peak,Math.abs(v));sum+=v*v}
+        }
+        return{samples,peak,rms:Math.sqrt(sum/Math.max(samples,1))}
+      }finally{oscillator.stop();await ctx.close()}
+
     })
     const result=await checkMuteContrast(page,'#mute',observe)
     expect(result.audible.peak).toBeGreaterThan(.1);expect(result.silent.peak).toBe(0)

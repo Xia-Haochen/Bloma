@@ -1,6 +1,5 @@
-import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, realpathSync } from 'node:fs'
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { existsSync, mkdirSync, realpathSync, statSync } from 'node:fs'
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { getPromaHome } from '../../storage/config-paths'
 import { createRequire } from 'node:module'
 import { buildDriverEnv, execFileDriverSpawn, resolveDriverVenvCommand } from '../desktop/process-driver'
@@ -35,15 +34,22 @@ export function validateSoftwareCommand(value: unknown): string[] {
   return [...command]
 }
 
+/** Resolve the same PATH/PATHEXT candidates without spawning where.exe for
+ * every verification/command. No cache: PATH changes and replaced files are
+ * observed on every call. Implicit current-directory execution is not allowed. */
 function pathExecutable(name: string): string | undefined {
-  if (isAbsolute(name)) return existsSync(name) ? name : undefined
-  try {
-    if (process.platform === 'win32') return execFileSync('where.exe', [name], { encoding: 'utf8', windowsHide: true, timeout: 3000 })
-      .split(/\r?\n/).find(file => file.trim() && existsSync(file.trim()))?.trim()
-    for (const directory of (process.env.PATH ?? '').split(':')) {
-      const file = join(directory, name); if (existsSync(file)) return file
-    }
-  } catch { /* a missing tool is reported before execution */ }
+  const file = (path: string) => { try { return statSync(path).isFile() } catch { return false } }
+  if (isAbsolute(name)) return file(name) ? name : undefined
+  if (name.includes('/') || name.includes(String.fromCharCode(92))) return undefined
+  const windows = process.platform === 'win32'
+  const environment = (key: string) => Object.entries(process.env).find(([name]) => name.toLowerCase() === key.toLowerCase())?.[1] ?? ''
+  const extensions = windows && !extname(name)
+    ? (environment('PATHEXT') || '.COM;.EXE;.BAT;.CMD').split(';').filter(value => /^\.[a-z0-9]+$/i.test(value)) : ['']
+  for (let directory of environment('PATH').split(windows ? ';' : ':')) {
+    directory = directory.replace(/^"|"$/g, '')
+    if (!directory || !isAbsolute(directory)) continue
+    for (const extension of extensions) { const candidate = join(directory, name + extension); if (file(candidate)) return candidate }
+  }
   return undefined
 }
 

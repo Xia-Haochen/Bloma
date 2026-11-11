@@ -274,3 +274,15 @@ read_file默认16000字符/48000 UTF-8字节，最长16MiB文本；长行有版�
 ### 2026-11-11 文档批次
 
 已完成当前源码和Vide锁定版本的只读核查、总计划及专项适配设计；`npm run docs:check`、本地Markdown目标链接检查和diff空白检查通过。未运行工程性能/GUI或真实供应商测试，未修改运行代码。用户原有文档blob仍为 `53c7abb3aef8497d8b0522b8aab806c82b2ec164`。本节证明文档已整理，不将B0基线测量或任何实现批次记为完成。
+
+### 2026-11-11 继续实施：回归取证与真实IO瓶颈
+
+先取证而非增加超时：控制CLI夹具的导出库存扫描记录显示首次main目录约9.4秒，并在90秒信号后未交付；本机where.exe node一次约1.11秒。改为直接PATH/PATHEXT文件解析（每次重新解析，无stat缓存、不隐式执行cwd），库存至多4个文件流并行读取完整字节，保留原深度优先顺序与摘要，并在每个文件读后检查dev/ino/ctime/mtime/size。不复用旧字节hash、不放宽原输入变化/取消/链接保护。
+
+同一受控CLI夹具改后4轮完成并交付，约41秒；main库存单次约0.89~1.22秒。环境冷/热、资源负载不同，仅作为本机取证，不承诺通用倍数。原失败日志保留；测量JSON continuation-io-profile.json、continuation-io-after.json。
+
+真实音频夹具此前以wall-clock轮询且state=running就累计样本，不能证明音频图已产生render quantum；现在等待AudioContext时钟实际推进、只采不同渲染时刻，3秒内未就绪明确失败。正/负/恢复对照阈值、原产品及断言未放宽，观察finally关闭自己的AudioContext。
+
+组合回归5文件54项通过，包含上轮两个超时夹具、音频8项、真实执行和新库存/路径反例；类型与main构建通过。证据continuation-regression-tests.log、continuation-b0-typecheck.log、continuation-b0-build.log。尚未在后续全部代码完成前重跑完整check:offline，不把这个小组PASS替代整套。
+
+B8资源前置实查：WindowsSandbox.exe不存在、Hyper-V模块不可用，hypervisor存在但不能据此推定可启动Windows执行器；C盘仅约11.2GB空闲。不会自动安装镜像、开启管理员系统功能或声称worktree等于干净Windows。先完成可用模块，干净机实际资格仍为环境阻塞。

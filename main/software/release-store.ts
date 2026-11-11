@@ -61,9 +61,14 @@ export async function fileDigest(file: string, signal?: AbortSignal): Promise<st
  * Only explicitly host-created dependency links may be traversed. */
 export async function runtimeInventory(root: string, signal?: AbortSignal, links: Record<string, string> = {}, hostLayout = true): Promise<RuntimeInventory> {
   const files: Entry[] = []; let bytes = 0
+  // Bounded IO overlap, NOT a stat cache. Every byte is freshly hashed, and
+  // result slots retain the original sorted depth-first inventory order.
+  const pending = new Set<Promise<void>>()
+  let failure: unknown, failed = false
+  const fail = (error: unknown) => { if (!failed) { failed = true; failure = error } }
   const visit = async (directory: string, prefix = '', mutable = false) => {
     for (const entry of (await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
-      signal?.throwIfAborted()
+      signal?.throwIfAborted(); if (failed) throw failure
       if (IGNORED.has(entry.name)) continue
       const path = `${prefix}${entry.name}`, full = join(directory, entry.name), info = await lstat(full)
       if (info.isSymbolicLink()) {
@@ -74,14 +79,24 @@ export async function runtimeInventory(root: string, signal?: AbortSignal, links
       if (!info.isFile()) throw Error(`RELEASE_FILE_UNSUPPORTED: ${path}`)
       if (mutable && !CODE.test(entry.name)) continue
       if (files.length >= 250000 || (bytes += info.size) > 8 * 1024 ** 3) throw Error('RELEASE_INVENTORY_LIMIT')
-      const sha256 = await fileDigest(full, signal), after = await stat(full)
-      if (after.size !== info.size || after.mtimeMs !== info.mtimeMs) throw Error('RELEASE_INPUT_CHANGED_DURING_READ')
-      files.push({ path, size: info.size, sha256 })
+      const slot = files.length; files.push({ path, size: info.size, sha256: '' })
+      let task: Promise<void>
+      task = (async () => {
+        const sha256 = await fileDigest(full, signal), after = await lstat(full)
+        if (!after.isFile() || after.dev !== info.dev || after.ino !== info.ino || after.size !== info.size
+          || after.mtimeMs !== info.mtimeMs || after.ctimeMs !== info.ctimeMs) throw Error('RELEASE_INPUT_CHANGED_DURING_READ')
+        files[slot].sha256 = sha256
+      })().catch(fail).finally(() => pending.delete(task))
+      pending.add(task)
+      if (pending.size >= 4) await Promise.race(pending)
     }
   }
-  await visit(await realpath(root))
+  try { await visit(await realpath(root)) } catch (error) { fail(error) }
+  await Promise.all(pending)
+  signal?.throwIfAborted(); if (failed) throw failure
   return { digest: hash(JSON.stringify(files)), bytes, files }
 }
+
 async function copyEntries(source: string, destination: string, entries: Entry[], signal?: AbortSignal, trim = '') {
   await mkdir(destination, { recursive: true })
   for (const entry of entries) {
