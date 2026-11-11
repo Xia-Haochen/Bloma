@@ -104,14 +104,14 @@ describe('agent-tools（PR2 L2）', () => {
       expect(outcome.output).not.toContain('node_modules')
     })
 
-    it('grep：只列命中 file:line（≤50），不给上下文行；无命中显式反馈', async () => {
+    it('grep：直接列命中 file:line及内容（默认≤50）；无命中显式反馈', async () => {
       const project = createProject({ request_id: 'req-g1', mode: 'quick' })
       mkdirSync(join(project.root_path, 'src'), { recursive: true })
       writeFileSync(join(project.root_path, 'src', 'app.js'), 'const a = 1\nconst target = 2\n', 'utf8')
       const tools = composeTools({ projectId: project.project_id })
       const hit = await byName(tools, 'grep').execute({ pattern: 'target', glob: '*.js' }, ctxFor(project.project_id))
       expect(hit.output).toContain('src/app.js:2')
-      expect(hit.output).not.toContain('const target = 2')
+      expect(hit.output).toContain('const target = 2')
       const miss = await byName(tools, 'grep').execute({ pattern: '不存在的关键词' }, ctxFor(project.project_id))
       expect(miss.output).toContain('未找到匹配')
       const bad = await byName(tools, 'grep').execute({ pattern: '(' }, ctxFor(project.project_id))

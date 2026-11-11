@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, readFileSync, readdirSync, writeFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync, realpathSync, statSync } from 'node:fs';
 import { rmSyncWithRetry } from '../../platform/storage/fs-retry'
 import { tmpdir } from 'node:os'
 import { extname, isAbsolute, join, relative, resolve } from 'node:path'
@@ -9,6 +9,7 @@ import { decideWrite, estimateTokenCount } from '../loop/usage-guard'
 import { toolEvidenceEnabled, writeGuardEnabled, preflightEnabled, type AgentLoopTool, type ToolContext, type ToolOutcome } from '../loop/agent-loop';
 import { commitFileWrite, fileRevisionOf, fileRevisionsOf } from './write-lease'
 import { replaceUniqueText } from './text-edit'
+import { readTextWindow, readWindowProperties, searchProjectFiles, pageFileNames, compileFileGlob } from './file-query'
 import { resolveProjectRoot } from '../../../shared/project-root-override'
 import { buildDelegationTools } from '../delegation/delegation-tools'
 import { buildWebFetch, buildWebResearch } from './web-tools'
@@ -94,8 +95,6 @@ const SKIPPED_DIRS = new Set(['node_modules', '.git', 'dist', 'dist-main'])
 
 const LIST_DEPTH_LIMIT = 4
 const LIST_ENTRY_LIMIT = 200
-const GREP_HIT_LIMIT = 50
-const READ_DEFAULT_WINDOW = 100
 export const SANDBOX_LOG_TAIL_LIMIT = 2048
 
 // =========================================================================
@@ -187,6 +186,16 @@ function resolveInsideProject(
   if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
     return { ok: false, error: `路径必须在项目目录内（收到 "${rawPath}"）` }
   }
+  try {
+    let ancestor = abs
+    while (!existsSync(ancestor)) {
+      const parent = resolve(ancestor, '..')
+      if (parent === ancestor) return { ok: false, error: '项目目录不可用' }
+      ancestor = parent
+    }
+    const actual = relative(realpathSync(root), realpathSync(ancestor))
+    if (actual === '..' || actual.startsWith('..\\') || actual.startsWith('../') || isAbsolute(actual)) return { ok: false, error: '路径必须在项目目录内（符号链接目标越界）' }
+  } catch { return { ok: false, error: '项目目录或路径不可读取' } }
   return { ok: true, abs, rel }
 }
 
@@ -224,13 +233,14 @@ export function externalResourceViolation(htmlContent: string): string | null {
 }
 
 /** 递归收集项目内文件（跳过非产物目录），返回相对路径列表。 */
-function collectProjectFiles(root: string, subDir = '', software = false, budget = { files: 0 }): string[] {
+function collectProjectFiles(root: string, subDir = '', software = false, budget = { files: 0, depthLimited: 0, unreadable: 0 }): string[] {
   const out: string[] = []
   const base = subDir ? join(root, subDir) : root
   let entries
   try {
     entries = readdirSync(base, { withFileTypes: true })
   } catch {
+    budget.unreadable++
     return out
   }
   for (const entry of entries) {
@@ -238,7 +248,7 @@ function collectProjectFiles(root: string, subDir = '', software = false, budget
     if (entry.isDirectory()) {
       if (SKIPPED_DIRS.has(entry.name)) continue
       if (software && ['.venv', 'venv', '__pycache__', '.cache', '00_HISTORY'].includes(entry.name)) continue
-      if (rel.split('/').length >= (software ? 48 : LIST_DEPTH_LIMIT)) continue
+      if (rel.split('/').length >= (software ? 48 : LIST_DEPTH_LIMIT)) { budget.depthLimited++; continue }
       out.push(...collectProjectFiles(root, rel, software, budget))
     } else if (entry.isFile()) {
       if (software && ++budget.files > 100000) throw Error('FILE_SEARCH_LIMIT_EXCEEDED: 请限定子目录')
@@ -246,17 +256,6 @@ function collectProjectFiles(root: string, subDir = '', software = false, budget
     }
   }
   return out.sort()
-}
-
-/** W3（Phase 10）：find 工具的 glob→正则（支持 * 单段与 ** 跨目录；Windows 大小写不敏感）。 */
-function globToRegExp(pattern: string): RegExp {
-  const escaped = pattern
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*\*\/?/g, '\u0000')
-    .replace(/\*/g, '[^/]*')
-    .replace(/\?/g, '[^/]')
-    .replace(/\u0000/g, '.*')
-  return new RegExp(`^${escaped}$`, 'i')
 }
 
 /** find 返回上限（与 LIST_ENTRY_LIMIT 同档）。 */
@@ -441,50 +440,59 @@ export function buildAgentTools(options: BuildAgentToolsOptions): AgentLoopTool[
 
   const read_file: AgentLoopTool = {
     name: 'read_file',
-    // P1-2（2026-09-08）：只读无共享态，声明 parallelSafe 可同轮并发（上限 4，见 agent-loop executeTurnToolCalls）
+    // Pi remains sequential. This marker is not a claim of current concurrency.
     parallelSafe: true,
-    description:
-      '读取项目内文件的一个窗口（默认 100 行，带行号）。参数：path（项目内相对路径）、offset（起始行，1 起，可选）、limit（行数，可选）。越界时返回最近可用窗口。',
+    description: '有界读取项目文本，默认100行/16000字符/48000字节，带行号与版本。超长行按返回的next继续读取。files可一次读取最多8个窗口，总输出不超过24000字符/65536字节，每项独立报告失败；与path二选一。',
     input_schema: {
       type: 'object',
       properties: {
-        path: { type: 'string', minLength: 1, pattern: '\\S', description: '项目内相对路径，如 index.html、src/app.js' },
-        offset: { type: 'number', description: '起始行号（1 起）' },
-        limit: { type: 'number', description: '读取行数（默认 100）' },
+        path: { type: 'string', minLength: 1, pattern: '\\S', description: '项目内相对路径' },
+        ...readWindowProperties,
+        files: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'object', required: ['path'], properties: {
+          path: { type: 'string', minLength: 1 }, ...readWindowProperties,
+        } } },
       },
-      required: ['path'],
+      anyOf: [{ required: ['path'] }, { required: ['files'] }],
     },
-    execute: async (toolInput, ctx) => {
-      const project = findProject(projectId)
-      const resolved = resolveInsideProject(projectRoot(), toolInput.path)
-      if (!resolved.ok) return { output: resolved.error, isError: true }
-      if (!existsSync(resolved.abs)) {
-        return { output: `文件不存在：${resolved.rel}。可用 list_files 查看项目文件清单。`, isError: true }
+    execute: async (input, ctx) => {
+      const root = projectRoot()
+      const readOne = (item: Record<string, unknown>, limits?: { chars: number; bytes: number }): ToolOutcome => {
+        ctx.signal.throwIfAborted()
+        const resolved = resolveInsideProject(root, item.path)
+        if (!resolved.ok) return { output: resolved.error, isError: true }
+        if (!existsSync(resolved.abs)) return { output: `文件不存在：${resolved.rel}。可用 list_files 查看项目文件清单。`, isError: true }
+        const result = readTextWindow(resolved.abs, resolved.rel, item, limits)
+        if (!result.isError && typeof result.detail?.revision === 'string') fileRevisionsOf(ctx).set(resolved.rel, result.detail.revision)
+        return result
       }
-      const lines = readFileSync(resolved.abs, 'utf8').split('\n')
-      const total = lines.length
-      const limit = Math.min(Math.max(numberOr(toolInput.limit, READ_DEFAULT_WINDOW), 1), 500)
-      let offset = Math.max(Math.trunc(numberOr(toolInput.offset, 1)), 1)
-      if (offset > total) offset = Math.max(1, total - limit + 1) // 越界返回最近可用窗口
-      const slice = lines.slice(offset - 1, offset - 1 + limit)
-      const body = slice.map((line, index) => `${offset + index} │ ${line}`).join('\n')
-      // D4a（咨询 D）：记录/返回文件版本戳（mtime+size 十六进制）——edit_file 的
-      // expected_revision 校验与 write_file 守卫共用；纯追加信息，无行为变化。
-      const revision = fileRevisionOf(resolved.abs)
-      fileRevisionsOf(ctx).set(resolved.rel, revision)
-      return {
-        output: `（${resolved.rel} 共 ${total} 行，显示第 ${offset}~${offset + slice.length - 1} 行｜文件版本 ${revision}）\n${body}`,
+      if (input.files === undefined) return readOne(input)
+      if (input.path !== undefined || !Array.isArray(input.files) || !input.files.length || input.files.length > 8) return { output: 'READ_BATCH_INVALID: files含1~8个窗口，与path二选一', isError: true }
+      const results: ToolOutcome[] = []
+      let chars = 0, bytes = 0
+      // Intentionally bounded and ordered, not an alternate loop/concurrent budget path.
+      for (const item of input.files) {
+        ctx.signal.throwIfAborted()
+        const remaining = { chars: 23000 - chars, bytes: 62000 - bytes }
+        const result = remaining.chars < 512 || remaining.bytes < 2048
+          ? { output: 'READ_BATCH_OUTPUT_LIMIT: 本项未读取，请单独read_file', isError: true }
+          : item && typeof item === 'object' && !Array.isArray(item) ? readOne(item as Record<string, unknown>, remaining)
+          : { output: 'READ_BATCH_ITEM_INVALID', isError: true }
+        // Invalid paths/inputs may be long too; retain bounded errors, never content truncation without a continuation.
+        if (result.isError) result.output = result.output.slice(0, 256)
+        results.push(result); chars += result.output.length + 20; bytes += Buffer.byteLength(result.output) + 20
       }
+      return { output: results.map((result, index) => `--- [${index + 1}] ${result.isError ? 'ERROR' : 'OK'} ---\n${result.output}`).join('\n'),
+        isError: results.some(r => r.isError), detail: { results: results.map((result, index) => ({ index, is_error: Boolean(result.isError), ...result.detail })) } }
     },
   }
 
   const list_files: AgentLoopTool = {
     name: 'list_files',
     parallelSafe: true,
-    description: '列出项目内文件（相对路径，深度 ≤4，最多 200 条）。参数：path（要列出的子目录，可选，缺省整个项目）。',
+    description: '分页列出项目源码文件，默认200条；cursor续页。静态项目深度≤4，software项目深度≤48；基础设施/符号链接不遍历，不将范围清单当依赖安装证明。',
     input_schema: {
       type: 'object',
-      properties: { path: { type: 'string', description: '子目录相对路径（缺省列出整个项目）' } },
+      properties: { path: { type: 'string', description: '子目录相对路径（缺省列出整个项目）' }, cursor: { type: 'string', description: '上次next_cursor' } },
     },
     execute: async (toolInput) => {
       const project = findProject(projectId)
@@ -494,7 +502,8 @@ export function buildAgentTools(options: BuildAgentToolsOptions): AgentLoopTool[
         if (!resolved.ok) return { output: resolved.error, isError: true }
         subDir = resolved.rel
       }
-      const files = collectProjectFiles(projectRoot(), subDir, options.software)
+      const scope = { files: 0, depthLimited: 0, unreadable: 0 }
+      const files = collectProjectFiles(projectRoot(), subDir, options.software, scope)
       // R0.2（2026-09-19 狗粮 7601e5ae）：平台托管目录不再伪装成「空目录」——模型据
       // 「目录为空」误判 express 未 vendor、白白零依赖重写；如实说明托管与供货保证。
       const topDir = subDir.split('/')[0]
@@ -504,64 +513,38 @@ export function buildAgentTools(options: BuildAgentToolsOptions): AgentLoopTool[
           : `${topDir}/ 是平台基础设施目录，不在产物清单中`
         return { output: `${managed}。不要据此判断依赖缺失：判断依赖声明请读 package.json（如存在）。` }
       }
-      if (files.length === 0) return { output: `目录为空（${subDir || '项目根目录'}）。` }
-      const shown = files.slice(0, LIST_ENTRY_LIMIT)
-      const head = subDir ? `${subDir}/ 下` : '项目文件清单'
-      const truncation = files.length > shown.length ? `\n（共 ${files.length} 个文件，仅显示前 ${LIST_ENTRY_LIMIT} 个）` : ''
-      return { output: `${head}（${files.length} 个文件）：\n${shown.join('\n')}${truncation}`, detail: { count: files.length } }
+      const result = pageFileNames(files, toolInput, `list:${projectRoot()}:${subDir}:${Boolean(options.software)}`, LIST_ENTRY_LIMIT)
+      result.detail = { ...result.detail, complete_scope: !scope.depthLimited && !scope.unreadable, depth_limited_directories: scope.depthLimited, unreadable_directories: scope.unreadable }
+      result.output += `\n（清单范围：深度≤${options.software ? 48 : LIST_DEPTH_LIMIT}，不遍历基础设施和符号链接；子目录不可读时可能缺项）`
+      return result
     },
   }
 
   const grep: AgentLoopTool = {
-    name: 'grep',
-    parallelSafe: true,
-    description:
-      '在项目文件里搜索正则模式，只返回命中文件与行号（不返回行内容，最多 50 条命中）。参数：pattern（正则）、glob（文件名过滤，如 "*.js"，可选）。',
-    input_schema: {
-      type: 'object',
-      properties: {
-        pattern: { type: 'string', description: '正则表达式' },
-        glob: { type: 'string', description: '文件名过滤（如 *.js）' },
-      },
-      required: ['pattern'],
-    },
-    execute: async (toolInput) => {
-      const project = findProject(projectId)
-      if (typeof toolInput.pattern !== 'string' || !toolInput.pattern) {
-        return { output: '缺少 pattern 参数（要搜索的正则或字面文本，如 "localStorage" 或 "api/records"）。', isError: true }
+    name: 'grep', parallelSafe: true,
+    description: '搜索项目文本，直接返回file:line及命中内容。支持literal/ignore_case、path子目录或文件、glob（*、**、?）、context（0~5）、files_only、limit和cursor续页；返回范围不完整/截断说明。正则采用JS语义，不支持的glob明确报错。',
+    input_schema: { type: 'object', required: ['pattern'], properties: {
+      pattern: { type: 'string', minLength: 1, maxLength: 1000 }, glob: { type: 'string' }, path: { type: 'string' },
+      literal: { type: 'boolean' }, ignore_case: { type: 'boolean', description: '默认true' },
+      context: { type: 'integer', minimum: 0, maximum: 5 }, files_only: { type: 'boolean' },
+      limit: { type: 'integer', minimum: 1, maximum: 200 }, max_chars: { type: 'integer', minimum: 1024, maximum: 24000 }, cursor: { type: 'string' },
+    } },
+    execute: async (input, ctx) => {
+      ctx.signal.throwIfAborted()
+      const root = projectRoot()
+      let subDir = '', explicit: string | undefined
+      if (input.path !== undefined && input.path !== '.' && input.path !== './') {
+        const resolved = resolveInsideProject(root, input.path)
+        if (!resolved.ok) return { output: resolved.error, isError: true }
+        if (!existsSync(resolved.abs)) return { output: 'SEARCH_PATH_NOT_FOUND', isError: true }
+        if (statSync(resolved.abs).isFile()) explicit = resolved.rel
+        else subDir = resolved.rel
       }
-      let regex: RegExp
-      try {
-        regex = new RegExp(toolInput.pattern, 'i')
-      } catch (error) {
-        return { output: `正则表达式无效：${toolInput.pattern}（${error instanceof Error ? error.message : String(error)}）`, isError: true }
-      }
-      const glob = typeof toolInput.glob === 'string' && toolInput.glob.trim() ? toolInput.glob.trim().replace(/^\*/, '') : ''
-      const hits: string[] = []
-      let skippedLargeFiles = 0
-      for (const rel of collectProjectFiles(projectRoot(), '', options.software)) {
-        if (glob && !rel.endsWith(glob)) continue
-        let content: string
-        try {
-          if (options.software && statSync(join(projectRoot(), rel)).size > 2 * 1024 * 1024) { skippedLargeFiles++; continue }
-          content = readFileSync(join(projectRoot(), rel), 'utf8')
-        } catch {
-          continue
-        }
-        const lines = content.split('\n')
-        for (let index = 0; index < lines.length; index += 1) {
-          if (regex.test(lines[index])) {
-            hits.push(`${rel}:${index + 1}`)
-            if (hits.length >= GREP_HIT_LIMIT) break
-          }
-        }
-        if (hits.length >= GREP_HIT_LIMIT) break
-      }
-      if (hits.length === 0) return { output: `未找到匹配（模式：${toolInput.pattern}${glob ? `，文件过滤：${glob}` : ''}）。${skippedLargeFiles ? `跳过${skippedLargeFiles}个大文件，需按文件有界读取。` : ''}` }
-      return {
-        output: `命中 ${hits.length} 处${hits.length >= GREP_HIT_LIMIT ? '（达到上限 50，可能还有更多）' : ''}：\n${hits.join('\n')}`,
-        detail: { hits: hits.length, ...(skippedLargeFiles ? { skipped_large_files: skippedLargeFiles } : {}) },
-      }
+      const scope = { files: 0, depthLimited: 0, unreadable: 0 }
+      const files = explicit ? [explicit] : collectProjectFiles(root, subDir, options.software, scope)
+      const result = searchProjectFiles(root, files, input, scope)
+      result.output += `\n（搜索范围：深度≤${options.software ? 48 : LIST_DEPTH_LIMIT}，不遍历基础设施和符号链接）`
+      return result
     },
   }
 
@@ -707,6 +690,7 @@ export function buildAgentTools(options: BuildAgentToolsOptions): AgentLoopTool[
       properties: {
         pattern: { type: 'string', description: 'glob 模式，如 src/**/*.js 或 *.html' },
         path: { type: 'string', description: '限定搜索的子目录（可选，缺省全项目）' },
+        cursor: { type: 'string', description: '上次next_cursor' },
       },
       required: ['pattern'],
     },
@@ -720,9 +704,11 @@ export function buildAgentTools(options: BuildAgentToolsOptions): AgentLoopTool[
         if (!resolved.ok) return { output: resolved.error, isError: true }
         subDir = resolved.rel
       }
-      const matcher = globToRegExp(pattern)
-      const hits = collectProjectFiles(projectRoot(), subDir, options.software).filter((rel) => matcher.test(rel))
-      if (hits.length === 0) {
+      let matcher: RegExp
+      try { matcher = compileFileGlob(pattern) } catch (error) { return { output: String(error), isError: true } }
+      const scope = { files: 0, depthLimited: 0, unreadable: 0 }
+      const hits = collectProjectFiles(projectRoot(), subDir, options.software, scope).filter((rel) => matcher.test(pattern.includes('/') ? rel : rel.split('/').at(-1)!))
+      if (hits.length === 0 && toolInput.cursor === undefined) {
         // R0.2：命中不了平台托管目录（node_modules 等）时如实说明，防「找不到 = 不存在」误判
         const targetsManaged = [pattern, subDir].some((seg) => seg && seg.split('/').includes('node_modules'))
         const managedNote = targetsManaged
@@ -730,9 +716,10 @@ export function buildAgentTools(options: BuildAgentToolsOptions): AgentLoopTool[
           : ''
         return { output: `无匹配文件（模式 ${pattern}${subDir ? `，目录 ${subDir}/` : ''}）。可用 list_files 查看实际文件清单。${managedNote}` }
       }
-      const shown = hits.slice(0, FIND_ENTRY_LIMIT)
-      const truncation = hits.length > shown.length ? `\n（共 ${hits.length} 个匹配，仅显示前 ${FIND_ENTRY_LIMIT} 个）` : ''
-      return { output: `匹配 ${hits.length} 个文件：\n${shown.join('\n')}${truncation}`, detail: { count: hits.length } }
+      const result = pageFileNames(hits, toolInput, `find:${projectRoot()}:${subDir}:${pattern}:${Boolean(options.software)}`, FIND_ENTRY_LIMIT)
+      result.detail = { ...result.detail, complete_scope: !scope.depthLimited && !scope.unreadable, depth_limited_directories: scope.depthLimited, unreadable_directories: scope.unreadable }
+      result.output += `\n（清单范围：深度≤${options.software ? 48 : LIST_DEPTH_LIMIT}，不遍历基础设施和符号链接；子目录不可读时可能缺项）`
+      return result
     },
   }
 

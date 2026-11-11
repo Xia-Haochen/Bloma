@@ -217,6 +217,16 @@ E1：复用runtime-manager、release-store、isolated-launch。定义固定候�
 
 后续实施在本节追加批次结果与证据位置，并将上表状态改为已实现/已验证/待验证；不能仅因合入代码标记真实模型提效完成。
 
+### 2026-11-11 B1a 搜索和有界读取
+
+已在原grep/read_file/list_files/find入口接线：搜索返回命中正文、字面/大小写/上下文/路径与明确glob子集；内容指纹绑定分页，集合或内容变化拒绝旧cursor。目录清单可续页，深度、基础设施排除和不可读范围明确报告。未依赖本机未受控的rg，不把JS正则/有限glob冒充完整ripgrep。
+
+read_file默认16000字符/48000 UTF-8字节，最长16MiB文本；长行有版本绑定的行内续读，Unicode代理对不截断，二进制拒绝。原入口增加最多8个窗口的有界只读批处理，总输出≤24000字符/65536字节；逐项保留失败，读时登记revision。路径增加真实路径核对，拒绝junction逃逸。Pi仍串行，未开启任意工具并发。
+
+本次4文件52项通过（包含原有29项与租约/文本编辑回归、新增13项查询反例），装配/受控测量另2文件3项通过；typecheck、main/worker/preload/templates构建、docs检查通过。对照同任务：搜索2→1次，四文件读取4→1次；长单行300092→约47500字节且可完整续读。结果元数据增加会使短文件输出变大，单机耗时未证明改善，不能称端到端提效。命令日志、调度、批量编辑及后续扩展尚未以本批完成。
+
+证据：会话工作台b1-tests.log、b1-measurement.log、b1-typecheck.log、b1-main-build.log、tooling-after-read.json。可按本批提交回退接口，不删除原证据/质量/费用台账。
+
 ### 2026-11-11 B0 首批受控基线
 
 用户随后明确要求完成计划。工程工作树以09d8549为起点，原sprint2用户dirty文档保持不动，无付费或产品续跑。本批增加可在前后版本重复执行的`tests/unit/software/tooling-benchmark.test.ts`，产物通过`TOOLING_REPORT`显式输出到工程外。
