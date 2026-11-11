@@ -25,14 +25,15 @@ import { saveSourceCheckpoint } from './source-checkpoints'
 import { isNativeGuiTestModule } from './native-gui-tests'
 import { softwareStartupError, waitForSoftwareWindow } from './startup-diagnostics'
 import { isolateNativeTestWindows } from './native-window-isolation'
+import { OwnedNativeUi, type NativeRequest } from './native-ui'
 
 export interface DebugObservation { seq: number; at: string; version: number; action?: string; kind: string; message: string;
   duration_ms?: number; method?: string; url?: string; status?: number }
 export interface DebugSnapshot { id: string; projectId: string; sessionId: string; state: 'opening' | 'ready' | 'closed' | 'failed' | 'interrupted'; version: number; source?: string;
-  ui?: Awaited<ReturnType<typeof observeSoftwareUi>>; data_dir?: string; resumed_from?: string;
+  ui?: Awaited<ReturnType<typeof observeSoftwareUi>>; native_ui?: Awaited<ReturnType<OwnedNativeUi['inspect']>>; data_dir?: string; resumed_from?: string;
   stale: boolean; url?: string; screenshot?: string; screenshot_error?: string; source_checkpoint?: { id: string; files?: number }; checkpoint_error?: string; fixtures?: GuiAcceptanceSuite['fixtures']; log_cursor?: number; observations_omitted?: number; observations: DebugObservation[]; steps: Array<{ id: string; passed: boolean; actual?: unknown }>; error?: string }
 interface DebugSession { snapshot: DebugSnapshot; root: string; temporary: string; workspace: string; data: string; file: string; owner: string; page?: Page;
-  child?: ChildProcess; nativeRoot?: number; browser?: BrowserContext; browserClient?: Browser; browserServer?: BrowserServer; externalProcessId?: string; ownedProcessId?: string; stdout?: string; stderr?: string; signal: AbortSignal; abort: () => void;
+  child?: ChildProcess; nativeRoot?: number; native?:OwnedNativeUi; browser?: BrowserContext; browserClient?: Browser; browserServer?: BrowserServer; externalProcessId?: string; ownedProcessId?: string; stdout?: string; stderr?: string; signal: AbortSignal; abort: () => void;
   activeAction?: string; formal?:boolean; cdpEndpoint?: string; seq: number; logBytes: number; closing?: Promise<void>; finished?: boolean; timer?: ReturnType<typeof setTimeout>; busy: boolean; launch: LaunchDeclaration }
 const sessions = new Map<string, DebugSession>()
 const observedPages = new WeakSet<Page>()
@@ -161,10 +162,12 @@ export async function closeDebugSession(projectId: string, sessionId: string, id
   const session = owned(projectId, sessionId, id)
   if (session.closing) { await session.closing; return readDebugSession(projectId, sessionId, id) }
   if (session.snapshot.state !== 'failed') session.snapshot.state = 'closed'
+  session.snapshot.native_ui=undefined
   session.signal.removeEventListener('abort', session.abort)
   session.closing = (async () => {
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
+      await session.native?.close();session.native=undefined
       if (session.page) await invalidateSoftwareUi(session.page)
       if (session.launch.ui === 'browser' && !session.formal && session.browser) {
         try { const state = await session.browser.storageState(); writeTextFileAtomic(join(session.workspace, 'browser-state.json'), JSON.stringify(state)) }
@@ -297,13 +300,15 @@ export async function openDebugSession(input: { projectId: string; sessionId: st
     await closeDebugSession(input.projectId, input.sessionId, id); session.snapshot.state = 'failed'; persist(session); throw error
   }
 }
-export async function actDebugSession(input: { projectId: string; sessionId: string; id: string; steps?: GuiAcceptanceSuite['steps']; script?: string; scriptSource?: string; phase?:'initial'|'reopened'; nativeTests?: { file: string; phase: string; report: string; trace: string }; timeoutMs?: number; reload?: boolean; observation?: UiQuery; control?: UiControl; signal: AbortSignal }): Promise<DebugSnapshot> {
+export async function actDebugSession(input: { projectId: string; sessionId: string; id: string; steps?: GuiAcceptanceSuite['steps']; script?: string; scriptSource?: string; phase?:'initial'|'reopened'; nativeTests?: { file: string; phase: string; report: string; trace: string }; timeoutMs?: number; reload?: boolean; observation?: UiQuery; control?: UiControl; native?: NativeRequest; signal: AbortSignal }): Promise<DebugSnapshot> {
   if(input.scriptSource!==undefined&&(typeof input.scriptSource!=='string'||!input.scriptSource.trim()||Buffer.byteLength(input.scriptSource)>65536||input.script||input.nativeTests||input.steps))throw Error('BROWSER_SCRIPT_SOURCE_INVALID')
   if (input.control && (input.script || input.scriptSource || input.steps || input.nativeTests || input.reload)) throw Error('UI_CONTROL_MIXED_INPUT: use control alone against a current observation')
+  if(input.native&&(input.control||input.observation||input.script||input.scriptSource||input.steps||input.nativeTests||input.reload))throw Error('NATIVE_MIXED_INPUT')
   const session = owned(input.projectId, input.sessionId, input.id)
   if (session.snapshot.state !== 'ready' || !session.page || session.page.isClosed()) throw Error('DEBUG_SESSION_NOT_READY')
   if (session.busy) throw Error('DEBUG_SESSION_BUSY')
   session.busy = true
+  let nativeDispatched:string|undefined
   try {
     input.signal.throwIfAborted()
     const restart = async () => {
@@ -311,6 +316,7 @@ export async function actDebugSession(input: { projectId: string; sessionId: str
       const declared = readLaunchDeclaration(session.root)
       const launchKey = (launch: LaunchDeclaration) => JSON.stringify([launch.schema_version, launch.command, launch.ui, launch.mode, launch.url, launch.artifact, launch.window_title])
       if (!declared?.ok || launchKey(declared.launch) !== launchKey(session.launch)) throw Error('DEBUG_LAUNCH_CHANGED: 正常入口声明已改变，请close后重新open；不能把旧入口冒充当前程序')
+      await session.native?.close();session.native=undefined;session.snapshot.native_ui=undefined
       if (session.page) await invalidateSoftwareUi(session.page)
       session.activeAction = 'reload'; session.snapshot.state = 'opening'
       if (session.launch.ui === 'electron') {
@@ -336,6 +342,18 @@ export async function actDebugSession(input: { projectId: string; sessionId: str
     if (input.reload) await restart()
     else if (readDebugSession(input.projectId, input.sessionId, input.id).stale) throw Error('DEBUG_SOURCE_CHANGED: 先reload以标记新版本；若每次保存业务数据都会触发，核对是否把APP_DATA_DIR覆盖到了项目内，使用宿主提供的工程外数据目录。不能把旧窗口当作新代码')
     session.snapshot.steps = []
+    let nativeResult: DebugSnapshot['native_ui']
+    if(input.native){
+      session.snapshot.native_ui=undefined;await invalidateSoftwareUi(session.page)
+      const nativeRoot=session.nativeRoot,processId=session.ownedProcessId
+      if(session.launch.ui!=='electron'||!nativeRoot||!processId)throw Error('NATIVE_RUNTIME_UNSUPPORTED: requires this debug session owned managed Electron process tree')
+      const native=session.native??=new OwnedNativeUi(nativeRoot,()=>{try{const state=softwareProcess(input.projectId,processId,session.owner);return state.pid===nativeRoot&&['running','starting'].includes(state.state)}catch{return false}},join(session.workspace,'evidence','native'))
+      if(input.native.control){
+        session.activeAction=`native:${input.native.control.kind}:${randomUUID()}`
+        try{nativeResult=await native.inspect(input.native,input.signal);nativeDispatched=nativeResult.method;session.snapshot.steps.push({id:session.activeAction,passed:true,actual:{method:nativeResult.method,dispatch:'pattern returned; not a business result'}});log(session,'native.action',nativeResult.method??'UIA pattern returned')}
+        catch(error){log(session,'native.action_failed',String(error));throw error}
+      }
+    }else {session.native?.invalidate();session.snapshot.native_ui=undefined}
     if (input.control) {
       session.activeAction = `ui:${input.control.kind}`
       try { session.snapshot.steps.push({ id: session.activeAction, passed: true, actual: await actSemanticUi(session.page, input.control, input.signal) }) }
@@ -402,9 +420,15 @@ export async function actDebugSession(input: { projectId: string; sessionId: str
     // Observe last: diagnostic screenshots may temporarily alter page styles;
     // a reference must describe the final view returned to this caller.
     session.snapshot.ui = await observeSoftwareUi(session.page, input.observation)
+    if(input.native&&session.native){
+      const method=nativeResult?.method
+      const observed=await session.native.inspect({query:input.native.query,...(nativeResult?.selected?{window_ref:nativeResult.selected}:input.native.window_ref?{window_ref:input.native.window_ref}:{})},input.signal)
+      session.snapshot.native_ui={...observed,method}
+    }
     persist(session); return readDebugSession(input.projectId, input.sessionId, input.id)
   } catch (error) {
     if (input.reload) { session.snapshot.state = 'failed'; session.snapshot.error = String(error); await closeDebugSession(input.projectId, input.sessionId, input.id) }
+    if(nativeDispatched)throw Error(`NATIVE_ACTION_DISPATCHED_OBSERVATION_FAILED: ${nativeDispatched}; do not replay; ${String(error)}`)
     throw error
   } finally { session.activeAction = undefined; session.busy = false }
 }

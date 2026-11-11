@@ -227,7 +227,6 @@ E1：复用runtime-manager、release-store、isolated-launch。定义固定候�
 | B5 | 首期可选交互探索接主收尾；真实隔离浏览器/受控Pi及原finding→独立绑定→失败/修复/复验/发布机制通过；真实模型收益未测，V3长程消息贡献仍待集成 |
 | B6 | TS/JS worker之外补真实可选Jedi/Python固定stdio桥，真实Pi/版本/取消/坏后端等验证；T4已抓实际HTTP schema/context与恢复/撤销反例，不泛称总字节或费用下降 |
 | B7/B8 | 原生/故障取证、干净环境等仍在继续；V5共享缓存边界已修复 |
-| B6 | TS/JS真实只读语义已沿inspect_repository接线、独立编译worker+真实Pi通过；Python真实后端与T4实验仍待做 |
 
 后续在本节按实际证据更新，不能仅因合入代码标记真实模型提效完成。
 
@@ -368,3 +367,19 @@ T4实际HTTP专项1项通过；原Pi恢复/中断receipt/原生compaction带当�
 B6最终专项将原TS/执行器/Pi、新Python/Pi及实际HTTP测量一并核验；Python .pyi明确不支持，非UTF-8 coding声明拒绝而不按错误编码返回名称。
 
 B6最后版本 **6文件53项组合通过**（Python16、Python实际Pi1、T4实际HTTP1、TS31、原executor3、原Pi1），continuation-b6-env-tests.log；typecheck及main/worker/semantic/preload/templates构建通过。同组前一版本52/53时一条Python symbol触发15秒DEADLINE_EXCEEDED，失败保留continuation-b6-integrated-tests.log，不算通过，也未放宽期限/删断言。取证确认Windows/libuv会给显式env注入USERPROFILE/PATH等默认项；固定Python bootstrap现于导入Jedi前清除这些项，只设置本次workspace HOME/USERPROFILE及cache TEMP，避免宿主profile/cache发现。该环境边界修正与53项新版本通过不证明已穷尽旧次时延根因；独立冷启动3样本2.5–2.9秒仅当前观察，忙碌系统仍可能按原15秒返回明确deadline，不承诺普遍延时。私有阶段计时与importtime日志continuation-python-importtime-fixed-*.log供诊断，不是费用或性能倍数认证。
+
+### 2026-11-11 G2首期：自有Windows实例的原生UIA与截图
+
+沿既有inspect_app/debug session为Windows managed Electron实例及其原生子窗口增加native.query/window_ref/control，不增加PID/HWND/RuntimeId/脚本入口或第二套App生命周期。宿主OwnedNativeUi与固定owned_native_ui.ps1使用系统UIAutomationClient/Types、WindowsBase/System.Drawing，无第三方安装；实际普通用户态WinForms后端、Electron真实inspect链已验证。未扩成任意应用/pywebview原生启动器，不替代既有browser/electron默认入口或C/V。
+
+根仅来自本次活调试实例的nativeRoot/owned process记录；逐次检查进程start ticks及进程树（CIM创建时间与当前原生start ticks核对），只在归属成立后读取窗口/控件，不扫描邻近用户窗口内容。HWND、UIA RuntimeId和原始控件值/状态/窗口DPI、边界/模态/最小化、全部已扫描视图指纹留在宿主。模型只有UUID观察引用，重观察/跨会话/DOM与native切换/重载/关闭/一次动作即失效；动作前重新查询并核全视图。多窗口必须选择当前window_ref，不凭名称取第一项；重复按钮保留不同refs。值/Toggle/selection/expand状态均入指纹，完整值hash而非裁剪前缀，密码不读取。**仍非原子UI保证；暂未建立持续WinEvent窗口世代watcher，极短同进程HWND/RuntimeId复用是明确缺口，后期隔离反例仍需补。**
+
+只开放Invoke/Value/Toggle/SelectionItem/ExpandCollapse六类真实UIA pattern，记录方法，不冒充真实鼠标或键盘。没有全局前台输入/SendInput/抢焦点。宿主单一派发与Windows Local命名mutex约束本App同桌面会话的原生pattern调用，不宣称能锁住外部软件/整个桌面。每次固定适配器15秒，取消/timeout等待自有子进程排空；派发后结果不明标OUTCOME_UNKNOWN，已确认pattern返回但后观察失败标DISPATCHED_OBSERVATION_FAILED，均不重放。关闭native取消并排空当前helper，不接管持久化旧PID/引用。源码已变时旧control拒绝，不能自动重启后重放旧输入。
+
+最多16窗口、1000节点/深24，返回80项/32000字节控件窗口，适配器262144字节输出硬上限；文本裁剪和虚拟化/未暴露/上限缺口明确。UIA provider卡住按deadline失败，不扩大到相邻窗口。选定自有HWND用PrintWindow（PNG像素上限3840×2160/20MiB）；缺图/最小化/GPU缺口不退到整桌面。捕获匹配目标DPI awareness以避免当前144 DPI下逻辑绘制落在物理大画布的黑边，图像像素与UIA屏幕坐标不混用，不保证树/图同一原子瞬间。view_image(debug_session_id,surface=native)及include_image返回对应原生图，无原生图不冒用DOM截图；附图不签PASS。WinForms两版实际图native-ui-proof.png/proof2.png已读取核对：后者无多余黑画布，真实标签/重复按钮/输入框可见。不是Cua或用户常用平台App验收。
+
+当前专项证据：native-ui首次3项、扩展5项真实WinForms反例均通过；包含实际Ω文本保存字节、重复名称、跨实例/旧refs、Toggle状态改变拒绝、进程start token拒绝、真实自有模态选择/关闭、单派发竞争，以及UIA实际触发慢事件后取消client而应用随后仅写一次（不把取消当撤销）。Electron真实inspect_app→UIA Button Invoke→DOM独立读到计数1、原生截图经view_image、跨会话/原始PID字段/混输拒绝也通过。最近focused native/UIA选择2项通过仅是定向，不把13项未选冒充整套；本批最终组合另记。日志continuation-b7-native-tests.log、continuation-b7-native2-tests.log、continuation-b7-wire-tests.log。
+
+O1完整IPC/存储保存失败链、B8世代/重连/隔离/干净Windows及最终整套仍待续做。Cua专用driver记录不存在且命令不在PATH；定向检查Proma resources/bin及app.asar.unpacked未找到cua，不擅装/重装/改安全设置。最终真实平台Cua仍需用户完成设置，不能用本批Native/Electron夹具替代。
+
+G2首期最终版本 **4文件30项组合通过**（native UIA5、debug10、原DOM语义9、原GUI协议6），continuation-b7-g2-offered-tests.log；typecheck/main及worker/semantic/preload/templates构建通过（对应offered-typecheck/build日志），docs通过另记。额外收紧ref授权为**只允许本次实际返回的控件索引**，不能按已知snapshot UUID伪造未展示的内部扫描index；1项返回窗口下伪造:e:1的反例拒绝。显式旧/关闭实例control不自动开新App重放，Electron实际测试已关闭后再次传旧ref并确认无新活动实例。此前g2-tests日志中GUI协议参数误写到不存在目录，实际仅3文件24项，不算4文件；随后已用正确路径重新跑上述4文件30项，未跳过失败或修改生产时限。保护对照continuation-protected.g2.json不变。

@@ -9,7 +9,7 @@ import { debugWorkspace } from '../../../main/software/debug-workspace'
 import { buildSoftwareInspectTool } from '../../../main/software/inspect-tool'
 import { buildSoftwareImageTool } from '../../../main/software/image-tool'
 import { createSoftwareCollaborationPolicy } from '../../../main/software/collaboration-policy'
-import { closeDebugSessions, readDebugSession, retainedDebugVersion } from '../../../main/software/debug-sessions'
+import { closeDebugSessions, readDebugSession, retainedDebugVersion, activeDebugSessionId } from '../../../main/software/debug-sessions'
 import { softwareVerificationFingerprint } from '../../../main/desktop/verification-fingerprint'
 import { createToolState, type ToolContext } from '../../../main/agent/loop/agent-loop'
 import { startSoftwareProcess, stopSoftwareSession } from '../../../main/software/process-manager'
@@ -244,3 +244,28 @@ it.skipIf(process.platform !== 'win32' || !existsSync(electron)).each(['browser'
   expect(mixed.isError).toBe(true);expect(mixed.output).toContain('UI_CONTROL_MIXED_INPUT')
   expect(readDebugSession(project.project_id,'s',id)).toMatchObject({stale:false,state:'ready'})
 }, 60000)
+it.skipIf(process.platform!=='win32'||!existsSync(electron))('routes real owned Electron UIA refs and native image through the existing inspect tool without PID authority or replay',async()=>{
+ const root=project.root_path
+ writeFileSync(join(root,'package.json'),JSON.stringify({name:'native-uia-electron',main:'main.cjs'}))
+ writeFileSync(join(root,'main.cjs'),`const{app,BrowserWindow,screen}=require('electron');app.commandLine.appendSwitch('force-renderer-accessibility');app.whenReady().then(()=>{const window=new BrowserWindow({show:false,width:420,height:260,webPreferences:{contextIsolation:true,nodeIntegration:false}});window.setPosition(Math.max(...screen.getAllDisplays().map(d=>d.bounds.x+d.bounds.width))+600,40);window.loadFile('index.html');window.once('ready-to-show',()=>window.showInactive())});app.on('window-all-closed',()=>app.quit())`)
+ writeFileSync(join(root,'index.html'),`<!doctype html><title>Owned UIA Electron fixture</title><button onclick="document.querySelector('#count').textContent=String(++window.count)">Native save</button><output id="count">0</output><script>window.count=0</script>`)
+ writeFileSync(join(root,'LAUNCH.json'),JSON.stringify({schema_version:2,ui:'electron',command:[electron,'.'],window_title:'Owned UIA Electron fixture'}))
+ const tool=buildSoftwareInspectTool(project.project_id,createSoftwareCollaborationPolicy(project.project_id,root,'s')),context=ctx()
+ const opened=await tool.execute({mode:'open',native:{query:{name:'Native save'}}},context)
+ expect(opened.isError,opened.output).not.toBe(true)
+ const snapshot=JSON.parse(opened.output),button=snapshot.native_ui.nodes.find((n:{name:string})=>n.name==='Native save')
+ expect(snapshot.native_ui.backend).toBe('Windows.UIAutomation');expect(button,snapshot.native_ui).toBeTruthy()
+ const viewer=buildSoftwareImageTool(project.project_id),image=await viewer.execute({debug_session_id:snapshot.debug_session_id,surface:'native'},context)
+ expect(image.isError,image.output).not.toBe(true);expect(image.images).toHaveLength(1);expect(JSON.parse(image.output).surface).toBe('native')
+ const click=await tool.execute({mode:'act',debug_session_id:snapshot.debug_session_id,native:{control:{ref:button.ref,kind:'invoke'}}},context)
+ expect(click.isError,click.output).not.toBe(true);expect(JSON.parse(click.output).native_ui.method).toBe('UIA.InvokePattern')
+ const actual=await tool.execute({debug_session_id:snapshot.debug_session_id,steps:[{id:'real-native-result',kind:'expect',selector:'#count',equals:'1'}]},context)
+ expect(actual.isError,actual.output).not.toBe(true)
+ const old=await tool.execute({native:{control:{ref:button.ref,kind:'invoke'}}},context);expect(old.isError).toBe(true);expect(old.output).toContain('NATIVE_REFERENCE_STALE')
+ const mixed=await tool.execute({native:{},script_source:'export default()=>{}'},context);expect(mixed.output).toContain('NATIVE_MIXED_INPUT')
+ const foreign=await tool.execute({native:{root_pid:process.pid}},context);expect(foreign.output).toContain('NATIVE_REQUEST_INVALID')
+ const other=await tool.execute({debug_session_id:snapshot.debug_session_id,native:{}},{...context,sessionId:'other'});expect(other.isError).toBe(true)
+ await tool.execute({mode:'close',debug_session_id:snapshot.debug_session_id},context)
+ const closed=await tool.execute({mode:'act',debug_session_id:snapshot.debug_session_id,native:{control:{ref:button.ref,kind:'invoke'}}},context)
+ expect(closed.output).toContain('DEBUG_SESSION_NOT_READY');expect(activeDebugSessionId(project.project_id,'s')).toBeUndefined()
+},60000)
