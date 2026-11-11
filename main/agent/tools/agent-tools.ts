@@ -9,7 +9,7 @@ import { decideWrite, estimateTokenCount } from '../loop/usage-guard'
 import { toolEvidenceEnabled, writeGuardEnabled, preflightEnabled, type AgentLoopTool, type ToolContext, type ToolOutcome } from '../loop/agent-loop';
 import { commitFileWrite, contentRevision, fileRevisionMatches, fileRevisionOf, fileRevisionsOf } from './write-lease'
 import { replaceUniqueText, replaceMultipleTexts, type TextEdit } from './text-edit'
-import { readTextWindow, readWindowProperties, searchProjectFiles, pageFileNames, compileFileGlob } from './file-query'
+import { boundedInteger, readTextWindow, readWindowProperties, searchProjectFiles, pageFileNames, compileFileGlob } from './file-query'
 import { resolveProjectRoot } from '../../../shared/project-root-override'
 import { buildDelegationTools } from '../delegation/delegation-tools'
 import { buildWebFetch, buildWebResearch } from './web-tools'
@@ -475,12 +475,20 @@ export function buildAgentTools(options: BuildAgentToolsOptions): AgentLoopTool[
       }
       if (input.files === undefined) return readOne(input)
       if (input.path !== undefined || !Array.isArray(input.files) || !input.files.length || input.files.length > 8) return { output: 'READ_BATCH_INVALID: files含1~8个窗口，与path二选一', isError: true }
+      let totalChars: number, totalBytes: number
+      try {
+        totalChars = boundedInteger(input.max_chars, 24000, 512, 24000)
+        totalBytes = boundedInteger(input.max_bytes, 65536, 2048, 65536)
+      } catch { return { output: 'READ_BATCH_ARGUMENT_INVALID', isError: true } }
+      if (totalChars < input.files.length * 300 + 512 || totalBytes < input.files.length * 1024 + 2048) return { output: 'READ_BATCH_BUDGET_TOO_SMALL: 提高总输出上限或减少窗口数；本批未读取', isError: true }
       const results: ToolOutcome[] = []
       let chars = 0, bytes = 0
-      // Intentionally bounded and ordered, not an alternate loop/concurrent budget path.
-      for (const item of input.files) {
+      // Reserve bounded status/error space for every later item, including when
+      // an early huge window consumes the content budget. No dropped batch item.
+      for (const [index, item] of input.files.entries()) {
         ctx.signal.throwIfAborted()
-        const remaining = { chars: 23000 - chars, bytes: 62000 - bytes }
+        const later = input.files.length - index - 1
+        const remaining = { chars: totalChars - chars - later * 300 - 32, bytes: totalBytes - bytes - later * 1024 - 32 }
         const result = remaining.chars < 512 || remaining.bytes < 2048
           ? { output: 'READ_BATCH_OUTPUT_LIMIT: 本项未读取，请单独read_file', isError: true }
           : item && typeof item === 'object' && !Array.isArray(item) ? readOne(item as Record<string, unknown>, remaining)
@@ -662,7 +670,7 @@ export function buildAgentTools(options: BuildAgentToolsOptions): AgentLoopTool[
         const current = readFileSync(resolved.abs)
         if (contentRevision(current) !== revision) return { output: 'STALE_READ: 内容在读取时改变', isError: true }
         const result = replaceMultipleTexts(current.toString('utf8'), toolInput.edits as TextEdit[])
-        if (!result.ok) return { output: `${result.code}: 第${result.index + 1}项校验失败（命中${result.matches}处，要求唯一且不重叠）；未写入任何片段`, isError: true }
+        if (!result.ok) return { output: `${result.code}: 第${result.index + 1}项校验失败（命中${result.matches >= 2 ? '至少' : ''}${result.matches}处，要求唯一且不重叠）；未写入任何片段`, isError: true }
         return validateAndWrite(projectRoot(), resolved.rel, result.content, ctx, revision)
       }
 
@@ -698,7 +706,7 @@ export function buildAgentTools(options: BuildAgentToolsOptions): AgentLoopTool[
       if (!replacement.ok) {
         return { output: replacement.matches === 0
           ? `old_string 在 ${resolved.rel} 中未命中。请先 read_file 定点（注意空白与引号须逐字一致）。`
-          : `old_string 在 ${resolved.rel} 中命中 ${replacement.matches} 处，不唯一。请扩大上下文使片段唯一。`, isError: true }
+          : `old_string 在 ${resolved.rel} 中命中至少 ${replacement.matches} 处，不唯一。请扩大上下文使片段唯一。`, isError: true }
       }
       const next = replacement.content
       // P1-06：模型显式 expected_revision 优先；未传时用本会话读到的版本作提交点校验基准
