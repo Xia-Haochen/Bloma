@@ -6,6 +6,7 @@ import { buildDriverEnv, execFileDriverSpawn, resolveDriverVenvCommand } from '.
 import { managedRuntime, managedRuntimeDirectories } from './runtime-bindings'
 import { capabilityEnvironment } from './capability-bindings'
 import { electronEntry, isLocalElectronAlias } from './electron-entry'
+import { ownedDirectory } from './owned-directory'
 
 /** Project execution policy, NOT an OS sandbox. Arguments are passed directly;
  * Windows package-manager shims are resolved to their Node entry, never cmd /c. */
@@ -55,18 +56,26 @@ function pathExecutable(name: string): string | undefined {
 
 export function softwareEnvironment(projectId: string, dataDir?: string, root?:string): Record<string, string> {
   if (!/^[A-Za-z0-9_-]+$/.test(projectId)) throw new Error('ENVIRONMENT_PROJECT_ID_INVALID')
-  const toolsHome = join(getPromaHome(), 'software-environments', projectId)
-  const home = dataDir ? join(dirname(dataDir), 'environment-home') : toolsHome
-  for (const directory of [home, join(home, 'appdata'), join(home, 'localappdata'), dataDir ?? join(home, 'test-data')]) mkdirSync(directory, { recursive: true })
+  const toolsHome = ownedDirectory(getPromaHome(), ['software-environments', projectId])
+  const isolatedData = dataDir ? ownedDirectory(dataDir) : ownedDirectory(toolsHome, ['test-data'])
+  const home = dataDir ? ownedDirectory(dirname(isolatedData), ['environment-home']) : toolsHome
+  const appdata = ownedDirectory(home, ['appdata']), localappdata = ownedDirectory(home, ['localappdata'])
+  // Siblings of environment-home: data-update preserves real configuration,
+  // not disposable cache/temp trees, when copying an application's generation.
+  const scratch = dataDir ? dirname(isolatedData) : toolsHome
+  const temporary = ownedDirectory(scratch, ['execution-tmp']), cache = ownedDirectory(scratch, ['execution-cache'])
+  const npmCache = ownedDirectory(cache, ['npm']), pipCache = ownedDirectory(cache, ['pip']), uvCache = ownedDirectory(cache, ['uv'])
+  const electronCache = ownedDirectory(getPromaHome(), ['software-runtimes', 'electron-cache'])
   const clean = buildDriverEnv({ env_whitelist: [] } as never, process.env), directories = managedRuntimeDirectories(projectId)
   return { ...clean, ...(directories.length ? { PATH: [...directories, clean.PATH ?? clean.Path ?? ''].join(process.platform === 'win32' ? ';' : ':') } : {}),
     BLOMA_RUNTIME_PROJECT: projectId, BLOMA_SPEECH_OFFLINE:'1', ...capabilityEnvironment(projectId,root),
-    HOME: home, USERPROFILE: home, APPDATA: join(home, 'appdata'), LOCALAPPDATA: join(home, 'localappdata'),
-    APP_DATA_DIR: dataDir ?? join(home, 'test-data'), BROWSER: 'none', CI: '1',
-    npm_config_cache: join(toolsHome, 'npm-cache'), npm_config_audit: 'false', npm_config_fund: 'false',
+    HOME: home, USERPROFILE: home, APPDATA: appdata, LOCALAPPDATA: localappdata,
+    TEMP: temporary, TMP: temporary, XDG_CACHE_HOME: cache, PIP_CACHE_DIR: pipCache, UV_CACHE_DIR: uvCache,
+    APP_DATA_DIR: isolatedData, BROWSER: 'none', CI: '1',
+    npm_config_cache: npmCache, npm_config_audit: 'false', npm_config_fund: 'false',
     // Electron's installer validates cached archive checksums. Cache downloads,
     // never share mutable node_modules or substitute another runtime version.
-    electron_config_cache: join(getPromaHome(), 'software-runtimes', 'electron-cache'),
+    electron_config_cache: electronCache,
     PIP_DISABLE_PIP_VERSION_CHECK: '1', PIP_NO_INPUT: '1', PYTHONDONTWRITEBYTECODE: '1' }
 }
 
@@ -121,7 +130,7 @@ export function resolveSoftwareCommand(root: string, value: unknown, environment
  * declaration. The same app uses isolated test profiles and durable user data. */
 export function bindSoftwareProfile(command:string[],environment:Record<string,string>):string[]{
   if(!/^electron(?:\.exe)?$/i.test(basename(command[0]))||!environment.APP_DATA_DIR)return command
-  const profile=join(environment.APP_DATA_DIR,'electron-profile');mkdirSync(profile,{recursive:true})
+  const profile=ownedDirectory(environment.APP_DATA_DIR,['electron-profile'])
   const clean = command.filter((arg, index) => arg !== '--user-data-dir' && !arg.startsWith('--user-data-dir=') && command[index - 1] !== '--user-data-dir')
   return[...clean,`--user-data-dir=${profile}`]
 }

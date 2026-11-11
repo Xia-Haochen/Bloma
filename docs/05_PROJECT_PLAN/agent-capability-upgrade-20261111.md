@@ -226,7 +226,7 @@ E1：复用runtime-manager、release-store、isolated-launch。定义固定候�
 | B4 | G1/V1首期DOM语义、当前观察refs、能力发现、浏览器/Electron真实调试接线专项通过；V2实际提交差异/进程展示及Pi历史回放已接线，最终平台App展示回归待统一 |
 | B5 | 首期可选交互探索接主收尾；真实隔离浏览器/受控Pi及原finding→独立绑定→失败/修复/复验/发布机制通过；真实模型收益未测，V3长程消息贡献仍待集成 |
 | B6 | TS/JS worker之外补真实可选Jedi/Python固定stdio桥，真实Pi/版本/取消/坏后端等验证；T4已抓实际HTTP schema/context与恢复/撤销反例，不泛称总字节或费用下降 |
-| B7/B8 | G2首期Windows UIA及O1保存失败证据链已接线并实测；窗口世代、重连/完整隔离/E1与最终环境验收仍在继续 |
+| B7/B8 | G2/O1、自有HWND世代/重建/最小化、历史终态/双读者前向seq与V5运行目录/临时缓存防链接已实测；E1候选回传与最终外部环境继续 |
 
 后续在本节按实际证据更新，不能仅因合入代码标记真实模型提效完成。
 
@@ -419,3 +419,11 @@ seq>0接续改为从最早未读前向分页，不能默认tail截掉16条后就
 **最后7文件48项通过**（Native7/debug10/save+Pi1/evidence7/recovery8/GUI6/DOM9），continuation-b8-release-tests.log约297.98s；当前release typecheck/main相关构建/docs通过，tooling入口现29文件。保留首次组合47/48失败continuation-b8-final-tests.log：Pi在原15秒窗返回cancelled；新增可选phase计时后，单独及同组合通过，未抬期限/删断言。计时当前样本显示首次query前约7.7秒、真正inspect读取约60ms；**不能用新通过穷尽断言旧cancel根因已修**，负载/冷初始化仍可明确deadline，最终大组继续检验。首次新fixture漏System.Drawing引用，setup失败/7未运行日志保留；补系统程序集后focused2通过（5未选，不冒充7全跑）。一次长Windows命令在Python解析前截断、一次测试调用参数顺序/字段拼错被typecheck拦下，均修源码后通过，未执行不明生产写入。
 
 六保护/原HEAD及唯一dirty blob对照continuation-protected.b8.json仍不变。B8剩余资源归属/隔离/E1候选交付协议、V3原伙伴长程贡献与最新全套继续，不以本批结束全部计划；Cua/干净Windows外部条件仍单列。
+
+### 2026-11-11 V5：按数据实例绑定可变执行资源
+
+沿softwareEnvironment/bindSoftwareProfile，不新加终端/Agent/缓存管理服务。提供dataDir的自有运行使用该数据父目录中environment-home和独立execution-tmp/execution-cache，npm/pip/uv/XDG缓存也按此实例分开；不提供dataDir的工程命令按项目software-environments分开。TEMP/TMP不继承用户全局临时目录。cache/tmp与environment-home为**兄弟目录**，原data-update快照/回滚复制真实配置时不会顺带迁移下载缓存/临时编译文件。相同显式dataDir重开仍复用配置/profile；不同worktree/同项目不同dataDir不借用对方可变缓存。验证归属来源是数据实例，不宣称单靠Git worktree名称即OS隔离。
+
+ownedDirectory在宿主选定base/每个自建子目录创建前后lstat/realpath，拒实际目录junction/symlink（含dangling）或非目录，变更不删除/修复用户替代路径。实际APP_DATA_DIR/electron-profile也在原bindSoftwareProfile处防链接，移除旧user-data-dir参数后仍只用该自有profile。base父级选择仍由调用方原权限/调试工作区/数据generation负责；非原子FS事务、不可防任意恶意同用户进程替换祖先或突破操作系统权限。显式保留**宿主统一、校验下载的Electron runtime cache**，不把它和可变App HOME/profile/npm/pip/tmp混为一谈，不安装/清共享依赖、旧缓存或用户配置。
+
+新增7项execution-isolation：并行两个**真实Node child**在两个独立源/数据目录写HOME/USERPROFILE/APPDATA/LOCALAPPDATA/TEMP/TMP/XDG/npm/pip/uv/data标记，逐项检查没有对方字节；相同data重开/显式profile绑定；真实environment-home/tmp/npm/electron-profile junction均不写目标且保留sentinel，linked data/dangling base/非目录/..拒绝。最终与Native7/实际Electron保存+Pi1/debug10/async8/execution9/inventory3组合**7文件45项通过**，continuation-v5-release-tests.log约329.39s；当前typecheck/main相关构建/docs通过，tooling入口30文件。原执行组仍实际验证离线npm安装/构建、端口占用/跨owner/停止和宿主管道断开回收真实server grandchild。不是干净Windows、Cua平台、跨用户安全或全进程强隔离认证。六保护/原dirty不变见continuation-protected.v5.json。E1与其余最终工作继续。
