@@ -1,4 +1,62 @@
-# Bloma 工具升级首批实施与验收交接
+# Bloma 工具与工程能力升级：当前交接与首批历史
+
+更新时间：2026-11-12（Asia/Shanghai）。代码验收点：**90b636f1ed626eb61c9bc772cb2914a277b8e08a**；后续本次收尾提交只同步文档，不改生产/测试源码。分支仍为 `proma/tooling-upgrade-20261111`，未合原 `sprint2`、未fetch/push、未发布或重启常用App。
+
+**结论：本轮授权的B0–B8本机工程建设和受控离线验证已收敛；当前同一代码的完整标准门真实通过，不是专项相加。整份计划的最终平台Cua、干净Windows/系统故障矩阵与真实付费模型效果仍未验收，所缺外部条件见下表。不能宣布全部外部认证完成或用户常用App已升级。**
+
+## 当前可接手入口
+
+- 当前worktree：`C:/Users/17359/.proma/agent-workspaces/default/c8ff45a0-bce1-4744-9f16-3612de0db557/bloma-tooling`。
+- 会话证据根：`C:/Users/17359/.proma/agent-workspaces/default/c8ff45a0-bce1-4744-9f16-3612de0db557/`。原始失败/版本/CPU profile/图和最终证据全部保留。
+- [总计划与按批事实](agent-capability-upgrade-20261111.md)、[Vide采用边界](vide-adoption-design-20261111.md)、[八类场景与收益反例](tooling-evidence-index-20261112.md)、[候选复现协议](candidate-reproduction-protocol-20261111.md)。历史pending须与当前源码及这些最新事实核对，不能再从下半部首批表重做B4–B8。
+- Pi仍sequential，原Task/Assignment、quality ledger、C/V、验证/发布/费用权威不变；无统一管理Agent、新PASS/事故账本或平行候选状态机。全程只用了同一个已收敛的C1 Proma协作子会话，其余由主会话推进。
+
+## 当前已落地与限制
+
+| 范围 | 本机当前实现 | 明确保留的边界 |
+| --- | --- | --- |
+| T0/T1、B0/B1 | grep正文/有界分页、批读8窗口/逐项错误、Unicode限额/续读；八类场景、真Pi两文件修复和归档长日志ABBA | 有限glob/JS regex，非完整rg；文件调用5→3、总工具13→11，但SDK轮数12→12；最后兼容样本更快，不吹普遍倍数/费用 |
+| T2/T3、B2/B3 | 局部call-ID/字节观测；等待/异步共owned进程、事件等待、stdin/EOF/日志；同文件32片段与最多8文件全预检/有序CAS | 局部batch不等于全量parallel；多文件非原子/partial不回滚他人；未知取消不自动重放，无持久exactly-once认证 |
+| G1/V1/V2、B4 | 浏览器/Electron真实调试、派生语义/iframe/open-shadow、一次性refs；真实提交字节diff/进程展示及Pi历史恢复 | 不是完整AX/原子UI/最终平台Cua；旧结果不执行，缺口不伪造完整diff |
+| Q1/V3、B5 | 可关闭UI-only独立探索→原finding→独立绑定→坏/好复验→原发布；原工程伙伴定向问答/三源版本真实探针/同session续接与停机 | 探索仅suspected，不能给C/V/PASS；受控query和作者修复不是模型自主收益，默认开关不擅改 |
+| C1/T4、B6 | 真TS/JS LS固定worker与共享两槽；可选真Jedi/Python固定桥；真HTTP schema/context及恢复/撤权反例 | Jedi非LSP、diagnostics语法级/写引用unknown；无硬OS沙箱；T4首包省13,126B但两请求总量更大，不启无收益证据的动态schema/tool-search/REPL |
+| G2/O1、B7 | owned Windows UIA后台patterns/私有refs/截图；IPC/存储有界诊断、真实保存失败→作者修→重开 | 不操作任意外部窗口/不暗用全局键鼠；Win32世代属性是owned运行时metadata写入；应用自报非因果/PASS，存储complete只对声明scope |
+| E1/V4/V5、B8 | HWND世代失效/真实重建；历史终态/独立读者前向seq；真双宿主exit23→新PID恢复/副作用once；实例HOME/tmp/cache/profile防链接；物理候选包/pin/runtime映射/CLI回传 | 未强制同数值HWND复用压力；部分31分钟测试用假时钟；目录隔离非干净OS，UUID/pin非签名/验收；不自动装runtime/接旧PID；远端daemon/Flutter/TUI属原设计后续条件扩展 |
+
+## 当前完整验证：精确版本与命令
+
+| 当前实际执行 | 终态 | 证据（相对会话工作台） |
+| --- | --- | --- |
+| `npm run check:offline` 完整原链 | **exit0，60文件605项**：原verification19文件207项（只新增1条fixture drain反例），原双worker；tooling41文件398项，单worker。含类型/docs及renderer/main/worker/semantic/preload/templates完整构建 | `offline-90b636f.log`、`offline-90b636f-job.json` |
+| `npm run test:python-semantic:offline`，宿主显式TEST_*与保留私有Jedi/Parso | **exit0，2文件17项**，105.03s；同90b636f生产与测试代码，未安装/修改系统Python | `continuation-final-python.log`、`continuation-final-python-version.txt` |
+
+标准job从2026-11-12 02:36:36到03:19:41，前后HEAD均完整90b636f、tracked clean且仅AGENTS/node_modules未跟踪。原verification207项752.25s、工具398项1687.88s，**同一check的&&确实一路完成**；没有拿a2245ed后另行诊断398项翻绿。Python是另一个显式正向门，不能把“605+17”说成一个原始命令或全仓所有测试。
+
+旧失败全部保留：26309bb原组203/206；2d2dd9b204/206；a2245ed205/206且独立工具398过仍总exit1。收尾/Native/浏览器纠正的原期限从未提高，截图错误不吞成假图；2d2dd9b仅取证优化Windows fresh路径查询，90b636f只修测试超时后abort/drain再删home并补阶段诊断。当前纠正四阶段53.37s，收尾enter88.63s仍在原90s signal内完成；**通过不代表穷尽旧负载/冷初始化时延根因，也不承诺宿主无关的固定时延**。
+
+## 外部未认证：确实需要的条件
+
+| 尚未验收 | 所缺条件与执行边界 |
+| --- | --- |
+| 当前平台App完整展示/原生交互 | 尚未获得已配置的Cua driver/session。设置Computer Use后，用当前build、全新临时PROMA_HOME和独立user-data-dir开隔离实例，精确选窗口/先preview，不重启常用实例、不复制旧凭据。DOM/Electron/WinForms单测不替代此项 |
+| 干净Windows安装/断网/权限/旧数据系统矩阵 | 需要用户提供独立执行器或明确授权配置。按候选复现协议转移已审物理包、独立可信pin和显式runtime映射，一次fresh原入口/证据回传；不把worktree/profile隔离当OS重置、不擅装VM/系统功能。历史低磁盘样本不是当前阻塞理由 |
+| 真实供应商/自主诊断/费用与成功率效果 | 需要新的明确付费总额/范围并先核live selector、报价、账本与完整输入预留；当前暂停和unknown保留。SDK受控执行/UTF8字节/首包缩减不替代真实token、cache、费用或质量结论 |
+
+这些条件无确认变化就不循环探测/重装/擅自恢复试验；不得直接跑含付费及旧profile/凭据复制控制器的 `scripts/software-observation-trial.ts`。当前本地工程无需为了这些缺口重做已完成批次。
+
+## 保护与现场状态
+
+- 六保护文件SHA与最初基线完全相等，见`continuation-protected.final.json`；原主树HEAD仍09d8549、唯一dirty文档blob仍53c7abb3aef8497d8b0522b8aab806c82b2ec164。不动原产品/registry/质量/费用/运行账本，不解暂停、不清unknown。
+- 未改Proma/Codex持久画像/项目memory、镜像或SYNC-MANIFEST。仅补当前worktree未跟踪AGENTS的已核入口/命令/红线并真实review，未把它或共享node_modules链接提交。
+- 本次未用且核清的bloma-semantic worktree已在可见终端无force移除（branch保留），未动用户.codex工作树；该终端已关闭。保留私有Python依赖、全部失败/最终日志、PNG及run-artifacts。有限门禁runner已终态，不是常驻daemon/Automation；没有running Proma协作或新增付费任务。
+
+---
+
+## 首批历史附录（不是当前待办）
+
+以下原文只描述首批截至1655603的实现和失败。其“未实施/下一步/0个子Agent”等仅当时范围，**全部由上半部当前交接覆盖**；保留以追溯证据，不能据此重开已完成操作。
+
+## Bloma 工具升级首批实施与验收交接
 
 日期：2026-11-11（Asia/Shanghai）。起点：`sprint2 / 09d8549`，计划来自同日Codex最新对话。用户已授权实施，要求少用子Agent；本批实际使用0个。
 
@@ -9,7 +67,7 @@
 - 证据根：`C:/Users/17359/.proma/agent-workspaces/default/c8ff45a0-bce1-4744-9f16-3612de0db557/`。
 - 主计划：[基础工具与工程能力升级](agent-capability-upgrade-20261111.md)；[Vide专项](vide-adoption-design-20261111.md)仍为后续设计，未声称已经移植。
 
-## 1 实现范围
+### 1 实现范围
 
 | 项目 | 本批落地 | 重要边界 |
 | --- | --- | --- |
@@ -22,7 +80,7 @@
 
 参考本地Proma上游`bf3e98ca61dd8365eceaef876c0f7473700878a6`的Pi包装/权限/sequential策略和当前安装的Pi1.4.0实际执行逻辑；采用宿主边界适配而非整体重写。未安装外部参考项目或改模型/渠道。
 
-## 2 受控对照：不是供应商效果实验
+### 2 受控对照：不是供应商效果实验
 
 同一离线任务驱动，旧基线`tooling-before.json`与最终`tooling-final.json`：
 
@@ -35,15 +93,15 @@
 
 **只能证明这些受控样本的接口往返/首包体积变化。** 小文件元数据变大，单机耗时没有证明改善；没有真实供应商实验、费用结论、交付成功率或普遍性能百分比。
 
-## 3 验证及未通过记录
+### 3 验证及未通过记录
 
-### 最新专项
+#### 最新专项
 
 `npm run test:tooling:offline`：**11文件130项通过**，日志`final-specialized-tests.log`。包含实际Pi AgentSession的schema/部分读取失败/多片段写入、调用身份/预算/取消/恢复、真实Node/npm命令、进程归属、stdin/EOF、完整日志与脱敏反例。模型响应均受控，不是付费供应商认证。
 
 `npm run typecheck`、`npm run build:main`通过，见`final-typecheck.log`、`final-build-main.log`。早先完整`check:offline`亦构建renderer/main/worker/preload/templates；未启动或重启用户常用Bloma实例。
 
-### 整套回归仍未收敛，不能改写成全部通过
+#### 整套回归仍未收敛，不能改写成全部通过
 
 1. `47be8a7`的原标准19文件206项曾完整通过：`final-check-offline.log`。这是早一代码版本，不代替最终全部回归。
 2. `a291d8b`扩大为30文件336项的并行组合：335通过，CLI修复后交付夹具约91.7秒未达completed；该夹具内部90秒取消信号。原失败见`final-expanded-check-offline.log`。同断言单独执行约46.3秒通过，`verification-failure-retest.log`；不是将原组合追认为通过。
@@ -52,14 +110,14 @@
 
 最后撤下未证明稳定且会拖慢全套的临时串行拆组策略，保留原标准19文件调度，新增独立`test:tooling:offline`入口，并将它接在`check:offline`末尾：原标准失败时不会跳过失败继续声称整套通过。最终该组合没有再全跑；专项130项、类型及main构建已经重跑通过。后续应先针对这些既有重型夹具的调度/等待/真实音频就绪取证，再处理GUI/Vide扩展。不得简单放宽生产时限、删断言或跳过失败。
 
-## 4 保护与提交
+### 4 保护与提交
 
 - 原仓库HEAD仍09d8549、原用户dirty文档`production-workflow-v2-20261020.md` blob仍`53c7abb3aef8497d8b0522b8aab806c82b2ec164`，不覆盖、不纳入本批提交。
 - 本次项目registry、quality、test-corrections、usage、run-state、execution-limits六文件重新取SHA256对照；`protected-state.before.json`和`protected-state.after.json`记录全部一致。最终再核对见`protected-state.final.json`。
 - 未改原生成产品、未解除校园暂停、未清unknown/费用/质量账本、未真实模型付费、未发布、未fetch/push、未重启常用实例；未改Codex或Proma持久记忆/镜像/SYNC-MANIFEST。
 - 代码批次已即时提交：fe06c6e基线、33d77f0查询读取、acd15c7批量编辑、0dbed74日志、47be8a7 Pi边界、a291d8b聚合限额与测试。ae64181/d6df5a0保留测试调度尝试历史；后续提交恢复标准入口并固化本交接。按git定位，不抹失败历史。
 
-## 5 下一步与明确未完成项
+### 5 下一步与明确未完成项
 
 | 批次 | 当前状态 |
 | --- | --- |

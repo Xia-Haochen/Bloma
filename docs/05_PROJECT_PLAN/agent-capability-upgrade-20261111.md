@@ -2,7 +2,7 @@
 
 日期：2026-11-11（Asia/Shanghai）。核查基线：`sprint2 / 599ef1c74660e9960ee7c3a6970e3b0c81ce9ed9`。
 
-状态：**2026-11-11 用户已授权按计划实施；批次进度与验证边界见第16节。** 原文档批次仅为调研授权，后续工程授权不包含付费实验、部署、push或恢复暂停产品。本文承接现役 software-v1，不替代当前交付契约与已有缺陷记录。
+状态：**2026-11-12 本轮B0–B8本机工程/受控验证已收敛，90b636f完整标准605项及另组Python17项通过；最终Cua/干净Windows/真实付费模型效果受外部条件阻塞，整份计划不冒称全部验收。批次及边界见第16节和当前交接。** 原文档批次仅为调研授权，后续工程授权不包含付费实验、部署、push或恢复暂停产品。本文承接现役 software-v1，不替代当前交付契约与已有缺陷记录。
 
 配套阅读：[Vide 源码借鉴与适配设计](vide-adoption-design-20261111.md)。最近已实现能力以 [质量收尾](session-handoff-quality-closeout-20261110.md)、[行动优先界面](session-handoff-ux-action-first-20261110.md)、[启动新鲜度](session-handoff-startup-freshness-20261110.md) 和当前源码为准；旧目录索引的“待实施”不覆盖这些结果。
 
@@ -215,7 +215,7 @@ E1：复用runtime-manager、release-store、isolated-launch。定义固定候�
 - [WindowsAgentArena](https://github.com/microsoft/WindowsAgentArena)：可复现Windows评测设施，不是Bloma现成验收器。
 - Vide锁定源码、采用/改写/暂缓细项及风险见配套文档。
 
-**首批历史见[工具升级首批交接](session-handoff-tooling-upgrade-20261111.md)；本次续接至6696d39的标准check:offline（19文件206项+11文件137项）已真实整体通过，旧超时/音频问题已取证处理，未合入原sprint2。后续G1/C1/V2/Q1/Python/G2/O1/世代恢复/V5/E1/V3和受控工作流专项均已推进，见最新表与证据索引；当前整套仍须统一重跑，最终Cua/干净Windows及真实供应商收益未认证。** 各段历史验证只绑定相应批次；不能将早一版本19文件206项通过或后续单独复验拼成最终全通过。
+**当前总交接见[工具升级交接](session-handoff-tooling-upgrade-20261111.md)（顶部当前、下部首批历史）。90b636f完整原check:offline已exit0：原19文件207项+工具41文件398项，类型/docs/all build同时通过；同版本另组真实Python2文件17项通过。本轮本机工程范围已收敛，最终平台Cua/干净Windows及未授权真实供应商效果仍未认证，未合原sprint2或升级常用App。** 旧6696d39的343项、后续各专项及26309bb/2d2dd9b/a2245ed失败原样保留；这次605来自同一标准命令，不是拼接历史通过。
 
 | 批次 | 最新进度 |
 | --- | --- |
@@ -223,7 +223,7 @@ E1：复用runtime-manager、release-store、isolated-launch。定义固定候�
 | B1 | 查询/读取/增量命令/归档已接线；当前兼容形态对批量增量的真Pi两文件修复+长日志工作流已测，文件调用5→3而SDK轮数12→12，收益边界及反例明确 |
 | B2 | 局部调用与数值观测、有界只读批处理已落地；同步/异步命令同一受管理生命周期及事件等待定向通过；仍不全量开parallel |
 | B3 | 同文件多片段与hash保护完成；最多8文件全部预检后有序应用、逐项部分失败语义与真实Pi接线通过；不是跨文件原子事务 |
-| B4 | G1/V1首期DOM语义、当前观察refs、能力发现、浏览器/Electron真实调试接线专项通过；V2实际提交差异/进程展示及Pi历史回放已接线，最终平台App展示回归待统一 |
+| B4 | G1/V1首期DOM语义、当前观察refs、能力发现、浏览器/Electron真实调试接线专项通过；V2实际提交差异/进程展示及Pi历史回放已接线，离线展示/历史回归已随标准门通过，最终平台App Cua仍待外部条件 |
 | B5 | 首期可选交互探索接主收尾；真实隔离浏览器/受控Pi及原finding→独立绑定→失败/修复/复验/发布机制通过；真实模型收益未测；V3同伙伴三版真探针/定向问答/续接与停机成本受控验证通过，不推断自主收益 |
 | B6 | TS/JS worker之外补真实可选Jedi/Python固定stdio桥，真实Pi/版本/取消/坏后端等验证；T4已抓实际HTTP schema/context与恢复/撤销反例，不泛称总字节或费用下降 |
 | B7/B8 | G2/O1、自有HWND世代/重建/最小化、历史终态/双读者前向seq与V5运行目录/临时缓存防链接已实测；E1物理包/独立pin/CLI/证据回传经本机Node+Electron实测，最终外部环境继续 |
@@ -503,3 +503,11 @@ owned-directory保留每次lstat前后/创建后类型检查、每组件realpath
 定向**2passed/26未选** `continuation-correction-phase-focused.log`：真实纠正case约35.37s，阶段报告`correction-phase-focused.json`总34.68s，初始错误stage约11.51s、独立提案约5.12s、实际应用/host verify约11.71s、新正确stage约5.64s，全原预期通过。仍需按原双worker整体捕获不同负载下的失败阶段；未放宽或缩短故意错误断言等待、未引入mtime缓存/忽略hash等猜测性优化。
 
 六保护/原HEAD和唯一dirty blob再核不变，`continuation-protected.current-diagnostic.json`。本次未用干净bloma-semantic worktree已按可见终端无force删除，保留其branch和所有Python/失败/最终证据，不动用户.codex worktrees。项目AGENTS只补核验后的入口/命令/全局护栏（不提交），保留原链接，未写全局画像或项目memory。当前源码再次完整标准回归仍是下一必做，外部Cua/干净Windows/付费边界不变。
+
+### 2026-11-12 最终本机收敛：90b636f同一标准完整通过
+
+`offline-90b636f-job.json`最终finished/exit0，2026-11-12 02:36:36→03:19:41，前后完整HEAD90b636f1ed626eb61c9bc772cb2914a277b8e08a、tracked clean，仅原AGENTS/node_modules未跟踪。`offline-90b636f.log`原check的typecheck→docs→**全部构建**（renderer/main/worker/semantic/preload/templates）→verification19 **207/207**（752.25s、原双worker）→tooling41 **398/398**（1687.88s、单worker）全链实际完成：**60文件605项**。原19仅新增1条fixture取消drain反例，旧206项不删不skip，不提高任何既有case/生产/模型期限，原&&未改；不是把上一版本独立398与失败原组拼接。
+
+同代码后单独宿主TEST_*正向Python/Jedi **2文件17项**再次通过105.03s，`continuation-final-python.log`与-version.txt；不把另组17说成check命令自带或全仓测试。当前纠正casephase done/aborted=false总53.37s，四真实阶段约15.97/8.65/18.78/8.82s；收尾enter88.63s completed仍原90s signal内，case106.31s仍原120s。此前负载/冷初始化/截图失败全部保留，**不能因这一整套通过就宣称所有历史延时根因已穷尽或宿主无关恒定延时**。
+
+本机已授权建设与受控验证收敛；最终平台App Cua、干净Windows安装/断网/权限/旧数据系统矩阵，以及真实付费模型准确率/收益仍需外部条件/明确新授权，参见当前交接，不用工程夹具冒充。远端daemon、更多Flutter/TUI为原设计条件后续，不为凑全计划擅自扩张。六保护和原主树HEAD/唯一dirty blob最后仍不变，continuation-protected.final.json；不push/合原树/重启常用App/解暂停/清unknown/写持久记忆。后续收尾只同步本计划、README、证据导航和交接，生产/测试代码保持90b636f字节不变。
