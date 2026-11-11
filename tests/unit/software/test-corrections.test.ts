@@ -10,7 +10,7 @@ import {guiSuitePath} from '../../../main/desktop/gui-acceptance'
 import {buildSoftwareVerifyTool} from '../../../main/software/verification-tool'
 import {applyApprovedTestCorrections} from '../../../main/software/test-corrections'
 import {reviewPendingTestCorrections} from '../../../main/software/test-correction-review'
-import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync} from 'node:fs'
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,existsSync} from 'node:fs'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {createHash} from 'node:crypto'
@@ -32,8 +32,27 @@ import {buildTestCorrectionTools} from '../../../main/software/test-correction-t
 import {createSoftwareCollaborationPolicy} from '../../../main/software/collaboration-policy'
 import {createToolState} from '../../../main/agent/loop/agent-loop'
 let home:string,old:string|undefined,p:ReturnType<typeof createProject>,before:NativeGuiTests,original:string
+// A timed-out Vitest callback is not automatically cancelled. Keep its own
+// asynchronous work attached until it has stopped, before restoring HOME.
+let activeFixtureWork:{controller:AbortController;pending:Promise<unknown>;settled:boolean}|undefined
+function runScopedFixture<T>(body:(signal:AbortSignal)=>Promise<T>):Promise<T>{
+  if(activeFixtureWork)throw Error('PREVIOUS_FIXTURE_WORK_NOT_DRAINED')
+  const controller=new AbortController(),record={controller,pending:Promise.resolve().then(()=>body(controller.signal)),settled:false}
+  record.pending=record.pending.finally(()=>{record.settled=true})
+  activeFixtureWork=record
+  return record.pending
+}
+async function drainFixtureWork(){
+  const record=activeFixtureWork;if(!record)return
+  if(!record.settled)record.controller.abort(Error('FIXTURE_FINISHED'))
+  // The returned test promise retains its original rejection. Teardown only
+  // waits; it must not restart an operation or convert the test into a pass.
+  await record.pending.catch(()=>{})
+  if(activeFixtureWork===record)activeFixtureWork=undefined
+}
 const sha=(s:string|Buffer)=>createHash('sha256').update(s).digest('hex')
 beforeEach(()=>{
+  if(activeFixtureWork)throw Error('PREVIOUS_FIXTURE_WORK_NOT_DRAINED')
   old=process.env.PROMA_HOME;home=mkdtempSync(join(tmpdir(),'test-correction-'));process.env.PROMA_HOME=home
   p=createProject({request_id:'c',mode:'quick'},{workflowVersion:'software-v1'})
   const parsed=parseLeanBrief(JSON.stringify({action:'brief',goal:'保留创建记录',ui:'required',delivery:'browser',requirements:[{description:'保留原记录',expected:'旧记录保留创建时信息'}]}),{projectId:p.project_id,sessionId:'s',source:'保留原记录',previous:readPrdBackplane(p.project_id),software:true})!
@@ -45,7 +64,23 @@ beforeEach(()=>{
   const state={version:1,revision:1,attempts:[{id:'old-failed',stage:'first',scope:prdScopeFingerprint(readPrdBackplane(p.project_id)),source:'old',status:'failed',executed:true,covers:['F-001'],native:before,at:'past'}]}
   const dir=join(home,'software-stage-checks',p.project_id);mkdirSync(dir,{recursive:true});writeFileSync(join(dir,'state.json'),JSON.stringify({...state,checksum:sha(JSON.stringify(state))}))
 })
-afterEach(()=>{if(old===undefined)delete process.env.PROMA_HOME;else process.env.PROMA_HOME=old;rmSync(home,{recursive:true,force:true})})
+afterEach(async()=>{
+  const ownedHome=home,previousHome=old
+  await drainFixtureWork()
+  if(process.env.PROMA_HOME===ownedHome){if(previousHome===undefined)delete process.env.PROMA_HOME;else process.env.PROMA_HOME=previousHome}
+  rmSync(ownedHome,{recursive:true,force:true})
+})
+it('aborts and drains owned fixture work before its temporary home can be removed',async()=>{
+  const ownedHome=home;let stopped=false
+  const operation=runScopedFixture(async signal=>{
+    await new Promise<void>(resolve=>signal.addEventListener('abort',()=>resolve(),{once:true}))
+    await new Promise(resolve=>setTimeout(resolve,25))
+    expect(existsSync(ownedHome)).toBe(true);stopped=true
+  })
+  await new Promise(resolve=>setImmediate(resolve))
+  await drainFixtureWork();await operation
+  expect(stopped).toBe(true);expect(activeFixtureWork).toBeUndefined()
+})
 const proposal=()=>proposeTestCorrection(p.project_id,{contract_digest:before.digest,file:'acceptance.mjs',old_text:"toHaveText('current')",new_text:"toHaveText('created')",feature_ids:['F-001'],reason:'独立原始记录显示创建时值，当前值不是需求预期'})
 function decision(id:string){const evidence=join(home,'independent.json');writeFileSync(evidence,'{"observed":"created","original_assertion":"current"}');return{verdict:'approve' as const,reviewer:'independent_operator' as const,reason:'核对确认需求和独立原始记录后裁定',expected_sources:{'F-001':'旧记录保留创建时信息'},evidence:[{path:evidence,sha256:sha(readFileSync(evidence))}]}}
 it('adjudicates with isolated frozen inputs, preserves failure, and leaves application to the existing host',async()=>{
@@ -172,7 +207,16 @@ it('blocks publication while pending or approved-but-unapplied and rejects a dec
   syncDocuments({request_id:'change',project_id:p.project_id,session_id:'s',checkpoint:'requirement_confirmed'},changed);markPrdUserConfirmed(p.project_id)
   expect(()=>applyTestCorrection(p.project_id,a.id)).toThrow('NOT_APPROVED')
 })
-it('real browser: failed frozen expectation is retained, independently corrected, and must actually pass a new stage run',async()=>{
+it('real browser: failed frozen expectation is retained, independently corrected, and must actually pass a new stage run',async()=>runScopedFixture(async signal=>{
+  const started=performance.now(),events:Array<{phase:string;at_ms:number;event:string}>=[]
+  let currentPhase='setup',failure:string|undefined
+  const phase=async<T>(name:string,body:()=>Promise<T>)=>{
+    signal.throwIfAborted();currentPhase=name;events.push({phase:name,at_ms:performance.now()-started,event:'start'})
+    try{const result=await body();signal.throwIfAborted();events.push({phase:name,at_ms:performance.now()-started,event:'end'});return result}
+    catch(error){events.push({phase:name,at_ms:performance.now()-started,event:'error'});throw error}
+  }
+  const frozenOriginal=original
+  try{
   // A different project has no fabricated stage history; exercise the real path.
   const project=createProject({request_id:'browser',mode:'longterm'},{workflowVersion:'software-v1'}),id=project.project_id
   const parsed=parseLeanBrief(JSON.stringify({action:'brief',goal:'载入已创建记录',ui:'required',delivery:'browser',requirements:[{description:'载入记录',expected:'载入后显示created'}],project_plan:{version:1,current:'first',stages:[{id:'first',title:'载入',feature_ids:['F-001']}]}}),{projectId:id,sessionId:'s',source:'载入后显示created',previous:readPrdBackplane(id),software:true})!
@@ -182,13 +226,13 @@ it('real browser: failed frozen expectation is retained, independently corrected
   const listener=createServer();await new Promise<void>(r=>listener.listen(0,'127.0.0.1',r));const port=(listener.address() as {port:number}).port;await new Promise<void>(r=>listener.close(()=>r()))
   writeFileSync(join(project.root_path,'server.cjs'),`require('http').createServer((q,s)=>{s.setHeader('content-type','text/html');s.end('<button id="load" onclick="document.getElementById(\\'version\\').textContent=\\'created\\'">Load</button><p id="version"></p>')}).listen(${port},'127.0.0.1')`)
   writeFileSync(join(project.root_path,'LAUNCH.json'),JSON.stringify({schema_version:2,ui:'browser',command:['node','server.cjs'],url:`http://127.0.0.1:${port}`}))
-  writeFileSync(join(project.root_path,'acceptance.mjs'),original)
-  const failed=await verifyProjectStage(id,'first','acceptance.mjs',new AbortController().signal)
+  writeFileSync(join(project.root_path,'acceptance.mjs'),frozenOriginal)
+  const failed=await phase('initial_wrong_stage',()=>verifyProjectStage(id,'first','acceptance.mjs',signal))
   expect(failed.status).toBe('failed');expect(failed.feedback.scope).toBe('partial_cumulative_gui')
   const oldAttempt=readProjectStages(id).attempts[0],serverBefore=readFileSync(join(project.root_path,'server.cjs'),'utf8')
   registerNativeGuiTests(id,'acceptance.mjs')
   const a=proposeTestCorrection(id,{contract_digest:oldAttempt.native.digest,file:'acceptance.mjs',old_text:"toHaveText('current')",new_text:"toHaveText('created')",feature_ids:['F-001'],reason:'确认预期为created，失败证据实际也是created，current不符来源'})
-  const workingEdit=original.replace("toHaveText('current')","toHaveText('unfinished')")
+  const workingEdit=frozenOriginal.replace("toHaveText('current')","toHaveText('unfinished')")
   writeFileSync(join(project.root_path,'acceptance.mjs'),workingEdit)
   const reviewQuery:import('../../../main/orchestration/stages/orchestration-contracts').SDKQuery=async function*(prompt){
     const packet=JSON.parse(prompt)
@@ -197,19 +241,25 @@ it('real browser: failed frozen expectation is retained, independently corrected
     expect(readProjectStages(id).attempts.map(a=>a.status)).toEqual(['failed'])
     yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify({verdict:'approve',reason:'对照确认预期和独立隔离执行',assessment:[{feature:'F-001',preserved:true,reason:'实际加载并检查创建时值，旧失败保留'}]})}]}}
   }
-  await reviewPendingTestCorrections({projectId:id,sessionId:'s',query:reviewQuery,env:{},maxTokens:8192,signal:AbortSignal.timeout(60000)})
+  await phase('review_corrected_proposal',()=>reviewPendingTestCorrections({projectId:id,sessionId:'s',query:reviewQuery,env:{},maxTokens:8192,signal:AbortSignal.any([signal,AbortSignal.timeout(60000)])}))
   expect(testCorrectionView(id).proposals.find(row=>row.id===a.id)?.status).toBe('approved')
   expect(()=>applyApprovedTestCorrections(id)).toThrow('WORKING_BYTES_CHANGED')
   expect(readFileSync(join(project.root_path,'acceptance.mjs'),'utf8')).toBe(workingEdit)
-  writeFileSync(join(project.root_path,'acceptance.mjs'),original)
-  await buildSoftwareVerifyTool(id,createSoftwareCollaborationPolicy(id,project.root_path,'s')).execute({},{projectId:id,sessionId:'s',requestId:'approved-recovery',signal:AbortSignal.timeout(60000),state:createToolState()})
+  writeFileSync(join(project.root_path,'acceptance.mjs'),frozenOriginal)
+  await phase('apply_and_host_verify',()=>buildSoftwareVerifyTool(id,createSoftwareCollaborationPolicy(id,project.root_path,'s')).execute({},{projectId:id,sessionId:'s',requestId:'approved-recovery',signal:AbortSignal.any([signal,AbortSignal.timeout(60000)]),state:createToolState()}))
   expect(readFileSync(join(project.root_path,'acceptance.mjs'),'utf8')).toContain("toHaveText('created')")
   expect(readProjectStages(id).attempts[0].status).toBe('failed')
-  expect((await verifyProjectStage(id,'first','acceptance.mjs',new AbortController().signal)).status).toBe('passed')
+  expect((await phase('new_correct_stage',()=>verifyProjectStage(id,'first','acceptance.mjs',signal))).status).toBe('passed')
   expect(readProjectStages(id).attempts.map(a=>a.status)).toEqual(['failed','passed'])
   expect(readFileSync(join(project.root_path,'server.cjs'),'utf8')).toBe(serverBefore)
   expect(registerNativeGuiTests(id,'acceptance.mjs').covers).toEqual(['F-001'])
-},90000)
+  currentPhase='done'
+  }catch(error){failure=String(error).slice(0,1200);throw error}
+  finally{
+    const report=process.env.CORRECTION_PHASE_REPORT
+    if(report)try{writeFileSync(report,JSON.stringify({elapsed_ms:performance.now()-started,phase:currentPhase,aborted:signal.aborted,error:failure,events},null,2))}catch(error){console.error('CORRECTION_PHASE_REPORT_FAILED',String(error))}
+  }
+}),90000)
 
 it('host applies approved corrections once, while pending decisions and working conflicts remain blocked',()=>{
  const a=proposal();expect(()=>applyApprovedTestCorrections(p.project_id)).toThrow('REVIEW_REQUIRED')

@@ -491,3 +491,15 @@ owned-directory保留每次lstat前后/创建后类型检查、每组件realpath
 对两失败新增可选VERIFY_CLOSEOUT_REPORT诊断钩子，默认不启CPU profiler/额外磁盘写；启用时记录真实收尾publish/持久化/完成事件时间、结束project状态与Node CPU profile，不改query/权限/断言/90秒signal/120秒case期限。2case在原maxWorkers2下复测**2passed/33未选**，continuation-closeout-diagnostic-tests.log；收尾case约53.6s其中enter约42.54s、status completed，截图case真实四操作和PNG约2.53s通过。CPU有约5.17s GC/3.14s内部模块stat/17.48s idle，多处真实库存/FS工作；这是通过样本的profiling，**不能拿来断言旧失败具体哪一阶段超时，更不能当已修**。首份diagnostic publish只捕获了scope参数，后修为保留实际变参事件，尚需整体带诊断再跑。
 
 不因一次截图协议错误就改成假图/空图、吞异常或跳过截图；也不凭猜测加重试或改旧测试预期。下一立即带诊断运行完整现有管线，定位真实失败阶段并继续处理。最终状态以实际完整门为准，不把旧343或各专项相加。
+
+### 2026-11-12 a2245ed完整门与完整工具组、Python正向实测
+
+有限job已结束：`offline-a2245ed-job.json`记录前后均a2245edea05d2027e34339e526a2016591ea4621、tracked clean，只有原AGENTS/node_modules未跟踪。原check:offline类型/文档/all构建通过，但原verification19为**205/206**，唯一失败为test-corrections真实浏览器冻结预期纠正case90000ms；旧截图/Native/收尾本次有真实通过，不能据此穷尽旧偶发失败根因。收尾case实测enter约63.01s、completed，实际stage delivered；同次CPU中的idle27.01s、GC5.83s、internalModuleStat6.67s、lstat5.76s。前份focused profile重新完整累计internalModuleStat为4.89s而非上一段3.14s；两者都是通过样本，不能替代失败阶段诊断。
+
+原&&没有改。wrapper保留gate exit1后**另行顺序诊断**完整工具41文件，`offline-a2245ed-tooling-diagnostic.log` **41/41、398/398通过**，1799.28s；metadata独立diagnostic_tooling.code=0而总exit_code仍1。不能拼成标准整套通过。为不让Python正向继续被无关原组阻塞，在当前无其他job后另跑宿主显式TEST_*、保留私有Jedi/Parso的Python门：**2文件17项通过**108.92s，`continuation-a2245ed-python.log/version.txt`。未启生产BLOMA_*污染缺后端反例、未重装/动系统Python。两者实测均绑定此生产源码，不把此前53专项和当前相加冒称统一全过。
+
+对剩余纠正case补**按阶段的可选CORRECTION_PHASE_REPORT**。明确Vitest callback timeout并不取消其异步操作；现在该case owned AbortController在afterEach先abort/drain，再恢复PROMA_HOME/删除归属home，不让迟到工作落入下个fixture环境。每个真实阶段前后检查取消；review/host verify仍原60秒（与fixture信号any），总case仍90秒，原current→created业务断言、4次真实验证、独立审阅、working冲突/旧失败/源码不变断言全部保留。新增25ms真实异步drain反例证明home保留到任务确实结束，原test promise错误不会被teardown catch改成成功；不把只修测试资源生命周期说成已修生产性能或旧超时。
+
+定向**2passed/26未选** `continuation-correction-phase-focused.log`：真实纠正case约35.37s，阶段报告`correction-phase-focused.json`总34.68s，初始错误stage约11.51s、独立提案约5.12s、实际应用/host verify约11.71s、新正确stage约5.64s，全原预期通过。仍需按原双worker整体捕获不同负载下的失败阶段；未放宽或缩短故意错误断言等待、未引入mtime缓存/忽略hash等猜测性优化。
+
+六保护/原HEAD和唯一dirty blob再核不变，`continuation-protected.current-diagnostic.json`。本次未用干净bloma-semantic worktree已按可见终端无force删除，保留其branch和所有Python/失败/最终证据，不动用户.codex worktrees。项目AGENTS只补核验后的入口/命令/全局护栏（不提交），保留原链接，未写全局画像或项目memory。当前源码再次完整标准回归仍是下一必做，外部Cua/干净Windows/付费边界不变。
