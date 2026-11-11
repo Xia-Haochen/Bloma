@@ -72,6 +72,21 @@ it('never adopts or writes to a persisted PID from another host instance', async
   expect((await t.write_process.execute({ process_id: id, text: 'must not send' }, ctx)).isError).toBe(true)
   expect(process.kill(process.pid, 0)).toBe(true)
 })
+it('legacy waiting uses the same owned process and archive without starting the command twice',async()=>{
+  writeFileSync(join(project.root_path,'legacy.cjs'),`require('fs').appendFileSync('legacy-count.txt','1');console.log('legacy result')`)
+  const t=tools(),result=await t.run_command.execute({command:['node','legacy.cjs']},ctx),view=JSON.parse(result.output)
+  expect(result.isError).not.toBe(true);expect(view).toMatchObject({execution_status:'completed',exit_code:0,stdout:'legacy result\n',task_completion:'unverified'})
+  expect(view.process_id).toMatch(/^[a-f0-9-]{36}$/);expect(view.output).toBeUndefined()
+  expect(softwareProcess(project.project_id,view.process_id,'s').kind).toBe('command')
+  expect(JSON.stringify(JSON.parse((await t.read_process.execute({process_id:view.process_id,mode:'log'},ctx)).output))).toContain('legacy result')
+  expect(readFileSync(join(project.root_path,'legacy-count.txt'),'utf8')).toBe('1')
+},15000)
+it('a silent command stop wakes an event waiter without a 30-second polling stall',async()=>{
+  const t=tools(),view=JSON.parse((await t.run_command.execute({command:['node','-e','setInterval(()=>{},1000)'],yield_ms:0,timeout_ms:10000},ctx)).output)
+  const waiting=readSoftwareProcess(project.project_id,view.process_id,'s',0,30000)
+  await t.stop_process.execute({process_id:view.process_id},ctx)
+  expect((await waiting).completion_reason).toBe('cancelled')
+},15000)
 it('buffers split UTF-8 and credential lines and marks bounded output with a monotonic cursor', () => {
   const buffer = createProcessOutput(text => text.replace(/api_key=\S+/g, 'api_key=[REDACTED]'))
   const chinese = Buffer.from('中文\n'); buffer.push('stdout', chinese.subarray(0, 2)); buffer.push('stdout', chinese.subarray(2))

@@ -1,8 +1,6 @@
 import type { AgentLoopTool, ToolContext } from '../agent/loop/agent-loop'
 import { findProject } from '../project/project-service'
-import { executeSoftwareCommand, projectDirectory } from './command-runtime'
-import { DriverExecutionError } from '../desktop/process-driver'
-import { dependencyFailureCode, dependencyInputVersion, inspectProjectDependencies, isDependencySetup } from './dependency-state'
+import { dependencyFailureCode, inspectProjectDependencies } from './dependency-state'
 import { startSoftwareProcess, softwareProcess, readSoftwareProcess, readSoftwareProcessLog, writeSoftwareProcess, stopSoftwareProcess, redactSoftwareOutput, activeSoftwarePreview, type SoftwareProcessSnapshot } from './process-manager'
 
 const commandSchema = { type: 'array', minItems: 1, maxItems: 128, items: { type: 'string' } }
@@ -30,37 +28,32 @@ function commandView(snapshot: SoftwareProcessSnapshot & { next_seq?: number; ou
 /** Tool schemas describe arguments; stdout and exit code are execution facts,
  * never a product verification PASS. Standard engineering tools stay available. */
 export function buildSoftwareExecutionTools(projectId: string, beforeExecute?: (ctx: ToolContext) => void, previewChanged?: (url?: string) => void): AgentLoopTool[] {
-  const run: AgentLoopTool = { name: 'run_command', description: '执行项目工程命令，command为参数数组，不隐式启动shell。安装/构建/测试可加yield_ms:1000：等待至多该时间后返回process_id，命令继续执行，使用read_process增量读取/等待、write_process输入、stop_process停止，不要重复启动。省略yield_ms保留同步调用。单命令默认120秒、上限300秒；退出成功不等于产品通过。',
+  const run: AgentLoopTool = { name: 'run_command', description: '执行项目工程命令，command为参数数组，不隐式启动shell。安装/构建/测试可加yield_ms:1000：等待至多该时间后返回process_id，命令继续执行，使用read_process增量读取/等待、write_process输入、stop_process停止，不要重复启动。省略yield_ms等待同一受管理进程结束，兼容stdout/stderr尾部；所有命令均保留process_id与日志，不走第二条执行路径。单命令默认120秒、上限300秒；退出成功不等于产品通过。',
     input_schema: { type: 'object', required: ['command'], properties: { command: commandSchema, cwd: { type: 'string' }, timeout_ms: { type: 'integer', minimum: 100, maximum: 300000 }, yield_ms: { type: 'integer', minimum: 0, maximum: 30000 } } },
     execute: async (input, ctx) => {
-      let setupRoot: string | undefined
+      let processId: string | undefined
       try {
         beforeExecute?.(ctx); admission(projectId, ctx)
-        const root = findProject(projectId).root_path
-        if (input.yield_ms !== undefined) {
-          if (!Number.isSafeInteger(input.yield_ms) || Number(input.yield_ms) < 0 || Number(input.yield_ms) > 30000) throw Error('COMMAND_YIELD_INVALID')
-          const started = await startSoftwareProcess({ projectId, sessionId: ctx.sessionId, root, command: input.command,
-            cwd: input.cwd as string | undefined, signal: ctx.signal, kind: 'command', timeoutMs: input.timeout_ms as number | undefined ?? 120000 })
-          const snapshot = await readSoftwareProcess(projectId, started.id, ctx.sessionId, 0, Number(input.yield_ms), ctx.signal), result = commandView(snapshot)
-          return { output: JSON.stringify(result), isError: ['failed','cancelled'].includes(result.execution_status), detail: { process_id: started.id },
-            feedback: { schema_version: 1, source: 'host', scope: 'command_execution', execution: result.execution_status as 'running'|'completed'|'failed'|'cancelled',
-              verification: 'not_applicable', task_completion: 'unverified', recovery: result.execution_status === 'running' ? 'inspect' : 'none' } }
+        if (input.yield_ms !== undefined && (!Number.isSafeInteger(input.yield_ms) || Number(input.yield_ms) < 0 || Number(input.yield_ms) > 30000)) throw Error('COMMAND_YIELD_INVALID')
+        const started = await startSoftwareProcess({ projectId, sessionId: ctx.sessionId, root: findProject(projectId).root_path, command: input.command,
+          cwd: input.cwd as string | undefined, signal: ctx.signal, kind: 'command', timeoutMs: input.timeout_ms as number | undefined ?? 120000 })
+        processId = started.id
+        let snapshot = await readSoftwareProcess(projectId, started.id, ctx.sessionId, 0, Number(input.yield_ms ?? 30000), ctx.signal)
+        // Waiting policy and command deadline are separate. Legacy callers wait
+        // for the same managed process, never launch a second synchronous path.
+        while (input.yield_ms === undefined && ['starting','running','stopping'].includes(snapshot.state)) {
+          snapshot = await readSoftwareProcess(projectId, started.id, ctx.sessionId, snapshot.next_seq, 30000, ctx.signal)
         }
-        if (isDependencySetup(input.command)) setupRoot = projectDirectory(root, input.cwd as string | undefined)
-        const result = await executeSoftwareCommand({ projectId, root: findProject(projectId).root_path, command: input.command,
-          cwd: input.cwd as string | undefined, timeoutMs: input.timeout_ms as number | undefined, signal: ctx.signal })
-        return { output: JSON.stringify({ exit_code: result.code, stdout: redactSoftwareOutput(result.stdout).slice(-24000), stderr: redactSoftwareOutput(result.stderr).slice(-12000),
-          ...(setupRoot ? { dependencies: inspectProjectDependencies(setupRoot), ...(result.code !== 0 ? {
-            code: dependencyFailureCode('exit', result.stderr), input_version: dependencyInputVersion(setupRoot, input.command),
-            next: '按安装日志与缺失项恢复；同一失败未解除前，不原样重试完整安装。' } : {}) } : {}) }), isError: result.code !== 0 }
+        const legacy = input.yield_ms === undefined
+        const result = commandView(snapshot, legacy)
+        return { output: JSON.stringify(result), isError: ['failed','cancelled'].includes(result.execution_status), detail: { process_id: started.id },
+          feedback: { schema_version: 1, source: 'host', scope: 'command_execution', execution: result.execution_status as 'running'|'completed'|'failed'|'cancelled',
+            verification: 'not_applicable', task_completion: 'unverified', recovery: result.execution_status === 'running' ? 'inspect' : 'none' } }
       } catch (error) {
-        const message = redactSoftwareOutput(error instanceof Error ? error.message : String(error))
-        if (error instanceof DriverExecutionError) return { output: JSON.stringify({ code: setupRoot ? dependencyFailureCode(error.kind, error.stderr) : `COMMAND_${error.kind.toUpperCase().replaceAll('-', '_')}`,
-          message, stdout: redactSoftwareOutput(error.stdout), stderr: redactSoftwareOutput(error.stderr),
-          ...(setupRoot ? { dependencies: inspectProjectDependencies(setupRoot), input_version: dependencyInputVersion(setupRoot, input.command),
-            next: '保留已有安装和缓存，按具体日志排查下载或安装脚本；不要将超时当作全部依赖缺失而反复整包安装。' } : {}) }), isError: true }
-        return { output: message, isError: true }
+        if (processId && ctx.signal.aborted) await stopSoftwareProcess(projectId, processId, ctx.sessionId).catch(() => undefined)
+        return { output: redactSoftwareOutput(error instanceof Error ? error.message : String(error)), isError: true }
       }
+
     } }
   const start: AgentLoopTool = { name: 'start_service', description: '启动项目内受管理的开发服务器/后台进程，立即保留身份与日志。APP_DATA_DIR由宿主提供在工程外，不要自行覆盖为项目内的临时目录，否则保存数据会改变源码版本。url填写实际HTTP回环地址时等待就绪；相同已拥有服务自动复用，后续用read_process/stop_process。不要用run_command挂住长期服务。',
     input_schema: { type: 'object', required: ['command'], properties: { command: commandSchema, cwd: { type: 'string' }, url: { type: 'string' } } },

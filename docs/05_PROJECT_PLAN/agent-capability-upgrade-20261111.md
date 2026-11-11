@@ -221,7 +221,7 @@ E1：复用runtime-manager、release-store、isolated-launch。定义固定候�
 | --- | --- |
 | B0 | 文件/编辑基线已测，其它场景未齐 |
 | B1 | 查询、读取、命令结果/日志首期已接线及专项验证；端到端收益未证 |
-| B2 | 局部调用身份与数值观测已完成；仍串行，命令生命周期统一未做 |
+| B2 | 局部调用与数值观测、有界只读批处理已落地；同步/异步命令同一受管理生命周期及事件等待定向通过；仍不全量开parallel |
 | B3 | 同文件批量与hash保护已完成；多文件语义未做 |
 | B4–B8 | GUI/Vide、独立探索、语义代码、原生/故障取证、干净环境等未实施 |
 
@@ -286,3 +286,11 @@ read_file默认16000字符/48000 UTF-8字节，最长16MiB文本；长行有版�
 组合回归5文件54项通过，包含上轮两个超时夹具、音频8项、真实执行和新库存/路径反例；类型与main构建通过。证据continuation-regression-tests.log、continuation-b0-typecheck.log、continuation-b0-build.log。尚未在后续全部代码完成前重跑完整check:offline，不把这个小组PASS替代整套。
 
 B8资源前置实查：WindowsSandbox.exe不存在、Hyper-V模块不可用，hypervisor存在但不能据此推定可启动Windows执行器；C盘仅约11.2GB空闲。不会自动安装镜像、开启管理员系统功能或声称worktree等于干净Windows。先完成可用模块，干净机实际资格仍为环境阻塞。
+
+### 2026-11-11 B2续：统一受管理命令与事件等待
+
+run_command省略yield_ms仍等待完成并给兼容stdout/stderr，但现在与yield路径共用start/readSoftwareProcess，返回相同process_id、身份、期限、停止、日志归档和依赖结果；等待窗口与120秒默认/300秒上限命令期限分离，不因读取或短等待重新启动。默认不改成强制多一次模型轮询。底层验证驱动executeSoftwareCommand仍是驱动专用执行器，不冒充自由工程工具第二条生命周期。
+
+readSoftwareProcess去掉每次50毫秒轮询，使用同一OwnedProcess的有界change事件/超时/取消等待；输出与终态通知都能唤醒，finally移除监听。静默命令停止不再有“close已发生、状态稍晚改变而等满30秒”的窗口。不凭旧PID接管。仍不为PTY或白名单同步文件IO无收益地全开parallel，保留计划允许的有界只读批处理。
+
+执行/异步/归档3文件21项通过；新增旧等待同一process/归档/仅启动一次、静默停止唤醒用例后异步8项通过，真实Pi增量读链、取消/timeout/stdin/EOF/退出与任务未验证区分保留。typecheck/main构建通过：continuation-b2-tests.log、continuation-b2-final-tests.log、continuation-b2-typecheck.log、continuation-b2-build.log。重启去重与连接恢复仍在V4后续集成，不据此声称已认证所有重放排列。
