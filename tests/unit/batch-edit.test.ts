@@ -91,3 +91,41 @@ it('does not apply a later span to bytes introduced by an earlier replacement', 
   const result = replaceMultipleTexts('one two', [{ old_string: 'one', new_string: 'two' }, { old_string: 'two', new_string: 'three' }])
   expect(result).toEqual({ ok: true, content: 'two three' })
 })
+
+async function multiple(f:ReturnType<typeof fixture>){
+  for(const name of ['two','three'])writeFileSync(join(f.project.root_path,`src/${name}.js`),`const ${name} = 1\n`)
+  const paths=['src/app.js','src/two.js','src/three.js']
+  await f.tools.find(t=>t.name==='read_file')!.execute({files:paths.map(path=>({path}))},f.ctx)
+  return paths.map((path,index)=>({path,edits:[{old_string:index===0?'first = 1':`${index===1?'two':'three'} = 1`,new_string:index===0?'first = 7':`${index===1?'two':'three'} = 7`}]}))
+}
+it('prechecks every file and validates each once before ordered nontransactional writes',async()=>{
+ const f=fixture(),files=await multiple(f),syntax=vi.fn(async()=>({ok:true as const}));setJsSyntaxCheckerForTests(syntax)
+ const tool=f.tools.find(t=>t.name==='edit_file')!,result=JSON.parse((await tool.execute({files},f.ctx)).output)
+ expect(result).toMatchObject({code:'EDIT_MULTI_APPLIED',atomic:false,applied:files.map(file=>file.path)})
+ expect(syntax).toHaveBeenCalledTimes(3)
+ for(const file of files)expect(readFileSync(join(f.project.root_path,file.path),'utf8')).toContain('= 7')
+})
+it('any preflight ambiguity, duplicate, scope or frozen-file refusal leaves all files untouched',async()=>{
+ const f=fixture(),files=await multiple(f),tool=f.tools.find(t=>t.name==='edit_file')!
+ files[1].edits[0].old_string='missing'
+ expect(JSON.parse((await tool.execute({files},f.ctx)).output).code).toBe('EDIT_MULTI_PREFLIGHT_FAILED')
+ expect(readFileSync(f.file,'utf8')).toContain('first = 1')
+ expect((await tool.execute({files:[files[0],files[0]]},f.ctx)).output).toContain('DUPLICATE_PATH')
+ const guarded=fixture({assertFileWrite:(path)=>{if(path==='src/two.js')throw Error('FROZEN_TEST_WRITE_DENIED')}}),guardedFiles=await multiple(guarded)
+ expect((await guarded.tools.find(t=>t.name==='edit_file')!.execute({files:guardedFiles},guarded.ctx)).output).toContain('FROZEN_TEST_WRITE_DENIED')
+ expect(readFileSync(guarded.file,'utf8')).toContain('first = 1')
+})
+it('returns exact applied/failed/not-attempted facts without rolling back an external rewrite',async()=>{
+ let f:ReturnType<typeof fixture>
+ f=fixture({onProjectFilesChanged:()=>writeFileSync(join(f.project.root_path,'src/two.js'),'const two = 9\n')})
+ const files=await multiple(f),result=JSON.parse((await f.tools.find(t=>t.name==='edit_file')!.execute({files},f.ctx)).output)
+ expect(result.code).toBe('EDIT_MULTI_PARTIAL');expect(result.results.map((item:{state:string})=>item.state)).toEqual(['applied','failed','not_attempted'])
+ expect(readFileSync(f.file,'utf8')).toContain('first = 7');expect(readFileSync(join(f.project.root_path,'src/two.js'),'utf8')).toContain('two = 9')
+ expect(readFileSync(join(f.project.root_path,'src/three.js'),'utf8')).toContain('three = 1')
+})
+it('reports partial application on cancellation and never attempts the remaining files',async()=>{
+ let f:ReturnType<typeof fixture>;f=fixture({onProjectFilesChanged:()=>f.controller.abort()})
+ const files=await multiple(f),result=JSON.parse((await f.tools.find(t=>t.name==='edit_file')!.execute({files},f.ctx)).output)
+ expect(result.code).toBe('EDIT_MULTI_PARTIAL');expect(result.applied).toEqual(['src/app.js'])
+ expect(readFileSync(join(f.project.root_path,'src/two.js'),'utf8')).toContain('two = 1')
+})

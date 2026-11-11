@@ -222,7 +222,7 @@ E1：复用runtime-manager、release-store、isolated-launch。定义固定候�
 | B0 | 文件/编辑基线已测，其它场景未齐 |
 | B1 | 查询、读取、命令结果/日志首期已接线及专项验证；端到端收益未证 |
 | B2 | 局部调用与数值观测、有界只读批处理已落地；同步/异步命令同一受管理生命周期及事件等待定向通过；仍不全量开parallel |
-| B3 | 同文件批量与hash保护已完成；多文件语义未做 |
+| B3 | 同文件多片段与hash保护完成；最多8文件全部预检后有序应用、逐项部分失败语义与真实Pi接线通过；不是跨文件原子事务 |
 | B4–B8 | GUI/Vide、独立探索、语义代码、原生/故障取证、干净环境等未实施 |
 
 后续在本节按实际证据更新，不能仅因合入代码标记真实模型提效完成。
@@ -294,3 +294,9 @@ run_command省略yield_ms仍等待完成并给兼容stdout/stderr，但现在与
 readSoftwareProcess去掉每次50毫秒轮询，使用同一OwnedProcess的有界change事件/超时/取消等待；输出与终态通知都能唤醒，finally移除监听。静默命令停止不再有“close已发生、状态稍晚改变而等满30秒”的窗口。不凭旧PID接管。仍不为PTY或白名单同步文件IO无收益地全开parallel，保留计划允许的有界只读批处理。
 
 执行/异步/归档3文件21项通过；新增旧等待同一process/归档/仅启动一次、静默停止唤醒用例后异步8项通过，真实Pi增量读链、取消/timeout/stdin/EOF/退出与任务未验证区分保留。typecheck/main构建通过：continuation-b2-tests.log、continuation-b2-final-tests.log、continuation-b2-typecheck.log、continuation-b2-build.log。重启去重与连接恢复仍在V4后续集成，不据此声称已认证所有重放排列。
+
+### 2026-11-11 B3续：有序多文件编辑（明确非原子）
+
+edit_file沿原入口增加files（最多8文件、每文件1~32处，整体原输入大小门），与单文件形态二选一。所有路径/内容hash/授权/冻结保护/片段唯一性/语法先全部预检，任何预检失败不写任何文件；单文件语法只验证一次。实际依次在原写租约/CAS中提交，提交点仍重新核对路径/权限/取消/内容版本。失败或取消立即停止后续项，返回applied/failed/not_attempted各项事实；不回滚他人的并发改写，也不宣传跨文件原子事务或崩溃自动回滚。
+
+四文件48项通过，含原护栏与新增多文件全预检拒绝、重复路径、冻结拒绝、首项后外部同长改写、取消后保留已写事实。实际Pi AgentSession分别执行单文件和多文件schema各一例，仍保留读取批内失败；收紧多文件额外参数后2文件14项复测通过，typecheck通过，主构建在额外schema约束前通过（最终整套会重新构建）。证据continuation-b3-final-tests.log、continuation-b3-schema-tests.log、continuation-b3-typecheck.log、continuation-b3-build.log。未做真实模型格式/费用对照，不将工具级通过替代产品验收。

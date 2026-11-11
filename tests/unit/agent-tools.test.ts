@@ -322,12 +322,11 @@ describe('agent-tools（PR2 L2）', () => {
       expect(readFileSync(join(project.root_path, 'src', 'app.js'), 'utf8')).toBe('const a = 1;\n')
     })
 
-    it('edit_file schema：path必填，diff单片段与批量参数分别约束', async () => {
+    it('edit_file schema：单文件各形态要求path，多文件显式files及每项path/edits', async () => {
       const project = createProject({ request_id: 'req-e4', mode: 'quick' })
       const tools = composeTools({ projectId: project.project_id })
       const edit = byName(tools, 'edit_file')
-      expect(edit.input_schema.required).toEqual(['path'])
-      expect(edit.input_schema).toMatchObject({ anyOf: [{ required: ['old_string', 'new_string'] }, { required: ['edits'] }, { required: ['content'] }] })
+      expect(edit.input_schema).toMatchObject({ anyOf: [{ required: ['path','old_string','new_string'] }, { required: ['path','edits'] }, { required: ['path','content'] }, { required: ['files'] }], properties: { files: { minItems: 1, maxItems: 8, items: { required: ['path','edits'] } } } })
     })
 
     it('edit_file whole 模式：content 整文件重写（弱渠道能力位）', async () => {

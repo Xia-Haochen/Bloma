@@ -386,7 +386,7 @@ export function buildAgentTools(options: BuildAgentToolsOptions): AgentLoopTool[
   }
 
   /** 落盘前统一护栏：路径沙箱 + 可写范围 + 语法/结构校验 + 修复预算门 + meta CSP 剥离 + 依赖白名单拦截。 */
-  const validateAndWrite = async (root: string, rel: string, content: string, ctx: ToolContext, expectedRevision?: string): Promise<ToolOutcome> => {
+  const validateAndWrite = async (root: string, rel: string, content: string, ctx: ToolContext, expectedRevision?: string, validation: { preflightOnly?: boolean; syntaxChecked?: boolean } = {}): Promise<ToolOutcome> => {
     ctx.signal.throwIfAborted()
     options.assertFileWrite?.(rel, ctx)
     if (!isWritablePath(rel, realVariant)) return { output: notWritableError(rel, realVariant), isError: true }
@@ -398,15 +398,12 @@ export function buildAgentTools(options: BuildAgentToolsOptions): AgentLoopTool[
       const cdnViolation = options.software ? undefined : externalResourceViolation(content)
       if (cdnViolation) return { output: `${cdnViolation}\n模板依赖白名单禁止外部资源（内联实现或本地文件）；请去除外链后重新提交。`, isError: true }
     }
-    if (extname(rel).toLowerCase() === '.js') {
+    if (extname(rel).toLowerCase() === '.js' && !validation.syntaxChecked) {
       const syntax = await jsSyntaxChecker(content)
       if (!syntax.ok) {
         return { output: `JS 语法校验未通过，已拒绝写入 ${rel}：\n${syntax.error}\n请读完错误定位后修改再提交。`, isError: true }
       }
     }
-    // 修复预算门：路径/参数/语法均校验通过后才烧预算（无效调用不烧，对齐注释语义）
-    const budget = guardRepairBudget(ctx)
-    if (budget) return budget
     const finalContent = !options.software && extname(rel).toLowerCase() === '.html' ? stripMetaCsp(content) : content
     const abs = join(root, rel)
     // P1-06（2026-09-26 运行审计）：提交点写入原语——CAS 版本校验（收窄 TOCTOU：
@@ -422,6 +419,11 @@ export function buildAgentTools(options: BuildAgentToolsOptions): AgentLoopTool[
     const actual = relative(realpathSync(root), physicalTarget).replace(/\\/g, '/')
     const normalize = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value
     if (normalize(actual) !== normalize(rel)) return { output: 'PATH_ALIAS_WRITE_DENIED: 请使用真实路径重新读取并通过原权限检查', isError: true }
+    if (expectedRevision && !fileRevisionMatches(abs, expectedRevision)) return { output: 'STALE_READ: 提交前内容版本已改变', isError: true, detail: { code: 'STALE_READ', path: rel } }
+    if (validation.preflightOnly) return { output: 'PRECHECKED', detail: { path: rel } }
+    // 修复预算门：路径/参数/语法均校验通过后才烧预算（无效调用不烧，对齐注释语义）
+    const budget = guardRepairBudget(ctx)
+    if (budget) return budget
     const committed = commitFileWrite({
       projectId: ctx.projectId,
       root,
@@ -612,16 +614,23 @@ export function buildAgentTools(options: BuildAgentToolsOptions): AgentLoopTool[
     },
   }
 
+  const editBatchItem = { type: 'object', additionalProperties: false, required: ['path', 'edits'], properties: {
+    path: { type: 'string', minLength: 1 }, expected_revision: { type: 'string' },
+    edits: { type: 'array', minItems: 1, maxItems: 32, items: { type: 'object', required: ['old_string', 'new_string'], properties: {
+      old_string: { type: 'string', minLength: 1 }, new_string: { type: 'string' },
+    } } },
+  } }
   const edit_file: AgentLoopTool = {
     name: 'edit_file',
     description:
       editFormat === 'diff'
-        ? '精确替换：path+old_string+new_string，或path+edits数组（1~32处）。所有edits基于同一原文，重叠/歧义整批拒绝，一次校验写入；批量必须先read_file取得内容hash。可传expected_revision防止旧版本写入。'
+        ? '精确替换：path+old_string+new_string，或path+edits数组（1~32处）。所有edits基于同一原文，重叠/歧义整批拒绝，一次校验写入；批量必须先read_file取得内容hash。可传expected_revision防止旧版本写入。files支持最多8文件：先全部预检，再有序应用；非原子，失败即停止、返回逐文件已应用/失败/未尝试，不回滚他人修改。'
         : '整文件重写修改：提供 path + content（修改后的完整文件内容）。写入前会做语法校验。',
     input_schema: {
       type: 'object',
       properties: {
         path: { type: 'string', minLength: 1, pattern: '\\S', description: '项目内相对路径' },
+        files: { type: 'array', minItems: 1, maxItems: 8, items: editBatchItem },
         old_string: { type: 'string', description: '（diff 模式）要替换的唯一原文片段' },
         new_string: { type: 'string', description: '（diff 模式）替换后的内容' },
         content: { type: 'string', description: '（whole 模式）修改后的完整文件内容' },
@@ -630,10 +639,59 @@ export function buildAgentTools(options: BuildAgentToolsOptions): AgentLoopTool[
           old_string: { type: 'string', minLength: 1 }, new_string: { type: 'string' },
         } } },
       },
-      required: ['path'],
-      ...(editFormat === 'diff' ? { anyOf: [{ required: ['old_string', 'new_string'] }, { required: ['edits'] }, { required: ['content'] }] } : {}),
+      anyOf: [{ required: ['path', 'old_string', 'new_string'] }, { required: ['path', 'edits'] }, { required: ['path', 'content'] }, { required: ['files'] }],
     },
     execute: async (toolInput, ctx) => {
+      if (toolInput.files !== undefined) {
+        if (toolInput.path !== undefined || toolInput.edits !== undefined || toolInput.content !== undefined || toolInput.old_string !== undefined || toolInput.new_string !== undefined || toolInput.expected_revision !== undefined
+          || !Array.isArray(toolInput.files) || !toolInput.files.length || toolInput.files.length > 8) return { output: 'EDIT_MULTI_INVALID: files含1~8文件，与单文件参数二选一', isError: true }
+        if (decideWrite(JSON.stringify(toolInput.files)) === 'chunk') return { output: 'EDIT_MULTI_TOO_LARGE', isError: true }
+        const root = projectRoot(), seen = new Set<string>()
+        const prepared: Array<{ rel: string; revision: string; content: string }> = []
+        const results: Array<{ path: string; state: string; error?: string; revision?: string }> = []
+        for (const raw of toolInput.files) {
+          let path = '?'
+          try {
+            ctx.signal.throwIfAborted()
+            if (!raw || typeof raw !== 'object') throw Error('EDIT_MULTI_ITEM_INVALID')
+            const item = raw as Record<string, unknown>; path = String(item.path ?? '?')
+            if (Object.keys(item).some(key => !['path', 'expected_revision', 'edits'].includes(key))) throw Error('EDIT_MULTI_ITEM_ARGUMENT_INVALID')
+            const resolved = resolveInsideProject(root, item.path)
+            if (!resolved.ok) throw Error(resolved.error)
+            const key = process.platform === 'win32' ? resolved.rel.toLowerCase() : resolved.rel
+            if (seen.has(key)) throw Error('EDIT_MULTI_DUPLICATE_PATH'); seen.add(key)
+            const denied = guardWriteScope(resolved.rel); if (denied) throw Error(denied.output)
+            options.assertFileWrite?.(resolved.rel, ctx)
+            if (!isWritablePath(resolved.rel, realVariant)) throw Error(notWritableError(resolved.rel, realVariant))
+            const revision = typeof item.expected_revision === 'string' ? item.expected_revision : fileRevisionsOf(ctx).get(resolved.rel)
+            if (!revision || !/^[0-9a-f]{64}$/.test(revision)) throw Error('CONTENT_REVISION_REQUIRED')
+            if (!Array.isArray(item.edits) || !item.edits.length || item.edits.length > 32 || item.edits.some(e => !e || typeof e !== 'object'
+              || typeof e.old_string !== 'string' || !e.old_string || typeof e.new_string !== 'string')) throw Error('EDIT_BATCH_INVALID')
+            const bytes = readFileSync(resolved.abs)
+            if (contentRevision(bytes) !== revision) throw Error('STALE_READ')
+            const next = replaceMultipleTexts(bytes.toString('utf8'), item.edits as TextEdit[])
+            if (!next.ok) throw Error(`${next.code}: item ${next.index + 1}`)
+            const checked = await validateAndWrite(root, resolved.rel, next.content, ctx, revision, { preflightOnly: true })
+            if (checked.isError || checked.budgetExhausted) throw Error(checked.output)
+            prepared.push({ rel: resolved.rel, revision, content: next.content })
+            results.push({ path: resolved.rel, state: 'prechecked' })
+          } catch (error) { results.push({ path, state: 'preflight_failed', error: String(error).slice(0, 1200) }) }
+        }
+        if (results.some(result => result.state !== 'prechecked')) return { output: JSON.stringify({ code: 'EDIT_MULTI_PREFLIGHT_FAILED', atomic: false, applied: [], results }), isError: true }
+        const applied: string[] = []
+        for (const [index, item] of prepared.entries()) {
+          try {
+            const outcome = await validateAndWrite(root, item.rel, item.content, ctx, item.revision, { syntaxChecked: true })
+            if (outcome.isError || outcome.budgetExhausted) throw Error(outcome.output)
+            applied.push(item.rel); results[index] = { path: item.rel, state: 'applied', revision: fileRevisionsOf(ctx).get(item.rel) }
+          } catch (error) {
+            results[index] = { path: item.rel, state: 'failed', error: String(error).slice(0, 1200) }
+            for (let rest = index + 1; rest < results.length; rest++) results[rest].state = 'not_attempted'
+            return { output: JSON.stringify({ code: 'EDIT_MULTI_PARTIAL', atomic: false, applied, results }), isError: true }
+          }
+        }
+        return { output: JSON.stringify({ code: 'EDIT_MULTI_APPLIED', atomic: false, applied, results }), detail: { paths: applied } }
+      }
       const project = findProject(projectId)
       const resolved = resolveInsideProject(projectRoot(), toolInput.path)
       if (!resolved.ok) return { output: resolved.error, isError: true }
