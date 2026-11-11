@@ -19,8 +19,8 @@ const args={task:'核对方案',role:'research' as const,readOnly:true,independe
 
 it('supplies actual retained probe steps after the window closes without making them current or leaking another owner',()=>{
   const path=join(debugWorkspace(project.project_id,'parent'),'checkpoint.json')
-  const value={id:'old-debug',projectId:project.project_id,sessionId:'parent',state:'closed',version:2,source:'old-source',stale:false,
-    observations:[{kind:'script.completed',message:'Browser script exited 0'}],steps:[{id:'browser-script',passed:false,actual:{expected_seed:777001,actual_seed:100027,error:'api_key=PRIVATE_KEY'}}]}
+  const value={id:'old-debug',projectId:project.project_id,sessionId:'parent',state:'closed',version:2,source:'a'.repeat(64),stale:false,
+    observations:[{seq:1,at:new Date().toISOString(),kind:'script.completed',message:'Browser script exited 0'}],steps:[{id:'browser-script',passed:false,actual:{expected_seed:777001,actual_seed:100027,error:'api_key=PRIVATE_KEY'}}]}
   writeFileSync(path,JSON.stringify(value));const before=readFileSync(path,'utf8')
   const facts=engineeringObservations(project.project_id,'parent')
   expect(facts).toMatchObject({available:true,historical:true,stale:true,recorded_state:'closed',steps:[{passed:false}]})

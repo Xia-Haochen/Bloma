@@ -110,3 +110,5 @@
 - V5运行资源：按显式数据实例隔离HOME/临时目录/npm-pip-uv缓存，实际Electron profile防链接；7文件45项组合通过。E1候选回传和当前全套/外部环境仍待，详见升级主计划最新段。
 
 - [候选复现与证据回传协议](candidate-reproduction-protocol-20261111.md)：原候选物理依赖包、独立manifest pin、明确runtime映射、一次性原调试旅程和历史证据续读；本机Node/browser及Electron实测，非干净OS/Cua/PASS。
+
+- V3：原工程伙伴/Task/Assignment定向问答、同一Pi伙伴三源版本真实探针与笔记续接、停机0新增请求，以及有界脱敏消息交接已受控验证；SDK消息字节反例不等于真实供应商收益，详见主计划V3节。

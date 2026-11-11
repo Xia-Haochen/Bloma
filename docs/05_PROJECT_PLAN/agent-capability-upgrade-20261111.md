@@ -224,7 +224,7 @@ E1：复用runtime-manager、release-store、isolated-launch。定义固定候�
 | B2 | 局部调用与数值观测、有界只读批处理已落地；同步/异步命令同一受管理生命周期及事件等待定向通过；仍不全量开parallel |
 | B3 | 同文件多片段与hash保护完成；最多8文件全部预检后有序应用、逐项部分失败语义与真实Pi接线通过；不是跨文件原子事务 |
 | B4 | G1/V1首期DOM语义、当前观察refs、能力发现、浏览器/Electron真实调试接线专项通过；V2实际提交差异/进程展示及Pi历史回放已接线，最终平台App展示回归待统一 |
-| B5 | 首期可选交互探索接主收尾；真实隔离浏览器/受控Pi及原finding→独立绑定→失败/修复/复验/发布机制通过；真实模型收益未测，V3长程消息贡献仍待集成 |
+| B5 | 首期可选交互探索接主收尾；真实隔离浏览器/受控Pi及原finding→独立绑定→失败/修复/复验/发布机制通过；真实模型收益未测；V3同伙伴三版真探针/定向问答/续接与停机成本受控验证通过，不推断自主收益 |
 | B6 | TS/JS worker之外补真实可选Jedi/Python固定stdio桥，真实Pi/版本/取消/坏后端等验证；T4已抓实际HTTP schema/context与恢复/撤销反例，不泛称总字节或费用下降 |
 | B7/B8 | G2/O1、自有HWND世代/重建/最小化、历史终态/双读者前向seq与V5运行目录/临时缓存防链接已实测；E1物理包/独立pin/CLI/证据回传经本机Node+Electron实测，最终外部环境继续 |
 
@@ -447,3 +447,17 @@ ownedDirectory在宿主选定base/每个自建子目录创建前后lstat/realpat
 保留失败：tests2为9/10，startup page.goto失败曾丢失调用方snapshot id；E1现从本次fresh owner的原retained metadata只读取得failed记录后回传，不接管PID/不改原open失败语义。首次加Electron用例漏实际window_title，旧组合50/51在原入口门即拒绝；补真实fixture标题、未松生产parser后focused1过（11未选，不算12）并完整组过。最早test data_dir可选类型漏断言被typecheck拦下已修。`continuation-e1-guard-tests.log`是typecheck+build+tests串行外层工具180秒被截断，**无测试终态不能认证通过**；当场仅查本次fixture/CLI匹配进程无存活，单独执行完整12项通过（未提高任何单测/生产时限）。这些记录保留，不称旧中断根因已穷尽。
 
 六保护/原HEAD、唯一dirty blob仍全不变见continuation-protected.e1.json。干净Windows/安装/权限/断网全系统矩阵仍需用户外部执行器；最终平台Cua仍缺driver配置，不反复无效探测、不擅自安装/重启常用实例。V3伙伴定向事实/长程贡献、其余必要受控收益/恢复补证、当前完整offline+Python最终门禁与收尾继续，不把本批当全部计划结束。
+
+### 2026-11-12 V3：原工程伙伴长程事实贡献与有界交接
+
+复用现有createEngineeringPartner、原Task/Assignment、start/continueDelegation、Pi原生会话、独立engineering workspace和已有ask/answer_delegation_question；没有新增管理Agent、消息总线、事件/费用账本或发布投票，也没有再创建Proma协作子会话。伙伴本来就具备事件驱动观察、问题与续接，本批补真实贯通证据和长程展示护栏，不重建已有机制。
+
+原每条onChildMessage上游已裁3000字符，但长程updates队列未设本地上限，且receive原来未脱敏。现交接队列最多8条、每条约3000字符（头尾裁剪保留truncated），脱敏后去重；omitted_updates明确本次折叠数，take后复位，不删除原Pi/parent transcript。每条monitor意见记prepared observation的observed_source及based_on seq，完全相同文字在不同观察基础不能被当重复吞掉；这是所见最新宿主观察的source，不是所有材料/当前产品全局版本或独立审阅。100条长Unicode/密钥反例验证保留8条/折叠92、无secret、不同basis同文保留。原workspace_facts是读交接包时原factProvider返回的事实，非意见形成时的原子快照。
+
+新tests/integration/engineering-contribution.test.ts使用**真实Pi/原委派/原工具/真Node进程**，SDKQuery仅受控选择动作与话语、不发付费请求。单一child session三次consultation，实际ask问题→原parent answer给出字符串输入["7","5"]→只读源副本及固定expected=12→真探针得到string75。测试作者仅改一边Number转换，新源仍75，同伙伴在新事实事件续接得到第二份真实失败；作者补完整实现后显式production return续接，第三个源快照探针得number12。三个版本副本/notes/原runs回执保留，输入完整、固定预期字节不改、三探针均product_verified=false、不建quality ledger；**集成修复者是测试作者，不是声称模型自主发现/修复**。原parent private system/实际thinking记录未进入child请求，readOnly/independentWorkspace assignment维持。
+
+80条成功读取不会唤醒完成的伙伴；一条真实新源失败续接同session，显式生产返回也同session，不靠计时轮询。宿主suspend/drain后观察100ms，迟到error不触发新请求。报告engineering-contribution.json：1个session、1个定向问题、3个实际probe/snapshot、11个SDK请求，SDK options.messages合计**402031 UTF8字节**；不含system/schema/HTTP开销、非供应商token/费用。drain+100ms观测约101.46ms，总约13.11s，只是本次样本，不能泛称长程伙伴低成本/提高真实模型成功率或永不唤醒；既有强制C/V及可选预算准入保持原位。
+
+最终**5文件41项**通过continuation-v3-final-tests.log约105.79s（partner18/recovery6/workspace9/baseline7/新integration1），typecheck/main相关build/docs/diff通过。原恢复用例真Pi completed/cancelled同session续接、笔记/局部probe/权限、旧上下文排除、原Git检查点/阶段保留仍过。入口纳入这5文件，当前tooling **38文件**，原verification19不变；这不是最新完整回归。
+
+旧40/41失败continuation-v3-tests.log保留：旧workspace测试伪造checkpoint使用非SHA的old-source、无seq/at observation，被B8严格metadata读取正确拒绝；改fixture为真实64hex形态+递增seq/合法at，不放松生产reader、不删历史读取断言。六保护与原唯一dirty不变见continuation-protected.v3.json。其余必要受控基线/恢复/压力补证、当前完整离线+Python门禁、统一交接/清理继续；最终平台Cua/干净Windows外部条件仍未具备，不重复无效探测、不以此阶段结束全部计划。

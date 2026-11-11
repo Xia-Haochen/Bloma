@@ -135,3 +135,16 @@ it('parks synchronously on a trusted complete candidate receipt before a new opt
  peer.observeTool({...event('same-receipt','verify_app',receipt),isError:false})
  expect(peer.isObserving()).toBe(false);expect(h.resume).toHaveBeenCalledTimes(resumed)
 })
+
+it('bounds and redacts long-horizon advisory messages without deleting their transcript or confusing new observation bases',()=>{
+ let source='one';const peer=createEngineeringPartner(true,undefined,{source:()=>source});peer.begin(ctx());peer.context('child')
+ for(let n=0;n<100;n++)peer.receive('child',{turn:n,text:`message-${n}; api_key=PRIVATE_KEY\n`+'Ω'.repeat(10000),truncated:false})
+ const packet=peer.latest()!;expect(packet.updates).toHaveLength(8);expect(packet.omitted_updates).toBe(92)
+ expect(JSON.stringify(packet)).not.toContain('PRIVATE_KEY');expect(packet.updates.every(row=>row.truncated&&row.text.length<3100)).toBe(true)
+ expect(packet.updates.at(-1)).toMatchObject({observed_source:'one',based_on:1})
+ peer.take(ctx());expect(peer.latest()).toBeUndefined()
+ peer.receive('child',{turn:1,text:'same advice',truncated:false});source='two';peer.observeStatement({turn:2,text:'new source observation'});peer.context('child')
+ peer.receive('child',{turn:1,text:'same advice',truncated:false})
+ expect(peer.latest()!.updates).toHaveLength(2);expect(peer.latest()!.updates.map(row=>row.observed_source)).toEqual(['one','two'])
+ expect(peer.latest()!.omitted_updates).toBe(0);expect(peer.latest()!.verification).toBe('not_issued')
+})
