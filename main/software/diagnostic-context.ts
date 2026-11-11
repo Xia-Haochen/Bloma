@@ -8,6 +8,7 @@ import {softwareStatusView} from './state-view'
 import {activeSoftwareCommands,redactSoftwareOutput} from './process-manager'
 import {activeDebugSessionId,readDebugSession} from './debug-sessions'
 import {componentContracts} from './component-contracts'
+import {DEBUG_EVIDENCE_CAPABILITIES} from './debug-evidence'
 import {readVerificationReport} from './verification-report'
 
 /** One bounded navigation view. Historical receipts are never fresh PASS. */
@@ -21,10 +22,10 @@ export function softwareDiagnosticContext(projectId:string,sessionId:string){
   verification={available:true,historical:true,revalidated:false,...readVerificationReport(projectId)}
  }catch(error){verification={available:false,reason:String(error).match(/VERIFICATION_REPORT_[A-Z_]+/)?.[0]??'VERIFICATION_REPORT_READ_ERROR',error:'验收记录不可用；按reason核对，不推断通过'}}
  try{const id=activeDebugSessionId(projectId,sessionId);if(id){const state=readDebugSession(projectId,sessionId,id);debug={available:true,id,state:state.state,source:state.source,version:state.version,stale:state.source!==source||state.stale,screenshot:state.screenshot,
-  observations:state.observations.slice(-6).map(row=>({kind:row.kind,message:redactSoftwareOutput(row.message).slice(0,600)})),next:'当前截图用view_image({debug_session_id})；源码变化先inspect_app重新观察'}}}catch{debug={available:false,error:'本会话调试记录不可用'}}
+  log_cursor:state.log_cursor,storage:state.storage&&{complete:state.storage.complete,changed:state.storage.changed,unobserved:state.storage.unobserved,gaps:state.storage.gaps,excluded:state.storage.excluded,at:state.storage.at,operation_id:state.storage.operation_id,before_source:state.storage.before_source,after_source:state.storage.after_source},observations:state.observations.slice(-6).map(row=>({seq:row.seq,at:row.at,version:row.version,source:row.source,trace_id:row.trace_id,process_id:row.process_id,operation_id:row.operation_id,correlation:row.correlation,kind:row.kind,message:redactSoftwareOutput(row.message).slice(0,600)})),next:'当前截图用view_image({debug_session_id})；源码变化先inspect_app重新观察；用inspect_app(mode=read,debug_session_id,diagnostics={trace_id|kind|process_id|source})查原证据，按diagnostic_page.next_seq续读；应用trace仅自报，不自动归因'}}}catch{debug={available:false,error:'本会话调试记录不可用'}}
  const scrub=(value:unknown):unknown=>typeof value==='string'?redactSoftwareOutput(value):Array.isArray(value)?value.map(scrub):value&&typeof value==='object'?Object.fromEntries(Object.entries(value).map(([key,item])=>[key,scrub(item)])):value
  return scrub({project_id:projectId,current_source:source,operation_id:project.lean_operation_id,component_navigation:componentContracts().map(row=>({id:row!.id,source:row!.source_revision,tests:row!.verification.tests,scope:'navigation_not_product_pass'})),status:softwareStatusView(projectId,true),run_error:runError,current_error:run?.error?.slice(0,1600),historical_failure:run?.last_failure&&{error:run.last_failure.error.slice(0,800)},
   omitted_execution_details:(run?.error?.length??0)>1600||(run?.last_failure?.error.length??0)>800?{read_more:{tool:'read_production_context',arguments:{topic:'working-state'}},reason:'执行错误摘要截短，脱敏原文保留在工作状态'}:undefined,
-  commands:activeSoftwareCommands(projectId,sessionId).map(row=>({process_id:row.process_id,state:row.state})),verification,debug,
+  diagnostic_protocol:DEBUG_EVIDENCE_CAPABILITIES,commands:activeSoftwareCommands(projectId,sessionId).map(row=>({process_id:row.process_id,state:row.state})),verification,debug,
   next:'已有命令用read_process接续；按已记录expected/actual定位。未知原因保留未知，截图附上不等于已审阅；历史记录不签发当前PASS。不重置预算或重复副作用。'})
 }

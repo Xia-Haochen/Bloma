@@ -226,7 +226,7 @@ E1：复用runtime-manager、release-store、isolated-launch。定义固定候�
 | B4 | G1/V1首期DOM语义、当前观察refs、能力发现、浏览器/Electron真实调试接线专项通过；V2实际提交差异/进程展示及Pi历史回放已接线，最终平台App展示回归待统一 |
 | B5 | 首期可选交互探索接主收尾；真实隔离浏览器/受控Pi及原finding→独立绑定→失败/修复/复验/发布机制通过；真实模型收益未测，V3长程消息贡献仍待集成 |
 | B6 | TS/JS worker之外补真实可选Jedi/Python固定stdio桥，真实Pi/版本/取消/坏后端等验证；T4已抓实际HTTP schema/context与恢复/撤销反例，不泛称总字节或费用下降 |
-| B7/B8 | 原生/故障取证、干净环境等仍在继续；V5共享缓存边界已修复 |
+| B7/B8 | G2首期Windows UIA及O1保存失败证据链已接线并实测；窗口世代、重连/完整隔离/E1与最终环境验收仍在继续 |
 
 后续在本节按实际证据更新，不能仅因合入代码标记真实模型提效完成。
 
@@ -383,3 +383,21 @@ B6最后版本 **6文件53项组合通过**（Python16、Python实际Pi1、T4实
 O1完整IPC/存储保存失败链、B8世代/重连/隔离/干净Windows及最终整套仍待续做。Cua专用driver记录不存在且命令不在PATH；定向检查Proma resources/bin及app.asar.unpacked未找到cua，不擅装/重装/改安全设置。最终真实平台Cua仍需用户完成设置，不能用本批Native/Electron夹具替代。
 
 G2首期最终版本 **4文件30项组合通过**（native UIA5、debug10、原DOM语义9、原GUI协议6），continuation-b7-g2-offered-tests.log；typecheck/main及worker/semantic/preload/templates构建通过（对应offered-typecheck/build日志），docs通过另记。额外收紧ref授权为**只允许本次实际返回的控件索引**，不能按已知snapshot UUID伪造未展示的内部扫描index；1项返回窗口下伪造:e:1的反例拒绝。显式旧/关闭实例control不自动开新App重放，Electron实际测试已关闭后再次传旧ref并确认无新活动实例。此前g2-tests日志中GUI协议参数误写到不存在目录，实际仅3文件24项，不算4文件；随后已用正确路径重新跑上述4文件30项，未跳过失败或修改生产时限。保护对照continuation-protected.g2.json不变。
+
+### 2026-11-11 O1：原调试事实中的保存失败链（非事故/PASS账本）
+
+在原debug-sessions观察和diagnostic-context导航上补debug-evidence-v1，不新建工具名、统一管理Agent、故障账本或验收状态机。inspect_app(mode=read,diagnostics)支持kind字面前缀、action/operation_id/trace_id/process_id/source/version精确过滤及ISO时间范围；since_seq+diagnostic_page.next_seq有界前向续读，最多80条/12000 UTF8字节；保留原默认最近16条、200条/64000码元滚动，明确retained_from_seq/history_gap，不能把丢失记录当EOF或PASS。当前source仍由原候选指纹绑定，历史行保留原version/source。
+
+backend改读既有owned process逻辑记录的seq，而非用stdout/stderr尾串相减猜增量。每实例保持process ID/输出seq，重复read不会重复采入；换进程单独重置，原stdout/stderr及归档仍是权威来源。保留进程/记录seq、归属与source；滚动缺口、长行裁剪和归档不可用都明确。backend晚到接收不塞给当前click：correlation=temporal-only，无伪造action或operation。network保留request-start观察；真实Native pattern返回是host-dispatch，依然不证明业务成功。持久化原snapshot的seq高水位，为后续恢复补证，不接管旧PID。
+
+必要应用可选以console/stdout/stderr输出一行 `BLOMA_DIAGNOSTIC {"kind":"ipc","phase":"failed","trace_id":"app-generated-id","code":"ENOENT"}`；kind只ipc/storage、phase只request/completed/failed、可选短code/message，不接应用自报host source/seq/动作/归属/状态。宿主把这些标为application-reported而非拦截全部IPC，更不是因果/独立C/根因裁决；没有埋点就诚实缺失。严格4096字节、字段白名单、脱敏，trace/code即使恰为宿主环境secret也不泄露或伪成有效关联ID。原普通console/backend记录仍保留；不注入IPC monkeypatch或更改生成产品。capabilities与原read_production_context(diagnostics)给出同一协议及导航。
+
+实际mutating debug调用（步骤/脚本/native/reload）的宿主operation UUID区间只读本次owned debug data：异步opendir/文件读取、128文件/64目录/深12、每目录512成员、1MiB/文件、总8MiB、协作1500ms；真路径/无链接/前后文件身份与目录成员复核，输出仅文件字节数/sha256/最多8处相对路径差异，不采正文、不扫宿主盘。**APP_DATA_DIR/electron-profile是原bindSoftwareProfile实际管理的Chromium缓存目录，明确列入排除域**；complete仅代表声明的有界文件域，不代表profile/localStorage或全部磁盘。前后scope变化、取消/限额/读取/链接问题不出完整digest；不完整一侧缺文件只能unobserved，不能猜删除/unchanged。记录前后source/version/at/operation_id，纯read/query不假装新存储观察；不保证FS原子性、点击因果或OS沙箱，不签PASS。
+
+真实Electron普通入口对照：preload真实ipcRenderer.invoke(save)→main真实fs.writeFileSync(notes/note.json)因缺父目录抛ENOENT→owned backend stderr真实错误+同应用trace的request/failed→renderer catch与可见Error:ENOENT；host排除已声明profile后确认notes未落盘。修fixture源码mkdir(recursive)后沿原reload绑定新candidate/version，同输入保存真实UTF8“真实保存 Ω”文件；close后正常入口实际读取同文件并显示（未重注入缓存/期望）。旧source/trace失败行仍可查，原质量/验证未跑、不认证业务通过。真实Pi还通过公开schema读取这条现存trace并得到application.ipc.failed，SDK响应受控、不收费；修复是测试作者实施，不宣传模型自主排障/自动修复。G2/原browser/electron持久化与原GUI协议不变。
+
+**最终7文件43项组合通过**：evidence7、真实保存+Pi1、debug10、GUI协议6、原归档6、异步命令8、真实Native5，continuation-o1-release-tests.log约260.56s；release-typecheck/build日志通过main/worker/semantic/preload/templates，docs另验。新增反例含伪造host字段/PASS/大marker、分页/时间/候选/进程、Unicode/binary/__proto__文件、链接/配额/取消/缺目录/范围变化/主循环tick、结构化secret泄露。工具专项现在28文件；Python正向仍单独跑。
+
+保留初次5/6失败：storage扫描误包含实际electron-profile缓存，触发DATA_BYTE_LIMIT与缓存变化；没有把它当完整未变。按原“不扫描整个profile”约束改为明确排除宿主管理profile并标注scope，未提高字节/期限、未删断言。continuation-o1-tests.log、save-test2.log及save-failure.json保留；后续6、7、36项阶段通过也不替代最终43项。最早Python编辑正则转义造成TS语法失败，修源码转义后通过，typecheck失败日志保留。保护对照continuation-protected.o1.json不变。
+
+B8窗口世代/旧终态重连/隔离/E1与最新全套仍待；本批不是Cua平台或干净Windows验收，不解除费用暂停、不改生成产品/项目registry/原账本、不push或合原sprint2。

@@ -26,15 +26,16 @@ import { isNativeGuiTestModule } from './native-gui-tests'
 import { softwareStartupError, waitForSoftwareWindow } from './startup-diagnostics'
 import { isolateNativeTestWindows } from './native-window-isolation'
 import { OwnedNativeUi, type NativeRequest } from './native-ui'
+import { applicationDiagnostic, diagnosticPage, snapshotDebugData, compareDebugData, type DiagnosticQuery, type StorageDelta, type StorageSnapshot } from './debug-evidence'
 
 export interface DebugObservation { seq: number; at: string; version: number; action?: string; kind: string; message: string;
-  duration_ms?: number; method?: string; url?: string; status?: number }
+  duration_ms?: number; method?: string; url?: string; status?: number; source?:string; process_id?:string; process_seq?:number; trace_id?:string; code?:string; operation_id?:string; correlation?:'temporal-only'|'request-start'|'host-dispatch'|'application-reported'; storage?:StorageDelta }
 export interface DebugSnapshot { id: string; projectId: string; sessionId: string; state: 'opening' | 'ready' | 'closed' | 'failed' | 'interrupted'; version: number; source?: string;
   ui?: Awaited<ReturnType<typeof observeSoftwareUi>>; native_ui?: Awaited<ReturnType<OwnedNativeUi['inspect']>>; data_dir?: string; resumed_from?: string;
-  stale: boolean; url?: string; screenshot?: string; screenshot_error?: string; source_checkpoint?: { id: string; files?: number }; checkpoint_error?: string; fixtures?: GuiAcceptanceSuite['fixtures']; log_cursor?: number; observations_omitted?: number; observations: DebugObservation[]; steps: Array<{ id: string; passed: boolean; actual?: unknown }>; error?: string }
+  storage?:StorageDelta; diagnostic_page?:ReturnType<typeof diagnosticPage>['diagnostic_page']; stale: boolean; url?: string; screenshot?: string; screenshot_error?: string; source_checkpoint?: { id: string; files?: number }; checkpoint_error?: string; fixtures?: GuiAcceptanceSuite['fixtures']; log_cursor?: number; observations_omitted?: number; observations: DebugObservation[]; steps: Array<{ id: string; passed: boolean; actual?: unknown }>; error?: string }
 interface DebugSession { snapshot: DebugSnapshot; root: string; temporary: string; workspace: string; data: string; file: string; owner: string; page?: Page;
   child?: ChildProcess; nativeRoot?: number; native?:OwnedNativeUi; browser?: BrowserContext; browserClient?: Browser; browserServer?: BrowserServer; externalProcessId?: string; ownedProcessId?: string; stdout?: string; stderr?: string; signal: AbortSignal; abort: () => void;
-  activeAction?: string; formal?:boolean; cdpEndpoint?: string; seq: number; logBytes: number; closing?: Promise<void>; finished?: boolean; timer?: ReturnType<typeof setTimeout>; busy: boolean; launch: LaunchDeclaration }
+  processCursor?:number; observedProcess?:string; processGap?:string; operationId?:string; activeAction?: string; formal?:boolean; cdpEndpoint?: string; seq: number; logBytes: number; closing?: Promise<void>; finished?: boolean; timer?: ReturnType<typeof setTimeout>; busy: boolean; launch: LaunchDeclaration }
 const sessions = new Map<string, DebugSession>()
 const observedPages = new WeakSet<Page>()
 async function debugTarget(page:Page){const cdp=await page.context().newCDPSession(page);try{return(await cdp.send('Target.getTargetInfo')).targetInfo.targetId as string}finally{await cdp.detach()}}
@@ -43,6 +44,7 @@ const metadataPath = (id: string) => {
   return join(getPromaHome(), 'software-debug-sessions', `${id}.json`)
 }
 function persist(session: DebugSession) {
+  session.snapshot.log_cursor=session.seq
   writeTextFileAtomic(session.file, JSON.stringify(session.snapshot))
   writeTextFileAtomic(join(session.workspace, 'checkpoint.json'), JSON.stringify(session.snapshot))
 }
@@ -80,9 +82,9 @@ function owned(projectId: string, sessionId: string, id: string): DebugSession {
   if (session.snapshot.projectId !== projectId || session.snapshot.sessionId !== sessionId) throw Error('DEBUG_SESSION_NOT_OWNED')
   return session
 }
-function log(session: DebugSession, kind: string, message: string, metadata: Partial<Pick<DebugObservation, 'version' | 'action' | 'duration_ms' | 'method' | 'url' | 'status'>> = {}) {
+function log(session: DebugSession, kind: string, message: string, metadata: Partial<Omit<DebugObservation,'seq'|'at'|'kind'|'message'>> = {}) {
   const entry: DebugObservation = { seq: ++session.seq, at: new Date().toISOString(), version: session.snapshot.version, action: session.activeAction,
-    kind, message: redactSoftwareOutput(message).slice(0, 1800), ...metadata }
+    kind, source:session.snapshot.source,operation_id:session.operationId,correlation:'temporal-only',message: redactSoftwareOutput(message).slice(0, 1800), ...metadata }
   session.snapshot.observations.push(entry); session.logBytes += JSON.stringify(entry).length
   while (session.snapshot.observations.length > 200 || session.logBytes > 64000) session.logBytes -= JSON.stringify(session.snapshot.observations.shift()!).length
   if (['opening', 'ready'].includes(session.snapshot.state) && !session.timer) session.timer = setTimeout(() => {
@@ -90,13 +92,40 @@ function log(session: DebugSession, kind: string, message: string, metadata: Par
     try { persist(session) } catch { session.abort() }
   }, 100)
 }
+function reportApplication(session:DebugSession,text:string,metadata:Partial<DebugObservation>={}){
+  try{const value=applicationDiagnostic(text.trim());if(value)log(session,value.kind,value.message,{...metadata,trace_id:value.trace_id,code:value.code,correlation:'application-reported'})}
+  catch(error){log(session,'diagnostic.invalid',String(error),metadata)}
+}
+function observeBackend(session:DebugSession){
+  const id=session.externalProcessId??session.ownedProcessId;if(!id)return
+  const process=softwareProcess(session.snapshot.projectId,id,session.externalProcessId?session.snapshot.sessionId:session.owner)
+  if(session.observedProcess!==id){session.observedProcess=id;session.processCursor=0;session.processGap=undefined}
+  const metadata={process_id:id,source:process.source,action:undefined,operation_id:undefined,correlation:'temporal-only' as const}
+  if(process.output){
+    const fresh=process.output.filter(record=>record.seq>(session.processCursor??0))
+    const gap=(fresh[0]&&fresh[0].seq>(session.processCursor??0)+1?'retained output sequence gap; read_process(mode=log) may retain earlier records':undefined)??(!process.log?.complete?'process archive incomplete/unavailable; not a complete stderr/IPC trace':undefined)
+    if(gap&&session.processGap!==gap){session.processGap=gap;log(session,'backend.gap',gap,metadata)}
+    for(const record of fresh){
+      const text=record.text.trim();session.processCursor=record.seq
+      if(!text||/^(?:DevTools listening on|Debugger listening on)/.test(text))continue
+      const scoped={...metadata,process_seq:record.seq}
+      log(session,`backend.${record.stream}`,text,scoped)
+      if(record.truncated)log(session,'backend.gap','logical record truncated; use owned process archive when available',scoped)
+      else for(const line of text.split(/\r?\n/))reportApplication(session,line,scoped)
+    }
+  }else for(const key of ['stdout','stderr'] as const)if(process[key]!==session[key]){
+    session[key]=process[key];log(session,`backend.${key}`,process[key],metadata)
+    log(session,'backend.gap','legacy tail only; no sequence-bound IPC parser',metadata)
+  }
+  if(['ready','opening'].includes(session.snapshot.state)&&['failed','exited','stopped'].includes(process.state))session.snapshot.error=`DEBUG_BACKEND_UNAVAILABLE: ${process.state}`
+}
 function safeUrl(value: string): string {
   try { const url = new URL(value); return redactSoftwareOutput(`${url.origin}${url.pathname}`).slice(0, 1200) } catch { return '[unavailable URL]' }
 }
 function observePage(session: DebugSession, page: Page) {
   if (observedPages.has(page)) return
   observedPages.add(page)
-  page.on('console', event => log(session, `console.${event.type()}`, event.text()))
+  page.on('console', event => {log(session, `console.${event.type()}`, event.text());for(const line of event.text().split(/\r?\n/))reportApplication(session,line)})
   page.on('pageerror', error => log(session, 'renderer.error', error.stack || error.message || String(error)))
   const requests = new WeakMap<Request, { start: number; action?: string; version: number; status?: number }>()
   page.on('request', request => requests.set(request, { start: performance.now(), action: session.activeAction, version: session.snapshot.version }))
@@ -110,7 +139,7 @@ function observePage(session: DebugSession, page: Page) {
     const kind = failed ? 'network.failed' : (state?.status ?? 0) >= 400 ? 'network.error' : 'network.slow'
     const url = safeUrl(request.url()), method = request.method()
     log(session, kind, `${method} ${url}: ${failed ? request.failure()?.errorText ?? 'request failed' : `HTTP ${state?.status ?? 'unknown'}`}${duration === undefined ? '' : ` (${duration}ms)`}`,
-      { action: state?.action, version: state?.version ?? session.snapshot.version, duration_ms: duration, method, url, status: state?.status })
+      { action: state?.action, version: state?.version ?? session.snapshot.version, duration_ms: duration, method, url, status: state?.status, correlation:'request-start' })
   }
   page.on('requestfailed', request => finished(request, true))
   page.on('requestfinished', request => finished(request, false))
@@ -161,6 +190,7 @@ export function assertDebugSessionProcess(projectId: string, sessionId: string, 
 export async function closeDebugSession(projectId: string, sessionId: string, id: string): Promise<DebugSnapshot> {
   const session = owned(projectId, sessionId, id)
   if (session.closing) { await session.closing; return readDebugSession(projectId, sessionId, id) }
+  observeBackend(session)
   if (session.snapshot.state !== 'failed') session.snapshot.state = 'closed'
   session.snapshot.native_ui=undefined
   session.signal.removeEventListener('abort', session.abort)
@@ -189,6 +219,7 @@ export async function closeDebugSession(projectId: string, sessionId: string, id
         if (dirname(target) !== tempRoot || !basename(target).startsWith('bloma-debug-')) throw Error('DEBUG_CLEANUP_PATH_INVALID')
         rmSync(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 150 })
       }
+      observeBackend(session)
       clearTimeout(session.timer); session.timer = undefined; persist(session); session.finished = true
     }
   })()
@@ -213,29 +244,14 @@ export function installDebugFixtures(projectId: string, sessionId: string, id: s
   session.snapshot.fixtures = [...new Map([...(session.snapshot.fixtures ?? []), ...(suite.fixtures ?? [])].map(file => [file.path, file])).values()]
   persist(session)
 }
-export function readDebugSession(projectId: string, sessionId: string, id: string, since = 0): DebugSnapshot {
-  if (!sessions.has(id)) {
-    const previous = savedSnapshot(projectId, sessionId, id)
-    return { ...previous, state: 'interrupted', stale: true, error: 'DEBUG_SESSION_INTERRUPTED: 旧进程未接管，下一次操作将用保留数据重新打开。' }
+export function readDebugSession(projectId:string,sessionId:string,id:string,since=0,query?:DiagnosticQuery):DebugSnapshot{
+  if(!sessions.has(id)){
+    const previous=savedSnapshot(projectId,sessionId,id)
+    return {...previous,...diagnosticPage(previous.observations,previous.log_cursor??previous.observations.at(-1)?.seq??0,since,query),state:'interrupted',stale:true,error:'DEBUG_SESSION_INTERRUPTED: 旧进程未接管，需显式重新打开；旧输入不会自动重放。'}
   }
-  const session = owned(projectId, sessionId, id), current = verificationFingerprint(session.root)
-  const processId = session.externalProcessId ?? session.ownedProcessId
-  if (processId && ['ready', 'opening'].includes(session.snapshot.state)) {
-    const process = softwareProcess(projectId, processId, session.externalProcessId ? sessionId : session.owner)
-    for (const key of ['stdout', 'stderr'] as const) if (process[key] !== (session[key] ?? '')) {
-      const previous = session[key] ?? '', delta = process[key].startsWith(previous) ? process[key].slice(previous.length) : process[key].slice(-2000)
-      session[key] = process[key]
-      const visible = delta.split('\n').filter(line => !/DevTools listening on|Debugger listening on/.test(line)).join('\n').trim()
-      if (visible) log(session, `backend.${key}`, visible)
-    }
-    if (process.state === 'failed' || process.state === 'exited' || process.state === 'stopped') session.snapshot.error = `DEBUG_BACKEND_UNAVAILABLE: ${process.state}`
-  }
-  const available = session.snapshot.observations.filter(row => row.seq > since), recent = available.slice(-16)
-  let characters = recent.reduce((total, row) => total + JSON.stringify(row).length, 0)
-  while (characters > 12000 && recent.length > 1) characters -= JSON.stringify(recent.shift()!).length
-  return { ...session.snapshot, stale: !current || current !== session.snapshot.source,
-    log_cursor: session.seq, observations_omitted: available.length - recent.length,
-    observations: recent, steps: [...session.snapshot.steps] }
+  const session=owned(projectId,sessionId,id),current=verificationFingerprint(session.root)
+  observeBackend(session)
+  return {...session.snapshot,...diagnosticPage(session.snapshot.observations,session.seq,since,query),stale:!current||current!==session.snapshot.source,log_cursor:session.seq,steps:[...session.snapshot.steps]}
 }
 export async function openDebugSession(input: { projectId: string; sessionId: string; root: string; launch: LaunchDeclaration; signal: AbortSignal; processId?: string; formal?:boolean }): Promise<DebugSnapshot> {
   input.signal.throwIfAborted()
@@ -308,7 +324,9 @@ export async function actDebugSession(input: { projectId: string; sessionId: str
   if (session.snapshot.state !== 'ready' || !session.page || session.page.isClosed()) throw Error('DEBUG_SESSION_NOT_READY')
   if (session.busy) throw Error('DEBUG_SESSION_BUSY')
   session.busy = true
-  let nativeDispatched:string|undefined
+  let nativeDispatched:string|undefined,beforeData:StorageSnapshot|undefined,beforeVersion=session.snapshot.version,beforeSource=session.snapshot.source
+  const changing=Boolean(input.reload||input.control||input.native?.control||input.script||input.scriptSource||input.nativeTests||input.steps?.some(step=>step.kind!=='expect'))
+  session.operationId=randomUUID()
   try {
     input.signal.throwIfAborted()
     const restart = async () => {
@@ -339,6 +357,7 @@ export async function actDebugSession(input: { projectId: string; sessionId: str
       session.page.setDefaultTimeout(4000); session.snapshot.state = 'ready'
       session.snapshot.error = undefined; session.stdout = ''; session.stderr = ''; log(session, 'version.reload', '已重启调试入口以绑定新代码，保留隔离持久数据；旧观察保留原版本编号')
     }
+    if(changing)beforeData=await snapshotDebugData(session.data,input.signal,undefined,session.launch.ui==='electron'?['electron-profile']:[])
     if (input.reload) await restart()
     else if (readDebugSession(input.projectId, input.sessionId, input.id).stale) throw Error('DEBUG_SOURCE_CHANGED: 先reload以标记新版本；若每次保存业务数据都会触发，核对是否把APP_DATA_DIR覆盖到了项目内，使用宿主提供的工程外数据目录。不能把旧窗口当作新代码')
     session.snapshot.steps = []
@@ -350,7 +369,7 @@ export async function actDebugSession(input: { projectId: string; sessionId: str
       const native=session.native??=new OwnedNativeUi(nativeRoot,()=>{try{const state=softwareProcess(input.projectId,processId,session.owner);return state.pid===nativeRoot&&['running','starting'].includes(state.state)}catch{return false}},join(session.workspace,'evidence','native'))
       if(input.native.control){
         session.activeAction=`native:${input.native.control.kind}:${randomUUID()}`
-        try{nativeResult=await native.inspect(input.native,input.signal);nativeDispatched=nativeResult.method;session.snapshot.steps.push({id:session.activeAction,passed:true,actual:{method:nativeResult.method,dispatch:'pattern returned; not a business result'}});log(session,'native.action',nativeResult.method??'UIA pattern returned')}
+        try{nativeResult=await native.inspect(input.native,input.signal);nativeDispatched=nativeResult.method;session.snapshot.steps.push({id:session.activeAction,passed:true,actual:{method:nativeResult.method,dispatch:'pattern returned; not a business result'}});log(session,'native.action',nativeResult.method??'UIA pattern returned',{correlation:'host-dispatch'})}
         catch(error){log(session,'native.action_failed',String(error));throw error}
       }
     }else {session.native?.invalidate();session.snapshot.native_ui=undefined}
@@ -425,10 +444,19 @@ export async function actDebugSession(input: { projectId: string; sessionId: str
       const observed=await session.native.inspect({query:input.native.query,...(nativeResult?.selected?{window_ref:nativeResult.selected}:input.native.window_ref?{window_ref:input.native.window_ref}:{})},input.signal)
       session.snapshot.native_ui={...observed,method}
     }
-    persist(session); return readDebugSession(input.projectId, input.sessionId, input.id)
+    persist(session)
   } catch (error) {
     if (input.reload) { session.snapshot.state = 'failed'; session.snapshot.error = String(error); await closeDebugSession(input.projectId, input.sessionId, input.id) }
     if(nativeDispatched)throw Error(`NATIVE_ACTION_DISPATCHED_OBSERVATION_FAILED: ${nativeDispatched}; do not replay; ${String(error)}`)
     throw error
-  } finally { session.activeAction = undefined; session.busy = false }
+  } finally {
+    try{if(beforeData){
+      const after=await snapshotDebugData(session.data,input.signal,undefined,session.launch.ui==='electron'?['electron-profile']:[])
+      session.snapshot.storage={...compareDebugData(beforeData,after),operation_id:session.operationId,at:new Date().toISOString(),before_version:beforeVersion,after_version:session.snapshot.version,before_source:beforeSource,after_source:session.snapshot.source}
+      log(session,'storage.observed',`Owned data interval v${beforeVersion}->v${session.snapshot.version}; ${session.snapshot.storage.complete?'bounded comparison complete':'incomplete; do not infer unchanged'}; ${session.snapshot.storage.changed} observed changes`,{storage:session.snapshot.storage,action:undefined})
+      persist(session)
+    }}catch(error){log(session,'storage.observation_failed',String(error),{action:undefined})}
+    finally{session.activeAction = undefined; session.operationId=undefined; session.busy = false}
+  }
+  return readDebugSession(input.projectId,input.sessionId,input.id)
 }
