@@ -27,8 +27,8 @@ export async function buildUnit(root, unit) {
     await build({ configFile: join(root, 'vite.config.ts'), configLoader: 'runner', plugins: [{ name: 'bloma-input-proof', enforce: 'pre', load(id) { track(id); return null }, buildEnd() { for (const id of this.getWatchFiles()) track(id) } }] })
   } else {
     const { build } = await import('esbuild')
-    const external = unit === 'main' ? ['electron', 'playwright', 'typescript', '@earendil-works/pi-coding-agent', '@earendil-works/pi-agent-core', '@earendil-works/pi-ai'] : unit === 'worker' ? ['electron', 'sherpa-onnx-node'] : ['electron']
-    const entry = unit === 'main' ? 'main/index.ts' : unit === 'worker' ? 'main/platform/speech/speech-worker.ts' : 'preload/bridge.ts'
+    const external = unit === 'main' ? ['electron', 'playwright', 'typescript', '@earendil-works/pi-coding-agent', '@earendil-works/pi-agent-core', '@earendil-works/pi-ai'] : unit === 'worker' ? ['electron', 'sherpa-onnx-node'] : unit === 'semantic' ? ['typescript'] : ['electron']
+    const entry = unit === 'main' ? 'main/index.ts' : unit === 'worker' ? 'main/platform/speech/speech-worker.ts' : unit === 'semantic' ? 'main/software/code-service-worker.ts' : 'preload/bridge.ts'
     const result = await build({ absWorkingDir: root, entryPoints: [entry], bundle: true, platform: 'node', format: unit === 'preload' ? 'cjs' : 'esm', external, outfile: join(root, OUTPUTS[unit]), metafile: true, plugins: [{ name: 'bloma-input-proof', setup(api) { api.onLoad({ filter: /.*/ }, ({ path }) => { track(path); return undefined }) } }] })
     for (const path of Object.keys(result.metafile.inputs)) dependencies.add(dependencyName(root, resolve(root, path)))
   }
@@ -87,7 +87,7 @@ export async function ensureBuild({ root = projectRoot, units = UNITS, force = f
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   const target = process.argv[2] ?? 'all'
-  const units = target === 'all' ? UNITS : target === 'main' ? UNITS.filter(unit => unit !== 'renderer') : target === 'renderer' ? ['renderer'] : null
-  if (!units) { console.error('用法：node scripts/build.mjs [all|main|renderer]'); process.exitCode = 1 }
+  const units = target === 'all' ? UNITS : target === 'main' ? UNITS.filter(unit => unit !== 'renderer') : UNITS.includes(target) ? [target] : null
+  if (!units) { console.error('用法：node scripts/build.mjs [all|main|renderer|semantic|worker|preload|templates]'); process.exitCode = 1 }
   else ensureBuild({ units, force: true }).catch(error => { console.error(`✗ ${error.message}`); process.exitCode = 1 })
 }

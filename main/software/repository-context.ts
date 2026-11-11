@@ -10,6 +10,8 @@ import type { AgentLoopTool } from '../agent/loop/agent-loop'
 import { importedProjectContext, importedProjectChanges } from './import-project'
 import { redactSoftwareOutput } from './process-manager'
 import {changeImpact} from './change-impact'
+import { codeServiceCapabilities, type CodeServiceRequest } from './code-service'
+import { executeCodeService } from './code-service-executor'
 
 const ignored = new Set(['.git', 'node_modules', '.venv', 'venv', '__pycache__', '.cache', 'dist', 'build', '00_HISTORY', '00_VERIFY'])
 const sourceFile = /\.(?:[cm]?[jt]sx?|py|rs|go|java|cs|cpp|c|h|html|css|json|toml|md|yaml|yml|lock|mod|txt)$|^\.python-version$/i
@@ -52,12 +54,21 @@ export function repositoryFileFacts(projectId: string, root: string, requested: 
   writeTextFileAtomic(cache, JSON.stringify(facts)); return { ...facts, reused: false }
 }
 export function buildRepositoryContextTool(projectId: string): AgentLoopTool {
-  return { name: 'inspect_repository', parallelSafe: true, description: '已有工程按需定位：overview看脚本/锁文件/测试；changes比较导入字节；impact(paths)沿静态相对导入定位受影响模块与开发期测试候选，不执行、不跳过正式验收；file/search继续定位。候选不是通过证据。',
-    input_schema: { type: 'object', required: ['mode'], additionalProperties: false, properties: { mode: { type: 'string', enum: ['overview', 'file', 'search', 'changes','impact'] }, path: { type: 'string' }, query: { type: 'string', minLength: 1, maxLength: 120 },paths:{type:'array',minItems:1,maxItems:32,items:{type:'string'}} } },
+  return { name: 'inspect_repository', parallelSafe: true, description: '已有工程按需定位：overview看脚本/锁文件/测试；changes比较导入字节；impact(paths)沿静态相对导入定位受影响模块与开发期测试候选，不执行、不跳过正式验收；file/search继续定位。definition/references/diagnostics/symbol使用真实TS/JS LanguageService只读语义、1-based UTF-16 line/column，symbol为指定文件声明；capabilities报告真实边界。每次内容/config hash绑定，expected_file_version及expected_index_version接语义结果的sha256:版本；缺依赖/后端明确报出，不以词法模拟。候选不是通过证据。',
+    input_schema: { type: 'object', required: ['mode'], additionalProperties: false, properties: { mode: { type: 'string', enum: ['overview', 'file', 'search', 'changes','impact','capabilities','definition','references','diagnostics','symbol'] }, path: { type: 'string', maxLength: 2048 }, line: { type: 'integer', minimum: 1 }, column: { type: 'integer', minimum: 1 }, limit: { type: 'integer', minimum: 1, maximum: 200 }, include_declaration: { type: 'boolean' }, expected_file_version: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' }, expected_index_version: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' }, query: { type: 'string', minLength: 1, maxLength: 120 },paths:{type:'array',minItems:1,maxItems:32,items:{type:'string'}} } },
     execute: async (input, ctx) => {
       try {
         if (ctx.projectId !== projectId) throw Error('REPOSITORY_PROJECT_MISMATCH')
         const root = resolveProjectRoot(projectId, () => findProject(projectId).root_path)
+        if (input.mode === 'capabilities') return { output: serializeRedactedJson({ ...codeServiceCapabilities(), execution: { isolated_worker: true, max_parallel: 2, host_deadline_ms: 15000, max_heap_mb: 512, evidence: 'read-only semantics, not verification' } }, redactSoftwareOutput) }
+        if (['definition','references','diagnostics','symbol'].includes(String(input.mode))) {
+          if (typeof input.path !== 'string' || !input.path) throw Error('REPOSITORY_FILE_REQUIRED')
+          const result = await executeCodeService(root, { kind: input.mode as CodeServiceRequest['kind'], path: input.path,
+            line: input.line as number | undefined, column: input.column as number | undefined, limit: input.limit as number | undefined,
+            query: input.query as string | undefined, includeDeclaration: input.include_declaration as boolean | undefined,
+            expectedFileVersion: input.expected_file_version as string | undefined, expectedIndexVersion: input.expected_index_version as string | undefined }, { signal: ctx.signal })
+          return { output: serializeRedactedJson(result, redactSoftwareOutput), isError: !result.ok }
+        }
         if (input.mode === 'changes') return { output: serializeRedactedJson(await importedProjectChanges(projectId, root, ctx.signal),redactSoftwareOutput) }
         if (input.mode === 'file') {
           if (typeof input.path !== 'string' || !input.path) throw Error('REPOSITORY_FILE_REQUIRED')

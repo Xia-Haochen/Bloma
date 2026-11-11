@@ -224,7 +224,8 @@ E1：复用runtime-manager、release-store、isolated-launch。定义固定候�
 | B2 | 局部调用与数值观测、有界只读批处理已落地；同步/异步命令同一受管理生命周期及事件等待定向通过；仍不全量开parallel |
 | B3 | 同文件多片段与hash保护完成；最多8文件全部预检后有序应用、逐项部分失败语义与真实Pi接线通过；不是跨文件原子事务 |
 | B4 | G1/V1首期DOM语义、当前观察refs、能力发现、浏览器/Electron真实调试接线专项通过；V2展示待做 |
-| B5–B8 | 独立探索、语义代码接线、原生/故障取证、干净环境等仍在继续；V5共享缓存边界已修复 |
+| B5/B7/B8 | 独立探索、原生/故障取证、干净环境等仍在继续；V5共享缓存边界已修复 |
+| B6 | TS/JS真实只读语义已沿inspect_repository接线、独立编译worker+真实Pi通过；Python真实后端与T4实验仍待做 |
 
 后续在本节按实际证据更新，不能仅因合入代码标记真实模型提效完成。
 
@@ -313,3 +314,15 @@ refs绑定当前观察、实际ElementHandle和document，DOM变更/路由/视�
 3文件24项通过（9 DOM反例、9原/新debug实际运行、6原GUI协议）；新增browser及Electron各一条真实实例观察→ref点击→状态1→跨会话拒绝→旧ref拒绝，原数据保留、重启、脚本/下载/错误链均通过。typecheck和完整build通过。日志continuation-b4-all-tests.log、continuation-b4-typecheck.log、continuation-b4-build.log。UIA/原生输入及最终平台App的Cua验证尚属后续，不能把DOM/Electron夹具通过说成已完成G2或原App升级。
 
 V5边界修复：先前默认Vitest曾写共享node_modules/.vite缓存（子产物也披露），未擅自回滚未知共用缓存；实际依赖安装/包源码未改。所有管理脚本改runner configLoader，vite.config以import.meta.url确定项目根、缓存放各worktree的.cache/vite（原fingerprint已排除.cache），renderer build同样使用runner，避免.vite-temp bundling。修复后独立9项+真实renderer构建前后，两处已知共用缓存(.vite/vitest、.vite-temp)的清单/字节hash/mtime/size不变，continuation-cache-isolation.json。仅证明这两处，不伪称全共享依赖写入审计。
+
+### 2026-11-11 C1续：真实TS/JS语义与独立计算worker
+
+审阅唯一协作子Agent的独立代码产物并复制其code-service.ts及31项真实TS/JS测试，未把产物支架、依赖junction或临时配置复制到仓库。父补排除.cache/.context/.bloma-build，沿inspect_repository增加definition/references/diagnostics/symbol/capabilities，继续原project身份/实际root/脱敏与白名单。没有移植Serena代码或引入GPL组件。符号仅指定文件声明导航树，坐标1-based UTF-16；fileVersion/indexVersion为sha256:前缀的实际字节/本次观察域身份，不是候选PASS或跨查询通用仓库revision。
+
+LS不emit/加载项目插件/执行业务脚本，无默认node_modules越权；缺依赖、越界、配置错误、project references不支持、截断和新查询失效显式报告。不把词法import/declaration候选冒充语义。每请求fresh LS，不宣称增量索引或所有TOCTOU/OS沙箱保证。
+
+父将实际工具查询放独立worker thread：只接宿主解析的project root和固定request字段、空env、execArgv=[]、512MiB heap、最多2个并行、15秒宿主硬期限及取消终止；无动态脚本或模型权限。TS内部仍10秒协作期限，worker层让主事件循环可处理取消，不将同步LS误标为UI及时可取消。build-state新增semantic组件，正常all/main构建含worker；字节新鲜度/输出证明沿原构建体系，worker失效不以内联旧实现补位。
+
+4文件63项通过：核心31、生产构建worker3（真实定义/Python缺口、硬终止与host ticks、槽上限）、构建新鲜度28（含新增semantic/source变更归属及原实构建/锁/新鲜度断言）、实际Pi1（四语义mode与capabilities，真实工具schema与worker，无付费供应商，另验跨project拒绝及Python缺口）。最初worker夹具把坐标落在标识符前空白，修正为57列；Node构建脚本经Vite转换报语法错、native import正常，构建测试改真实Node加载，未删/放宽任何构建断言。证据continuation-c1-final-tests.log、continuation-c1-typecheck.log、continuation-c1-build.log。
+
+Python仅发现解释器、无真实语言服务器，本批明确返回PYTHON_BACKEND_UNAVAILABLE，**还没有Python stdio桥或正向语义认证，C1/B6不能整体标完成**。T4上下文成本实验仍待做。runtime inventory/G1/C1/build-freshness共7个新增文件已纳入test:tooling:offline，运行前按原build-state构建semantic；最终需再跑全部原门禁与新增，不把本批63项当全套。

@@ -5,9 +5,9 @@ import { createServer } from 'node:net'
 import { readFile, readdir, stat, realpath } from 'node:fs/promises'
 import { setTimeout as delay } from 'node:timers/promises'
 
-export const UNITS = ['renderer', 'main', 'worker', 'preload', 'templates']
-export const OUTPUTS = { renderer: 'dist', main: 'dist-main/main/index.js', worker: 'dist-main/main/platform/speech/worker.mjs', preload: 'dist-main/preload/bridge.cjs', templates: 'dist-main/main/templates' }
-const ROOTS = { renderer: ['renderer', 'resources', 'shared', 'vite.config.ts', '.env', '.env.local', '.env.production', '.env.production.local'], main: ['main', 'storage', 'shared', 'resources'], worker: ['main/platform/speech', 'shared'], preload: ['preload', 'shared'], templates: ['main/templates'] }
+export const UNITS = ['renderer', 'main', 'worker', 'semantic', 'preload', 'templates']
+export const OUTPUTS = { renderer: 'dist', main: 'dist-main/main/index.js', worker: 'dist-main/main/platform/speech/worker.mjs', semantic: 'dist-main/main/software/code-service-worker.mjs', preload: 'dist-main/preload/bridge.cjs', templates: 'dist-main/main/templates' }
+const ROOTS = { renderer: ['renderer', 'resources', 'shared', 'vite.config.ts', '.env', '.env.local', '.env.production', '.env.production.local'], main: ['main', 'storage', 'shared', 'resources'], worker: ['main/platform/speech', 'shared'], semantic: ['main/software/code-service.ts', 'main/software/code-service-worker.ts'], preload: ['preload', 'shared'], templates: ['main/templates'] }
 const COMMON = ['package.json', 'package-lock.json', 'tsconfig.json', '.npmrc', 'scripts/build.mjs', 'scripts/build-state.mjs', 'node_modules/.package-lock.json', 'node_modules/vite/dist/node', 'node_modules/esbuild/lib', `node_modules/@esbuild/${process.platform}-${process.arch}`]
 export const sha = data => createHash('sha256').update(data).digest('hex')
 export const cachePath = root => join(root, '.bloma-build', 'state.json')
@@ -73,7 +73,7 @@ export function snapshot(root, env = process.env, prefetched) {
     digest,
     input(unit, dependencies = []) {
       let names = ROOTS[unit].flatMap(files)
-      if (unit === 'main') names = names.filter(n => !n.startsWith('main/templates/') && n !== 'main/platform/speech/speech-worker.ts')
+      if (unit === 'main') names = names.filter(n => !n.startsWith('main/templates/') && n !== 'main/platform/speech/speech-worker.ts' && n !== 'main/software/code-service-worker.ts')
       return sha(JSON.stringify([1, resolve(root), process.version, process.platform, process.arch, environment, prefetched?.packageMetadata ?? '', hash([...COMMON, ...packages, ...names, ...dependencies])]))
     },
     output(unit) {

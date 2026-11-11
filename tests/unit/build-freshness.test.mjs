@@ -2,7 +2,10 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, utimesSync, statSync, copyFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
-import { ensureBuild, buildUnit, projectRoot } from '../../scripts/build.mjs'
+import { createRequire } from 'node:module'
+// This is a Node build entry with a hashbang, not a browser module. Load it
+// through Node (Vitest's runner transform otherwise prepends code to #!).
+const { ensureBuild, buildUnit, projectRoot } = createRequire(import.meta.url)('../../scripts/build.mjs')
 import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { UNITS, OUTPUTS, acquireBuildLock, cachePath, sha } from '../../scripts/build-state.mjs'
@@ -37,6 +40,8 @@ describe('dependency-aware component selection', () => {
     ['renderer/main.tsx', ['renderer']],
     ['preload/bridge.ts', ['preload']],
     ['main/platform/speech/speech-worker.ts', ['worker']],
+    ['main/software/code-service-worker.ts', ['semantic']],
+    ['main/software/code-service.ts', ['main', 'semantic']],
     ['main/templates/app.py', ['templates']],
     ['shared/types.ts', ['renderer', 'main', 'worker', 'preload']],
     ['vite.config.ts', ['renderer']],
