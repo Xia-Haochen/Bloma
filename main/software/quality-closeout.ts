@@ -50,7 +50,7 @@ export function qualityCloseout(ledger: Ledger, current: Identity, block: Delive
   const reviewKind=priority?.review_kind??'code'
   // Coverage judges test adequacy, not whether these suspicions have a case.
   // Keep the latest interruption authoritative; never fall back to an older PASS.
-  const latestReview=ledger.reviews.filter(r=>(r.kind??'code')===reviewKind&&r.purpose!=='coverage'&&sameIdentity(r.identity,current)).at(-1)
+  const latestReview=ledger.reviews.filter(r=>(r.kind??'code')===reviewKind&&['candidate','binding'].includes(r.purpose??'candidate')&&sameIdentity(r.identity,current)).at(-1)
   const freshReview=Boolean(latestReview?.status==='complete'&&(!latestReview.rules||latestReview.rules===rules)&&(!observationDigest||latestReview.observation?.digest===observationDigest))
   const bindingFindings=[...mustFix,...investigate.filter(importantFinding)].filter(f=>!f.independent&&!findingCaseBinding(f,current,rules))
   const boundPriority=priority&&findingCaseBinding(priority,current,rules)

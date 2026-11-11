@@ -101,3 +101,10 @@ it.each(['medium','low','unverified'] as const)('keeps %s engineering observatio
   writeFileSync(join(project.root_path,'theme.css'),baseCss.replace('#111','#236'))
   expect(await select()).toMatchObject({risk:'visual_only',required:['visual']})
 })
+
+it('never treats an exploration-only record as a baseline code-review certificate',async()=>{
+  const ledger=readQualityLedger(project.project_id),c=ledger.reviews.find(r=>r.id==='C')!
+  c.purpose='exploration';delete c.engineering
+  saveQualityLedger(project.project_id,ledger)
+  expect(await select()).toMatchObject({risk:'full',required:['code','visual']})
+})

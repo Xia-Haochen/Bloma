@@ -45,7 +45,7 @@ export function softwareStatusView(projectId: string, busy: boolean): SoftwareSt
     const path = qualityLedgerPath(projectId)
     if (existsSync(path) && statSync(path).size <= 2 * 1024 * 1024) {
       const review = readQualityLedger(projectId).reviews.find(review => review.status === 'pending' && review.run_id === run.runId && review.delegation && findDelegation(run.sessionId, review.delegation)?.status === 'running')
-      if (review) reviewPurpose = review.purpose ?? 'candidate'
+      if (review && review.purpose !== 'exploration') reviewPurpose = review.purpose ?? 'candidate'
     }
   } catch { /* An unreadable/mismatched review is never presented as active. */ }
   let internalAllowanceAvailable = false

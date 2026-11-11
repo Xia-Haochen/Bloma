@@ -41,7 +41,7 @@ export async function selectQualityCollaboration(projectId: string, current: Ide
   const full: ReviewKind[] = gui ? ['code','visual'] : ['code']
   let baseline: string | undefined, changed: string[] = [], risk: CollaborationSelection['risk'] = 'full', required = full, reasons: string[] = []
   const ledger = readQualityLedger(projectId)
-  const engineering = ledger.reviews.filter(r => (r.kind ?? 'code') === 'code' && r.status === 'complete' && r.engineering).at(-1)?.engineering
+  const engineering = ledger.reviews.filter(r => r.purpose !== 'exploration' && (r.kind ?? 'code') === 'code' && r.status === 'complete' && r.engineering).at(-1)?.engineering
   const unresolved = blockingEngineeringReview(engineering) || ledger.findings.some(f => f.disposition !== 'superseded' && (['high','critical'].includes(f.severity) || f.review_kind === 'visual' && f.severity === 'medium') && f.checks.some(c => c.outcome === 'failed')
     && !(f.disposition === 'closed' && f.checks.at(-1) && sameIdentity(f.checks.at(-1)!.identity, current)))
   try {
@@ -49,7 +49,7 @@ export async function selectQualityCollaboration(projectId: string, current: Ide
     if (!release) reasons.push('没有完整验证并发布的基线，先独立审阅新候选')
     else {
       baseline = release.id
-      const prior = ledger.reviews.filter(r => r.status === 'complete' && (r.kind ?? 'code') === 'code' && r.identity.source === release.source.digest).at(-1)
+      const prior = ledger.reviews.filter(r => r.purpose !== 'exploration' && r.status === 'complete' && (r.kind ?? 'code') === 'code' && r.identity.source === release.source.digest).at(-1)
       const hex=/^[a-f0-9]{64}$/
       const priorV = ledger.reviews.filter(r => r.status === 'complete' && r.kind === 'visual' && r.identity.source === release.source.digest && r.visual_delivery
         &&r.visual?.project===projectId&&r.visual.review===r.id&&r.visual.candidate===qualityHash(r.identity)&&hex.test(r.visual.image_hash)&&hex.test(r.visual.manifest_hash)&&hex.test(r.visual_delivery.request_hash)

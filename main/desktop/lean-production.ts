@@ -1,3 +1,4 @@
+import { runInteractionExploration, interactionExplorationAdmission } from '../software/interaction-exploration'
 import {DEFAULT_STREAM_PROGRESS_TIMEOUT_MS} from '../platform/upstream/providers/sse-reader'
 import { serializeModelQueries } from '../agent/loop/query-queue'
 import { createEngineeringPartner } from '../software/engineering-partner'
@@ -194,7 +195,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   const observeRuntime = (observation: import('../agent/loop/runtime-observation').RuntimeObservation) => {
     const review = readQualityLedger(input.projectId).reviews.find(r => r.child === observation.session_id)
     recordEvaluationEvent(input.projectId, 'runtime_identity', { observation: { ...observation,
-      ...(review ? { quality_role: review.kind === 'visual' ? 'V' : 'C' } : {}) } })
+      ...(review ? { quality_role: review.purpose === 'exploration' ? 'interaction-explorer' : review.kind === 'visual' ? 'V' : 'C' } : {}) } })
   }
   const versionOf = () => {
     const current = readPrdBackplane(input.projectId)
@@ -365,6 +366,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     const waiting=await guardDispatcherCompletion(ctx,undefined,undefined,quality.acceptedHandoff,partner.owns)
     return waiting
   }
+  const attemptedExplorations = new Set<string>()
   const advanceCloseout = async (ctx: import('../agent/loop/agent-loop').ToolContext, locallyChecked = false) => {
     assignment?.assertCurrent()
     if(pendingTestCorrection(input.projectId)){
@@ -381,6 +383,26 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     recordEvaluationEvent(input.projectId,'closeout_entered',{run_id:runId,request_id:input.requestId,source:softwareVerificationFingerprint(project.root_path)})
     const waiting = await waitForProductionChildren(ctx)
     if (waiting) return waiting
+    // Opt-in until real-model cost/benefit is measured. Never substitutes for C/V.
+    // The UI-only observer uses the same charged transport, not the paid trial script.
+    const explorationKey=versionOf()
+    if(explorationKey && process.env.BLOMA_INTERACTION_EXPLORER==='1' && brief.lean_brief?.ui==='required' && !attemptedExplorations.has(explorationKey)){
+      attemptedExplorations.add(explorationKey)
+      const admit=()=>{
+        const state=budget.snapshot(), window=currentFundedExecutionWindow()
+        const ledger=readQualityLedger(input.projectId)
+        const bindingKinds=new Set(ledger.findings.filter(f=>['suspected','confirmed'].includes(f.disposition)&&['high','critical'].includes(f.severity)&&!f.retest).map(f=>f.review_kind??'code'))
+        const mandatory=3+bindingKinds.size // C, V and an independent binding/repair handoff
+        const quote=quoteMonetaryWork(input.env.ANTHROPIC_BASE_URL,input.env.ANTHROPIC_MODEL,input.maxTokens)
+        // No quote is not evidence that optional requests are free.
+        const decision=interactionExplorationAdmission({requests:state.limits.requests-state.requests,output:state.limits.output-state.output,maxTokens:input.maxTokens,windowRequests:window?.remainingRequests,remainingMicro:quote?Math.min(quote.remaining_micro_rmb,window?Math.floor(window.remainingRmb*1e6):Infinity):undefined,requestMicro:quote?.request_micro_rmb,mandatoryRequests:mandatory,deadlineAt:window?.deadlineAt,drainMs:DEFAULT_STREAM_PROGRESS_TIMEOUT_MS})
+        if(!decision.allowed)throw new ModelRequestRefusal(decision.reason!)
+      }
+      try{
+        const observation=await runInteractionExploration({ctx,policy:collaboration,query:guardedQuery,env:input.env,maxTokens:input.maxTokens,executionScope:budget.executionScope,publish:emit,onRuntimeObservation:observeRuntime,admit})
+        recordEvaluationEvent(input.projectId,'interaction_exploration',observation)
+      }catch(error){ctx.signal.throwIfAborted();recordEvaluationEvent(input.projectId,'optional_parked',{work:'interaction_exploration',reason:redactSoftwareOutput(String(error)).slice(0,1000)})}
+    }
     const attemptedReviews=new Set<string>()
     for (;;) {
       assignment?.assertCurrent()

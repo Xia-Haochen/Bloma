@@ -1,3 +1,4 @@
+import { readInteractionEvidence } from './interaction-exploration'
 import { readVerificationReport } from './verification-report'
 import { redactSoftwareOutput } from './process-manager'
 import { serializeRedactedJson } from '../../shared/redacted-json'
@@ -14,14 +15,15 @@ export function buildQualityFindingsTool(projectId: string, authorize: (ctx: Too
   return {
     name: 'read_quality_findings',
     description: '只读当前必修/待复现问题及其实际依据；finding_id读取单条完整历史。读取不批准交付，也不把历史建议变成新需求。',
-    input_schema: { type: 'object', additionalProperties: false, properties: { finding_id: { type: 'string' } } },
+    input_schema: { type: 'object', additionalProperties: false, properties: { finding_id: { type: 'string' }, observation_offset: { type: 'integer', minimum: 0 } } },
     execute: async (input, ctx) => {
       authorize(ctx)
       ctx.signal.throwIfAborted()
+      if (Object.keys(input).some(k=>!['finding_id','observation_offset'].includes(k)) || input.observation_offset!==undefined&&(input.finding_id===undefined||!Number.isSafeInteger(input.observation_offset)||Number(input.observation_offset)<0)) throw Error('QUALITY_FINDING_INPUT_INVALID')
       if (input.finding_id !== undefined) {
         const finding = readQualityLedger(projectId).findings.find(row => row.id === input.finding_id)
         if (!finding) throw Error('QUALITY_FINDING_UNKNOWN')
-        return { output: serializeRedactedJson({ finding },redactSoftwareOutput) }
+        return { output: serializeRedactedJson({ finding, interaction_observations: finding.origin==='interaction'?readInteractionEvidence(projectId,finding.id,input.observation_offset as number|undefined):undefined },redactSoftwareOutput) }
       }
       // Ledger access is independent of execution admission. Never turn a broken
       // test/entry into a reason to hide the evidence needed to repair it.

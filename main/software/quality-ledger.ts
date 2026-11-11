@@ -17,9 +17,10 @@ import type { PastedImageRef } from '../../shared/types'
 import type { CollaborationSelection } from './collaboration-selection'
 
 export type Identity = { source: string; target: string; environment: string }
-export type ReviewPurpose = 'candidate' | 'binding' | 'coverage'
+export type ReviewPurpose = 'candidate' | 'binding' | 'coverage' | 'exploration'
 export type ReviewKind = 'code' | 'visual'
 export interface Review { purpose?: ReviewPurpose; rules?: string; id: string; kind?: ReviewKind; identity: Identity; status: 'pending' | 'submitted' | 'complete' | 'interrupted'; child?: string; delegation?: string; at: string
+  exploration?: { trace: import('./interaction-exploration').InteractionTrace[]; digest: string; actions: number; limitations: string }
   engineering?: import('./engineering-design').EngineeringReview
   observation?: {digest:string;source?:string;image_hash?:string;execution_failed?:boolean;engineering_failures?:Array<{record_sha256:string;exit_code:number}>;ui:unknown;steps:unknown[];logs:unknown[]}
   resolutions?: Array<{finding_id:string;evidence:string;case_name?:string;basis?:'static_misread'|'not_applicable'}>
@@ -28,6 +29,7 @@ export interface Review { purpose?: ReviewPurpose; rules?: string; id: string; k
   intent_observations?: import('./intent-review').IntentObservation[]; visual?: VisualMaterial; image?: PastedImageRef; visual_delivery?: { at: string; image_hash: string; request_hash: string }; visual_observations?: unknown[]
   visual_error?: 'MODEL_IMAGE_INPUT_UNSUPPORTED'; visual_route?: string }
 export interface QualityFinding {
+  origin?: 'interaction'; exploration_key?: string
   id: string; review: string; identity: Identity; requirement: string; expected_source: string; category: string
   review_kind?: ReviewKind; visual_material_hash?: string
   independent?: { design_version: string; design_digest: string; case_id: string }
@@ -61,9 +63,12 @@ export async function qualityIdentity(projectId: string, signal?: AbortSignal): 
   return qualityIdentityForInputs(projectId,input_identity)
 }
 /** Derive quality identity from already validated execution dependencies. */
-export function qualityIdentityForInputs(projectId:string,inputs:{source:string;environment:string;rules:string}):Identity {
+export function qualityTargetIdentity(projectId:string) {
   const project=findProject(projectId),brief=readPrdBackplane(projectId)
-  return {source:inputs.source,target:qualityHash([prdScopeFingerprint(brief),brief.user_confirmed_at,project.ux_confirmation]),environment:qualityHash([inputs.environment,inputs.rules])}
+  return qualityHash([prdScopeFingerprint(brief),brief.user_confirmed_at,project.ux_confirmation])
+}
+export function qualityIdentityForInputs(projectId:string,inputs:{source:string;environment:string;rules:string}):Identity {
+  return {source:inputs.source,target:qualityTargetIdentity(projectId),environment:qualityHash([inputs.environment,inputs.rules])}
 }
 export const saveQualityLedger = (projectId: string, ledger: Ledger) => writeTextFileAtomic(qualityLedgerPath(projectId), JSON.stringify(ledger, null, 2))
 

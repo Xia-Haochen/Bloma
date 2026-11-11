@@ -5,7 +5,7 @@ export interface ReviewSourceManifest { digest: string; files: Array<{path:strin
 export function repeatedReviewFailure(ledger: Ledger, current: Identity, runId: string | undefined): string | undefined {
   if(!runId)return
   for(const kind of ['code','visual']){
-    const recent=ledger.reviews.filter(r=>r.run_id===runId&&(r.kind??'code')===kind).slice(-2)
+    const recent=ledger.reviews.filter(r=>r.purpose!=='exploration'&&r.run_id===runId&&(r.kind??'code')===kind).slice(-2)
     if(recent.length===2&&recent.every(r=>r.status==='interrupted'&&r.failure_code&&r.failure_code===recent[0].failure_code
       &&r.identity.source===current.source&&r.identity.target===current.target&&r.identity.environment===current.environment))return `${kind}:${recent[0].failure_code}`
   }

@@ -223,8 +223,9 @@ E1：复用runtime-manager、release-store、isolated-launch。定义固定候�
 | B1 | 查询、读取、命令结果/日志首期已接线及专项验证；端到端收益未证 |
 | B2 | 局部调用与数值观测、有界只读批处理已落地；同步/异步命令同一受管理生命周期及事件等待定向通过；仍不全量开parallel |
 | B3 | 同文件多片段与hash保护完成；最多8文件全部预检后有序应用、逐项部分失败语义与真实Pi接线通过；不是跨文件原子事务 |
-| B4 | G1/V1首期DOM语义、当前观察refs、能力发现、浏览器/Electron真实调试接线专项通过；V2展示待做 |
-| B5/B7/B8 | 独立探索、原生/故障取证、干净环境等仍在继续；V5共享缓存边界已修复 |
+| B4 | G1/V1首期DOM语义、当前观察refs、能力发现、浏览器/Electron真实调试接线专项通过；V2实际提交差异/进程展示及Pi历史回放已接线，最终平台App展示回归待统一 |
+| B5 | 首期可选交互探索接主收尾；真实隔离浏览器/受控Pi及原finding→独立绑定→失败/修复/复验/发布机制通过；真实模型收益未测，V3长程消息贡献仍待集成 |
+| B7/B8 | 原生/故障取证、干净环境等仍在继续；V5共享缓存边界已修复 |
 | B6 | TS/JS真实只读语义已沿inspect_repository接线、独立编译worker+真实Pi通过；Python真实后端与T4实验仍待做 |
 
 后续在本节按实际证据更新，不能仅因合入代码标记真实模型提效完成。
@@ -336,3 +337,15 @@ Python仅发现解释器、无真实语言服务器，本批明确返回PYTHON_B
 进程卡显示本次读取时的状态、退出码、有界输出、归档可用/缺口和原会话read_process日志查询入口；入口是可见只读查询说明，不执行重放/启动，不以退出0当产品PASS。通过原反馈明确running/cancel/budget/未验收，修复ChatPanel过程组此前丢掉feedback的接线；请求声明仍“调用已登记”。实时摘要剥离反馈封套再裁剪，避免500字只剩内部元数据。历史有展示元数据就原样校验回放，无元数据明确只有摘要，不能重构假diff。
 
 7文件35项通过（新diff投影3含127组可重构反例、renderer3、原feedback UI2、写租约5、多文件12、实际Pi文件2、真实异步命令8）。实际Pi验证同/多文件host display经过真实事件与历史JSONL一致；单测并非最终平台App界面验证。typecheck通过，最终平台Cua/当前全部新版本离线标准仍待统一验收。证据continuation-v2-tests.log、continuation-v2-typecheck.log；新UI3文件已接test:tooling:offline。
+
+### 2026-11-11 B5首期：隔离交互探索沿原质量闭环接线
+
+新增宿主可选`BLOMA_INTERACTION_EXPLORER=1`策略，默认关闭，待单独授权真实模型成本/收益验证再决定是否默认启用。在当前候选实际本机验证、合作者收敛后，宿主安排新的UI-only Pi会话，只给确认目标、自己的DOM语义观察/refs、合成数据操作、关闭重开及结构化疑点提交；不给实现、自评、shell/script/任意URL、文件写、纠正批准或发布工具。保留原费用/请求/输出守卫，每次请求（含transport retries）重新保护必要收尾/C/V预算及资金/期限；缺报价不当作免费。至多6轮/12次界面调用、90秒独立期限；取消排空自己的实例，未知输入结果不重放。沿现有debug生命周期和data/profile，不import付费试验控制器、不复制凭据或旧用户数据；目录隔离不是OS/网络沙箱，不承诺应用本身无法发外部请求。
+
+每个UI操作核对实际产品库存字节、目标和冻结合同；提交点及宿主返回再核对完整环境。debug fingerprint与release inventory哈希是不同协议，分别绑定而不互相比值；初版因此拒绝真实实例，已修复并保留失败日志。初版每次点击重算整个宿主运行时导致组合用例60秒失败；取证后改为逐操作仍完整重读产品字节、提交再重核完整宿主环境，未放宽生产/测试期限或移除预期。
+
+发现写原quality ledger，`purpose=exploration`明确不是C/V；宿主绑定版本/trace/hash、保留原触发/确认预期，只登记suspected，模型不能指定checks、确认失败、关闭或PASS。同候选、相同触发及相同规范化实际旅程才归并，不吞不同输入/操作；新的源码不让旧发现自动消失。沿原read_quality_findings/read_quality_review有界分页读取历史trace，不重放动作。原独立案例绑定、真实verifySoftwareCandidate、失败/修复重测及C/V/发布门禁不变；显式排除exploration冒充新鲜C/binding或已发布基线C凭证。
+
+4文件81项组合通过：新浏览器探索7、质量审阅35、质量收尾19、协作选择20。含Ω合成输入保存/重开坏/好对照、源变更/错session/伪造预期/无实际观察拒绝、取消、重复不吞不同触发、预算保护和实际Pi三工具边界；另有正常UI→原finding→实际独立C读取冻结case和trace并绑定→原宿主CLI复现失败→改实际实现→同冻结case通过并关闭→最终C→原release发布的临时fixture闭环。后者证明原质量/发布机制贯通，不是GUI成品全部功能/真实模型普遍自主发现认证。保留整份计划未完成状态；最终版本标准离线门禁、真实平台App、原生和干净Windows仍待后续。typecheck、main/worker/semantic/preload/templates构建、docs通过；六保护文件SHA及原HEAD/dirty/blob未变。
+
+证据：会话工作台continuation-b5-final-tests.log、continuation-b5-typecheck.log、continuation-b5-build.log、continuation-b5-docs.log、continuation-protected.b5.json；初次输入契约/哈希范围/性能失败见continuation-b5-tests*.log。未启动付费模型，不把受控响应解释成供应商或成本认证。

@@ -1,3 +1,9 @@
+import { randomUUID } from 'node:crypto'
+import { createServer } from 'node:net'
+import { createInteractionExploration } from '../../../main/software/interaction-exploration'
+import { verificationInputs } from '../../../main/software/verification'
+import { promoteSoftwareRelease, activeSoftwareRelease } from '../../../main/software/release-store'
+import { prdScopeFingerprint } from '../../../main/project/requirement-contract'
 import {applicableQualityLedger} from '../../../main/software/quality-ledger'
 import { organizedPrd } from '../../support/organized-prd'
 import { projectRequirementsModel } from '../../../main/model/requirements-model'
@@ -537,4 +543,53 @@ it('one current binding review settles several same-case suspicions but cannot c
  expect(new Set(facts.findings.slice(0,3).map(f=>f.checks[0].candidate)).size).toBe(1)
  expect(await quality.gate()).toContain('REPRODUCTION_REQUIRED')
  expect(facts.reviews.map(r=>r.purpose)).toEqual(['coverage','binding'])
+},120000)
+
+it('routes a real UI exploration into the original independent binding, failed execution, repair, recheck and release chain', async () => {
+  const root=project.root_path,launchFile=join(root,'LAUNCH.json'),originalLaunch=readFileSync(launchFile,'utf8')
+  const server=createServer();await new Promise<void>(done=>server.listen(0,'127.0.0.1',done));const port=(server.address() as {port:number}).port;await new Promise<void>(done=>server.close(()=>done()))
+  // UI and CLI reach the SAME real arithmetic implementation, not a mock oracle.
+  writeFileSync(join(root,'server.cjs'),`const fs=require('fs');require('http').createServer((q,s)=>{if(q.url==='/sum'){require('child_process').execFile(process.execPath,['app.cjs','2','3'],{cwd:process.cwd()},(e,out)=>{s.end(out)})}else{s.setHeader('Content-Type','text/html');s.end(fs.readFileSync('index.html'))}}).listen(${port},'127.0.0.1')`)
+  writeFileSync(join(root,'index.html'),`<!doctype html><button>Sum 2 + 3</button><output role="status"></output><script>document.querySelector('button').onclick=async()=>{document.querySelector('output').textContent=await(await fetch('/sum')).text()}</script>`)
+  writeFileSync(launchFile,JSON.stringify({schema_version:2,ui:'browser',command:['node','server.cjs'],url:`http://127.0.0.1:${port}`}))
+  const explorer=await createInteractionExploration(project.project_id,ctx(),randomUUID())
+  let observed:any
+  const call=async(name:string,input:Record<string,unknown>={})=>JSON.parse((await explorer.tools.find(t=>t.name===name)!.execute(input,ctx(explorer.sessionId))).output)
+  try{
+    observed=await call('read_interaction_goal')
+    const button=observed.observation.observation.ui.nodes.find((n:any)=>n.role==='button')
+    observed=await call('explore_ui',{mode:'act',control:{kind:'click',ref:button.ref}})
+    // Explicitly observe settled network-driven UI, rather than asserting the click's immediate render timing.
+    for(let i=0;i<8&&!observed.observation.ui.text.includes('999');i++)observed=await call('explore_ui')
+    expect(observed.observation.ui.text).toContain('999')
+    await call('submit_interaction_findings',{findings:[{requirement:'F-001',expected_source:'2加3得5',severity:'high',trigger:'Sum 2 + 3',observed:'界面实际显示999',unknowns:'须独立案例复现，不是验收结论',observation_ids:[1,observed.id]}]})
+  }finally{await explorer.close()}
+  const id=readQualityLedger(project.project_id).findings[0].id
+  expect(readQualityLedger(project.project_id).findings[0]).toMatchObject({origin:'interaction',disposition:'suspected',checks:[]})
+  writeFileSync(launchFile,originalLaunch)
+  let round=0
+  register(async function*(_prompt,options){
+    const content=++round===1?[
+      {type:'tool_use',id:'goal',name:'read_quality_review',input:{}},
+      {type:'tool_use',id:'frozen',name:'read_quality_review',input:{test_file:'cli'}},
+      {type:'tool_use',id:'trace',name:'read_quality_review',input:{interaction_finding_id:id}},
+      {type:'tool_use',id:'source',name:'read_file',input:{path:'app.cjs'}}
+    ]:[{type:'tool_use',id:'binding',name:'submit_quality_findings',input:{findings:[],resolutions:[{finding_id:id,case_name:'sum',evidence:'已核对冻结sum以正常入口2和3断言5；界面与CLI同调app.cjs，真实界面返回999。保留触发及原预期，宿主必须执行。'}]}}]
+    if(round===2){const messages=JSON.stringify(options.messages);expect(messages).toContain('999');expect(messages).toContain('sum');expect(messages).toContain('historical isolated UI observations')}
+    yield{type:'assistant',message:{role:'assistant',content:content as any}}
+    yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
+  })
+  const binding=await quality.begin(ctx(),'code',undefined,'binding');await findDelegation(parent,binding.delegation_id)!.completion;await settleParentDelegationRuns(parent)
+  expect(readQualityLedger(project.project_id).findings[0].retest?.case_name).toBe('sum')
+  await verifySoftwareCandidate(project.project_id,'exploration-reproduce',ctx().signal)
+  expect(readQualityLedger(project.project_id).findings[0]).toMatchObject({disposition:'confirmed',checks:[{outcome:'failed'}]})
+  writeFileSync(join(root,'app.cjs'),'console.log(5)')
+  const checked=await verifySoftwareCandidate(project.project_id,'exploration-repair',ctx().signal)
+  expect(checked.status).toBe('passed')
+  expect(readQualityLedger(project.project_id).findings[0]).toMatchObject({disposition:'closed',checks:[{outcome:'failed'},{outcome:'passed'}]})
+  expect(await quality.gate()).toContain('REVIEW_REQUIRED') // exploration/binding cannot replace final C
+  await review([]);expect(await quality.gate()).toBeUndefined()
+  const inputs=await verificationInputs(project.project_id,'exploration-publish',ctx().signal),scope=prdScopeFingerprint(readPrdBackplane(project.project_id))
+  await promoteSoftwareRelease(checked.candidate!,{version:inputs.key,scope,at:new Date().toISOString()},ctx().signal,()=>prdScopeFingerprint(readPrdBackplane(project.project_id))===scope,true)
+  expect((await activeSoftwareRelease(project.project_id))?.id).toBe(checked.candidate!.id)
 },120000)

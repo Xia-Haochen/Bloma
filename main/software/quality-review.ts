@@ -1,3 +1,4 @@
+import { readInteractionEvidence } from './interaction-exploration'
 import { serializeRedactedJson } from '../../shared/redacted-json'
 import { readEngineeringDesign, ENGINEERING_GUIDANCE, ENGINEERING_REVIEW_SCHEMA, parseEngineeringReview } from './engineering-design'
 import { buildQualityFindingsTool } from './quality-findings-tool'
@@ -154,13 +155,17 @@ export function createQualityReview(projectId: string, parent: string, policy: R
     ? readQualityLedger(projectId).reviews.find(r => r.id === children.get(child))?.kind === 'visual'
       ? '你是独立视觉/交互审阅V。只看宿主授权的当前候选真实图片、确认设计、同次DOM/操作事实；不继承制作方或C的结论，不读实现。先read_quality_review和view_quality_image；实际核对图片后用submit_quality_findings提交具体可见观察及疑点，不能用OCR/文件名/DOM替代看图，不能自报PASS或关闭问题。没有明确的业务预期保留争议；只读，不运行命令、不改文件。'
       : `你是独立只读代码/数据审阅C。项目根：${findProject(projectId).root_path}。业务范围以read_quality_review返回的已确认目标为依据；同时核对宿主提供的工程设计与工程底线。实现和设计是待查资料，不能当成已通过结论。定位具体触发、预期来源和证据，提交finding而非PASS。不看制作方自评，不改代码/预期，不运行命令。无法确定的业务规则保留争议。必须调用submit_quality_findings后才结束。` : undefined
-  const childProtocol: AgentLoopTool[] = [{ name: 'read_quality_review', description: '读取本审阅的候选、确认需求及冻结测试索引。绑定case_name前核对冻结合同和相关测试正文；test_file只接受索引中的key，可用offset分页。', input_schema: { type: 'object', additionalProperties: false, properties: {test_file:{type:'string'},offset:{type:'integer',minimum:0}} },
+  const childProtocol: AgentLoopTool[] = [{ name: 'read_quality_review', description: '读取本审阅的候选、确认需求及冻结测试索引。绑定case_name前核对冻结合同和相关测试正文；test_file只接受索引中的key；interaction_finding_id读取对应历史交互trace（不是当前图片或PASS）；可用offset分页。', input_schema: { type: 'object', additionalProperties: false, properties: {test_file:{type:'string'},interaction_finding_id:{type:'string'},offset:{type:'integer',minimum:0}} },
     execute: async (_input, ctx) => {
       ctx.signal.throwIfAborted()
       const ledger = readQualityLedger(projectId), review = ledger.reviews.find(r => r.id === children.get(ctx.sessionId))
       if (ctx.projectId !== projectId || !review || !same(review.identity, await identity(projectId, ctx.signal))) throw Error('QUALITY_REVIEW_STALE_OR_DENIED')
-      if(Object.keys(_input).some(k=>!['test_file','offset'].includes(k))||_input.test_file===undefined&&_input.offset!==undefined)throw Error('QUALITY_REVIEW_INPUT_INVALID')
+      if(Object.keys(_input).some(k=>!['test_file','interaction_finding_id','offset'].includes(k))||_input.test_file===undefined&&_input.interaction_finding_id===undefined&&_input.offset!==undefined||_input.test_file!==undefined&&_input.interaction_finding_id!==undefined)throw Error('QUALITY_REVIEW_INPUT_INVALID')
       if(review.rules&&review.rules!==(review.purpose==='coverage'?qualityCoverageRulesVersion(projectId):rulesVersion(projectId)))throw Error('QUALITY_REVIEW_TESTS_CHANGED')
+      if(_input.interaction_finding_id!==undefined){
+        if(review.kind==='visual'||typeof _input.interaction_finding_id!=='string')throw Error('EXPLORATION_EVIDENCE_UNAVAILABLE')
+        return{output:JSON.stringify(readInteractionEvidence(projectId,_input.interaction_finding_id,(_input.offset??0) as number))}
+      }
       const testSources=qualityTestSources(projectId,review.purpose==='coverage')
       if(_input.test_file!==undefined){
         const file=testSources.find(f=>f.key===_input.test_file),offset=_input.offset??0
