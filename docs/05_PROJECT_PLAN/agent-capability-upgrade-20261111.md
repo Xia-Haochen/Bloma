@@ -226,7 +226,7 @@ E1：复用runtime-manager、release-store、isolated-launch。定义固定候�
 | B4 | G1/V1首期DOM语义、当前观察refs、能力发现、浏览器/Electron真实调试接线专项通过；V2实际提交差异/进程展示及Pi历史回放已接线，最终平台App展示回归待统一 |
 | B5 | 首期可选交互探索接主收尾；真实隔离浏览器/受控Pi及原finding→独立绑定→失败/修复/复验/发布机制通过；真实模型收益未测，V3长程消息贡献仍待集成 |
 | B6 | TS/JS worker之外补真实可选Jedi/Python固定stdio桥，真实Pi/版本/取消/坏后端等验证；T4已抓实际HTTP schema/context与恢复/撤销反例，不泛称总字节或费用下降 |
-| B7/B8 | G2/O1、自有HWND世代/重建/最小化、历史终态/双读者前向seq与V5运行目录/临时缓存防链接已实测；E1候选回传与最终外部环境继续 |
+| B7/B8 | G2/O1、自有HWND世代/重建/最小化、历史终态/双读者前向seq与V5运行目录/临时缓存防链接已实测；E1物理包/独立pin/CLI/证据回传经本机Node+Electron实测，最终外部环境继续 |
 
 后续在本节按实际证据更新，不能仅因合入代码标记真实模型提效完成。
 
@@ -427,3 +427,23 @@ seq>0接续改为从最早未读前向分页，不能默认tail截掉16条后就
 ownedDirectory在宿主选定base/每个自建子目录创建前后lstat/realpath，拒实际目录junction/symlink（含dangling）或非目录，变更不删除/修复用户替代路径。实际APP_DATA_DIR/electron-profile也在原bindSoftwareProfile处防链接，移除旧user-data-dir参数后仍只用该自有profile。base父级选择仍由调用方原权限/调试工作区/数据generation负责；非原子FS事务、不可防任意恶意同用户进程替换祖先或突破操作系统权限。显式保留**宿主统一、校验下载的Electron runtime cache**，不把它和可变App HOME/profile/npm/pip/tmp混为一谈，不安装/清共享依赖、旧缓存或用户配置。
 
 新增7项execution-isolation：并行两个**真实Node child**在两个独立源/数据目录写HOME/USERPROFILE/APPDATA/LOCALAPPDATA/TEMP/TMP/XDG/npm/pip/uv/data标记，逐项检查没有对方字节；相同data重开/显式profile绑定；真实environment-home/tmp/npm/electron-profile junction均不写目标且保留sentinel，linked data/dangling base/非目录/..拒绝。最终与Native7/实际Electron保存+Pi1/debug10/async8/execution9/inventory3组合**7文件45项通过**，continuation-v5-release-tests.log约329.39s；当前typecheck/main相关构建/docs通过，tooling入口30文件。原执行组仍实际验证离线npm安装/构建、端口占用/跨owner/停止和宿主管道断开回收真实server grandchild。不是干净Windows、Cua平台、跨用户安全或全进程强隔离认证。六保护/原dirty不变见continuation-protected.v5.json。E1与其余最终工作继续。
+
+### 2026-11-11 E1：固定候选物理包与原调试证据回传
+
+已接线宿主API `candidate-reproduction.ts` 及 `npm run reproduce:candidate -- export|inspect|run|evidence`，完整格式/边界/干净机待执行清单见[候选复现协议](candidate-reproduction-protocol-20261111.md)。包UUID只是传输身份，不是新候选/发布状态；原release-store candidate_id及原C/V/质量/费用/发布权威不变，不自动promote/改registry或已冻结业务预期。所有结果verification=not_applicable、os_reset=not_attested。没有新增模型工具、Agent/daemon、事故账本或自动重放机制。
+
+原release-store新增物理复制出口，**重读实际库存**后预检、复制真实依赖文件（非原目录symlink/硬链），保持LAUNCH.json字节不变，前后核原候选与包；runtimeInventory只有显式includeIgnored:true时遍历原忽略域，旧默认不变。包接收不套宿主mutable目录豁免，额外.cache代码也会改变全物理摘要。manifest包含原candidate/source/runtime身份、每文件SHA/bytes、平台/架构、固定旅程/明确seed、external runtime要求和已有managed runtime来源/许可；独立manifest pin不是签名或PASS。导出只取候选声明域/明确GUI fixtures，不迁移旧HOME/profile/凭据；已知credential-like文件拒绝，不默默修改冻结字节，也不吹成通用秘密扫描。
+
+1GiB应用/10,000文件/64MiB seed/16MiB metadata等上限明确；最后加了seed**物化前**总量预检，反例4×20MiB元数据在访问/复制blob前拒绝。CLI参数JSON实际定额256KiB读，不只一次stat。导入逐次重哈希app/seed，拒链接、scope/平台/metadata不符；metadata pin须经独立可信渠道。不自动装runtime/网络重试/回落生产机原绝对路径，明确runtime map重新核文件SHA，有directory_sha256再核分发目录；exe SHA不是完整安装/相邻库/OS证明，Node/Python与未声明目录的Electron仍有此缺口。
+
+只对完整绝对launch参数按原app根/已核runtime映射生成**宿主生效overlay**，不改冻结文件、不猜嵌入字符串；明显嵌入绝对flag路径拒绝。browser沿原隔离端口提示，不冒称原子端口租约。debugSession保存原声明key与实际launch分离，仍在restart检查原声明没改；公开inspect_app没有overlay字段。新execution session复用debugWorkspace、copyDataForPreview、原open/act/close、原seq/diagnostics/archive，不接管旧PID或跨CLI进程恢复动作。中断和后检失效保留“可能已生效/do not replay”，关闭先前自有进程。
+
+回执引用原debug snapshot/源版本/steps/error/storage/80行有界前向页与next_seq；新CLI evidence跨进程仅owner校验读取历史，closed/failed原终态保留、runtime_attached=false，不执行旧调用。仅列原自有evidence内本次PNG附件的相对路径/字节/SHA，visual_review未做；不自动打包整个HOME/data/profile/checkpoint。附件缺失明确gap，不建立平行日志账本。
+
+真实Node/browser移除**原工作源码+原候选app+原dependency cache**后，物理包依赖仍独立require成功、旧seed显示、实际保存UTF8文件、正常restart读回；registry完全不变、原候选未因此verified。真实Electron普通main/preload IPC保存/restart/profile分开与附图也通过（工程夹具，非最终平台Cua或干净OS）。实际CLI export/inspect/run及跨进程evidence均真执行，不是第二套stub engine。预检pin伪PASS/同stat改字节/额外.cache/seed坏/真实链接/缺或错runtime/旧绝对flag/大metadata；真正EACCES exit27回到原失败startup记录及owned stderr。真正slow输入开始后取消，落盘1次、不重跑，原closed元数据仍在。
+
+组合**7文件47项通过** `continuation-e1-final-tests.log`约336.81s（E1 12/debug10/recovery8/inventory3/isolation7/现役release-update6/notes-GUI升级1）。最后seed预检改动后当前E1**全12项再次通过** `continuation-e1-guard-tests2.log`约82.87s；`continuation-e1-guard-typecheck.log/build.log`通过，docs/diff通过。现役release-update实际100条SQLite记录在迁移失败、schema更新/搜索标签/备份恢复中保留，notes-GUI实际保留原ID/create/edit/save/reopen并抓到作者人为删行反例；**不是**旧休眠data-migration drill代替software-v1。入口现**33工具组文件**（新增E1/现役release-update/notes-GUI），原verification19不变，Python正向另组。最新整套仍未跑，不能拼专项成最终PASS。
+
+保留失败：tests2为9/10，startup page.goto失败曾丢失调用方snapshot id；E1现从本次fresh owner的原retained metadata只读取得failed记录后回传，不接管PID/不改原open失败语义。首次加Electron用例漏实际window_title，旧组合50/51在原入口门即拒绝；补真实fixture标题、未松生产parser后focused1过（11未选，不算12）并完整组过。最早test data_dir可选类型漏断言被typecheck拦下已修。`continuation-e1-guard-tests.log`是typecheck+build+tests串行外层工具180秒被截断，**无测试终态不能认证通过**；当场仅查本次fixture/CLI匹配进程无存活，单独执行完整12项通过（未提高任何单测/生产时限）。这些记录保留，不称旧中断根因已穷尽。
+
+六保护/原HEAD、唯一dirty blob仍全不变见continuation-protected.e1.json。干净Windows/安装/权限/断网全系统矩阵仍需用户外部执行器；最终平台Cua仍缺driver配置，不反复无效探测、不擅自安装/重启常用实例。V3伙伴定向事实/长程贡献、其余必要受控收益/恢复补证、当前完整offline+Python最终门禁与收尾继续，不把本批当全部计划结束。

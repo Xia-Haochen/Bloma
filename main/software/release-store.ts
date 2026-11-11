@@ -59,7 +59,7 @@ export async function fileDigest(file: string, signal?: AbortSignal): Promise<st
 }
 /** Runtime evidence includes binaries/assets/dependencies, with streaming hashes.
  * Only explicitly host-created dependency links may be traversed. */
-export async function runtimeInventory(root: string, signal?: AbortSignal, links: Record<string, string> = {}, hostLayout = true): Promise<RuntimeInventory> {
+export async function runtimeInventory(root: string, signal?: AbortSignal, links: Record<string, string> = {}, hostLayout = true, options: { includeIgnored?: boolean } = {}): Promise<RuntimeInventory> {
   const files: Entry[] = []; let bytes = 0
   // Bounded IO overlap, NOT a stat cache. Every byte is freshly hashed, and
   // result slots retain the original sorted depth-first inventory order.
@@ -69,7 +69,7 @@ export async function runtimeInventory(root: string, signal?: AbortSignal, links
   const visit = async (directory: string, prefix = '', mutable = false) => {
     for (const entry of (await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
       signal?.throwIfAborted(); if (failed) throw failure
-      if (IGNORED.has(entry.name)) continue
+      if (!options.includeIgnored && IGNORED.has(entry.name)) continue
       const path = `${prefix}${entry.name}`, full = join(directory, entry.name), info = await lstat(full)
       if (info.isSymbolicLink()) {
         if (!links[path] || await realpath(full) !== await realpath(links[path])) throw Error(`RELEASE_LINK_UNSUPPORTED: ${path} (root: ${root})`)
@@ -104,6 +104,19 @@ async function copyEntries(source: string, destination: string, entries: Entry[]
     await mkdir(dirname(target), { recursive: true }); await copyFile(join(source, entry.path), target, constants.COPYFILE_FICLONE)
     if (await fileDigest(target, signal) !== entry.sha256) throw Error('RELEASE_COPY_INPUT_CHANGED')
   }
+}
+/** Host-only physical transfer; keep LAUNCH.json bytes unchanged. Execution
+ * relocation is a separate, explicitly pinned overlay, never new acceptance. */
+export async function copySoftwareCandidateRuntime(release: SoftwareRelease, destination: string, signal?: AbortSignal, preflight?: (inventory: RuntimeInventory) => void): Promise<RuntimeInventory> {
+  await validateSoftwareRelease(release.projectId, release, signal)
+  const inventory = await runtimeInventory(release.root, signal, release.dependencies)
+  if (inventory.digest !== release.runtime.digest) throw Error('RELEASE_COPY_INPUT_CHANGED')
+  preflight?.(inventory)
+  await copyEntries(release.root, destination, inventory.files, signal)
+  const copied = await runtimeInventory(destination, signal, {}, false, { includeIgnored: true })
+  if (copied.digest !== inventory.digest) throw Error('RELEASE_COPY_INPUT_CHANGED')
+  await validateSoftwareRelease(release.projectId, release, signal)
+  return copied
 }
 function relocatedLaunch(launch: LaunchDeclaration, source: string, destination: string): LaunchDeclaration {
   return { ...launch, command: launch.command.map(argument => {

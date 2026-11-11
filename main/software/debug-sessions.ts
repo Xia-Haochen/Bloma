@@ -35,7 +35,7 @@ export interface DebugSnapshot { runtime_attached?:boolean; retained_snapshot?:b
   storage?:StorageDelta; diagnostic_page?:ReturnType<typeof diagnosticPage>['diagnostic_page']; stale: boolean; url?: string; screenshot?: string; screenshot_error?: string; source_checkpoint?: { id: string; files?: number }; checkpoint_error?: string; fixtures?: GuiAcceptanceSuite['fixtures']; log_cursor?: number; observations_omitted?: number; observations: DebugObservation[]; steps: Array<{ id: string; passed: boolean; actual?: unknown }>; error?: string }
 interface DebugSession { snapshot: DebugSnapshot; root: string; temporary: string; workspace: string; data: string; file: string; owner: string; page?: Page;
   child?: ChildProcess; nativeRoot?: number; native?:OwnedNativeUi; browser?: BrowserContext; browserClient?: Browser; browserServer?: BrowserServer; externalProcessId?: string; ownedProcessId?: string; stdout?: string; stderr?: string; signal: AbortSignal; abort: () => void;
-  processCursor?:number; observedProcess?:string; processGap?:string; operationId?:string; activeAction?: string; formal?:boolean; cdpEndpoint?: string; seq: number; logBytes: number; closing?: Promise<void>; finished?: boolean; timer?: ReturnType<typeof setTimeout>; busy: boolean; launch: LaunchDeclaration }
+  processCursor?:number; observedProcess?:string; processGap?:string; operationId?:string; activeAction?: string; formal?:boolean; cdpEndpoint?: string; seq: number; logBytes: number; closing?: Promise<void>; finished?: boolean; timer?: ReturnType<typeof setTimeout>; busy: boolean; launch: LaunchDeclaration; declarationKey: string }
 const sessions = new Map<string, DebugSession>()
 const observedPages = new WeakSet<Page>()
 async function debugTarget(page:Page){const cdp=await page.context().newCDPSession(page);try{return(await cdp.send('Target.getTargetInfo')).targetInfo.targetId as string}finally{await cdp.detach()}}
@@ -275,8 +275,11 @@ export function readDebugSession(projectId:string,sessionId:string,id:string,sin
   observeBackend(session)
   return {...session.snapshot,runtime_attached:!!session.page&&!session.page.isClosed()&&!session.finished&&['opening','ready'].includes(session.snapshot.state),retained_snapshot:false,...diagnosticPage(session.snapshot.observations,session.seq,since,query),stale:!current||current!==session.snapshot.source,log_cursor:session.seq,steps:[...session.snapshot.steps]}
 }
-export async function openDebugSession(input: { projectId: string; sessionId: string; root: string; launch: LaunchDeclaration; signal: AbortSignal; processId?: string; formal?:boolean }): Promise<DebugSnapshot> {
+const debugLaunchKey = (launch: LaunchDeclaration) => JSON.stringify([launch.schema_version, launch.command, launch.ui, launch.mode, launch.url, launch.artifact, launch.window_title])
+export async function openDebugSession(input: { projectId: string; sessionId: string; root: string; launch: LaunchDeclaration; signal: AbortSignal; processId?: string; formal?:boolean; declaration?:LaunchDeclaration }): Promise<DebugSnapshot> {
   input.signal.throwIfAborted()
+  // Host-only pinned relocation overlay. Public inspect_app has no such field.
+  if (input.declaration) { const actual=readLaunchDeclaration(input.root); if(!actual?.ok||debugLaunchKey(actual.launch)!==debugLaunchKey(input.declaration))throw Error('DEBUG_LAUNCH_DECLARATION_MISMATCH') }
   if (hasDebugSession(input.projectId, input.sessionId)) throw Error('DEBUG_SESSION_ALREADY_OPEN: 复用现有debug_session_id，或先close')
   const workspace = debugWorkspace(input.projectId, input.sessionId), previous = savedCheckpoint(input.projectId, input.sessionId)
   const id = randomUUID(), temporary = mkdtempSync(join(tmpdir(), 'bloma-debug-')), source = verificationFingerprint(input.root)
@@ -288,7 +291,7 @@ export async function openDebugSession(input: { projectId: string; sessionId: st
   const session: DebugSession = { root: resolve(input.root), temporary, workspace, data, file: metadataPath(id), owner: `debug-${id}`,
     snapshot: { id, projectId: input.projectId, sessionId: input.sessionId, state: 'opening', version: (previous?.version ?? 0) + 1, source, stale: false, observations: [], steps: [], data_dir: data,
       ...(previous ? { resumed_from: previous.id, fixtures: previous.fixtures, source_checkpoint: previous.source_checkpoint } : {}) },
-    signal: input.signal, formal:input.formal, abort: () => { void closeDebugSession(input.projectId, input.sessionId, id).catch(() => {}) }, seq: 0, logBytes: 0, busy: false, launch: input.launch }
+    signal: input.signal, formal:input.formal, abort: () => { void closeDebugSession(input.projectId, input.sessionId, id).catch(() => {}) }, seq: 0, logBytes: 0, busy: false, launch: input.launch, declarationKey:debugLaunchKey(input.declaration??input.launch) }
   sessions.set(id, session); persist(session); input.signal.addEventListener('abort', session.abort, { once: true })
   for (const [key, previous] of sessions) if (sessions.size > 128 && previous.finished) sessions.delete(key)
   try {
@@ -354,8 +357,7 @@ export async function actDebugSession(input: { projectId: string; sessionId: str
     const restart = async () => {
       const source = verificationFingerprint(session.root); if (!source) throw Error('DEBUG_SOURCE_UNREADABLE')
       const declared = readLaunchDeclaration(session.root)
-      const launchKey = (launch: LaunchDeclaration) => JSON.stringify([launch.schema_version, launch.command, launch.ui, launch.mode, launch.url, launch.artifact, launch.window_title])
-      if (!declared?.ok || launchKey(declared.launch) !== launchKey(session.launch)) throw Error('DEBUG_LAUNCH_CHANGED: 正常入口声明已改变，请close后重新open；不能把旧入口冒充当前程序')
+      if (!declared?.ok || debugLaunchKey(declared.launch) !== session.declarationKey) throw Error('DEBUG_LAUNCH_CHANGED: 正常入口声明已改变，请close后重新open；不能把旧入口冒充当前程序')
       if(session.native){const cleanup=await session.native.close();if(cleanup.metadata_cleanup==='unknown')log(session,'native.cleanup',`metadata cleanup unknown: ${cleanup.error}`)}session.native=undefined;session.snapshot.native_ui=undefined
       if (session.page) await invalidateSoftwareUi(session.page)
       session.activeAction = 'reload'; session.snapshot.state = 'opening'
