@@ -73,8 +73,18 @@ it('runs real checks from a parent action and reuses them at final delivery only
   expect((await recentSoftwareVerification(project.project_id, 'another-request'))?.reused).toBe(true)
   const cached = await recentSoftwareVerification(project.project_id, 'r'); expect(cached?.core?.reused).toBe(true)
   const query: SDKQuery = async function* () { yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '当前版本已验证，请交付。' }] } }; yield { type: 'result', subtype: 'success', usage: { input_tokens: 10, output_tokens: 10 } } }
-  await enterDesktopLine({ projectId: project.project_id, sessionId: 's', requestId: 'r', content: '完成原任务', maxTokens: 4096, signal: AbortSignal.timeout(90000) }, withEmptyQualityReview(query), {},
-    { publish: () => {}, persistAssistant: () => {}, persistSystem: () => {}, complete: () => {} })
+  const diagnostic = process.env.VERIFY_CLOSEOUT_REPORT, started = performance.now(), events: unknown[] = []
+  const capture = (kind: string, value: unknown) => { if (diagnostic && events.length < 256) events.push({ms:performance.now()-started,kind,value:JSON.stringify(value)?.slice(0,2000)}) }
+  const profiler = diagnostic ? new (await import('node:inspector')).Session() : undefined
+  const post = (method:string) => new Promise<any>((resolve,reject)=>profiler!.post(method,(error,result)=>error?reject(error):resolve(result)))
+  if(profiler){profiler.connect();await post('Profiler.enable');await post('Profiler.start')}
+  try {
+    await enterDesktopLine({ projectId: project.project_id, sessionId: 's', requestId: 'r', content: '完成原任务', maxTokens: 4096, signal: AbortSignal.timeout(90000) }, withEmptyQualityReview(query), {},
+      { publish: (...args) => capture('publish',args), persistAssistant: (...args) => capture('assistant',args), persistSystem: (...args) => capture('system',args), complete: (...args) => capture('complete',args) })
+  } finally {
+    if(diagnostic){writeFileSync(diagnostic,JSON.stringify({elapsed_ms:performance.now()-started,project:findProject(project.project_id),events},null,2))}
+    if(profiler){try{const result=await post('Profiler.stop');writeFileSync(diagnostic+'.cpuprofile',JSON.stringify(result.profile))}finally{profiler.disconnect()}}
+  }
   expect(findProject(project.project_id).status).toBe('completed'); expect(count()).toBe(2)
 }, 120000)
 it('invalidates source changes and never revives an older PASS when a failed version is restored', async () => {

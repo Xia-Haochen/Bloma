@@ -483,3 +483,11 @@ ownedDirectory在宿主选定base/每个自建子目录创建前后lstat/realpat
 owned-directory保留每次lstat前后/创建后类型检查、每组件realpath和relative身份核验；仅在不存在时mkdir，Windows用fresh realpathSync.native查询最终路径，非Windows仍原实现。**无路径/stat信任缓存、无放松junction/dangling/替换检查、无放宽测试/生产/模型时限**。同driver改后环境约71–113ms、真Node命令326–382ms，样本依赖负载，不作通用时间倍数。7项执行隔离/真junction反例与临时profile1项通过，type/main build通过。profile仅诊断，已移到工作台owned-directory-profile.test.txt，不常驻测试入口或算新功能。
 
 失败三case在原maxWorkers2配置下focused复测**3passed/61未选**（不是64全跑）：约40.17s/80.28s/48.65s通过，continuation-current-regression-focused.log。另一早先跑三个完整文件的外层720s工具中断记录continuation-current-regression-retest.log保留：native30/verification7有终态通过，纠正文件未终态，不能说完整64过。不提高单测期限消除噪声，不拆/串行改原verification19调度；新源码完整门禁仍须立即整体重跑，专项通过不穷尽旧失败全部根因。六保护与原唯一dirty仍不变见continuation-protected.owned-path.json。
+
+### 2026-11-12 2d2dd9b整套第二次：仍有失败，不以focused通过掩盖
+
+同一未改源码完整原check:offline确实执行，独立有限测试进程的offline-2d2dd9b-job.json记录起止、前后HEAD及dirty一致；type/docs/all build通过（renderer约221.5s），原19文件**204/206**，收尾case再次status active，另simulated-user-recovery真实headless capture报Page.captureScreenshot Unable to capture screenshot。工具41仍被&&短路，不能宣称完成当前全门。第一次Native/期望纠正case此次有实际通过，但不倒推所有延时根因已解决。
+
+对两失败新增可选VERIFY_CLOSEOUT_REPORT诊断钩子，默认不启CPU profiler/额外磁盘写；启用时记录真实收尾publish/持久化/完成事件时间、结束project状态与Node CPU profile，不改query/权限/断言/90秒signal/120秒case期限。2case在原maxWorkers2下复测**2passed/33未选**，continuation-closeout-diagnostic-tests.log；收尾case约53.6s其中enter约42.54s、status completed，截图case真实四操作和PNG约2.53s通过。CPU有约5.17s GC/3.14s内部模块stat/17.48s idle，多处真实库存/FS工作；这是通过样本的profiling，**不能拿来断言旧失败具体哪一阶段超时，更不能当已修**。首份diagnostic publish只捕获了scope参数，后修为保留实际变参事件，尚需整体带诊断再跑。
+
+不因一次截图协议错误就改成假图/空图、吞异常或跳过截图；也不凭猜测加重试或改旧测试预期。下一立即带诊断运行完整现有管线，定位真实失败阶段并继续处理。最终状态以实际完整门为准，不把旧343或各专项相加。
