@@ -112,3 +112,5 @@
 - [候选复现与证据回传协议](candidate-reproduction-protocol-20261111.md)：原候选物理依赖包、独立manifest pin、明确runtime映射、一次性原调试旅程和历史证据续读；本机Node/browser及Electron实测，非干净OS/Cua/PASS。
 
 - V3：原工程伙伴/Task/Assignment定向问答、同一Pi伙伴三源版本真实探针与笔记续接、停机0新增请求，以及有界脱敏消息交接已受控验证；SDK消息字节反例不等于真实供应商收益，详见主计划V3节。
+
+- [工具工程受控证据索引](tooling-evidence-index-20261112.md)：八类场景、本机真Pi修复/长日志ABBA绝对值、同轮批处理不减少模型轮数的反例，以及未认证的Cua/干净OS/付费模型边界。

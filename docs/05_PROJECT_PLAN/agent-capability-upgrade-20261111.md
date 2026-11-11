@@ -215,12 +215,12 @@ E1：复用runtime-manager、release-store、isolated-launch。定义固定候�
 - [WindowsAgentArena](https://github.com/microsoft/WindowsAgentArena)：可复现Windows评测设施，不是Bloma现成验收器。
 - Vide锁定源码、采用/改写/暂缓细项及风险见配套文档。
 
-**首批历史见[工具升级首批交接](session-handoff-tooling-upgrade-20261111.md)；本次续接至6696d39的标准check:offline（19文件206项+11文件137项）已真实整体通过，旧超时/音频问题已取证处理，未合入原sprint2。新G1批次专项通过，最终集成后仍须再做整套；整份B0–B8尚未全部完成。** 各段历史验证只绑定相应批次；不能将早一版本19文件206项通过或后续单独复验拼成最终全通过。
+**首批历史见[工具升级首批交接](session-handoff-tooling-upgrade-20261111.md)；本次续接至6696d39的标准check:offline（19文件206项+11文件137项）已真实整体通过，旧超时/音频问题已取证处理，未合入原sprint2。后续G1/C1/V2/Q1/Python/G2/O1/世代恢复/V5/E1/V3和受控工作流专项均已推进，见最新表与证据索引；当前整套仍须统一重跑，最终Cua/干净Windows及真实供应商收益未认证。** 各段历史验证只绑定相应批次；不能将早一版本19文件206项通过或后续单独复验拼成最终全通过。
 
 | 批次 | 最新进度 |
 | --- | --- |
-| B0 | 文件/编辑基线已测，其它场景未齐 |
-| B1 | 查询、读取、命令结果/日志首期已接线及专项验证；端到端收益未证 |
+| B0 | 原历史基线+本机八类场景证据已索引；ABBA真Pi受控工作流记录绝对值/冷暖启动差异；不等于真实模型/干净OS基线 |
+| B1 | 查询/读取/增量命令/归档已接线；当前兼容形态对批量增量的真Pi两文件修复+长日志工作流已测，文件调用5→3而SDK轮数12→12，收益边界及反例明确 |
 | B2 | 局部调用与数值观测、有界只读批处理已落地；同步/异步命令同一受管理生命周期及事件等待定向通过；仍不全量开parallel |
 | B3 | 同文件多片段与hash保护完成；最多8文件全部预检后有序应用、逐项部分失败语义与真实Pi接线通过；不是跨文件原子事务 |
 | B4 | G1/V1首期DOM语义、当前观察refs、能力发现、浏览器/Electron真实调试接线专项通过；V2实际提交差异/进程展示及Pi历史回放已接线，最终平台App展示回归待统一 |
@@ -461,3 +461,15 @@ ownedDirectory在宿主选定base/每个自建子目录创建前后lstat/realpat
 最终**5文件41项**通过continuation-v3-final-tests.log约105.79s（partner18/recovery6/workspace9/baseline7/新integration1），typecheck/main相关build/docs/diff通过。原恢复用例真Pi completed/cancelled同session续接、笔记/局部probe/权限、旧上下文排除、原Git检查点/阶段保留仍过。入口纳入这5文件，当前tooling **38文件**，原verification19不变；这不是最新完整回归。
 
 旧40/41失败continuation-v3-tests.log保留：旧workspace测试伪造checkpoint使用非SHA的old-source、无seq/at observation，被B8严格metadata读取正确拒绝；改fixture为真实64hex形态+递增seq/合法at，不放松生产reader、不删历史读取断言。六保护与原唯一dirty不变见continuation-protected.v3.json。其余必要受控基线/恢复/压力补证、当前完整离线+Python门禁、统一交接/清理继续；最终平台Cua/干净Windows外部条件仍未具备，不重复无效探测、不以此阶段结束全部计划。
+
+### 2026-11-12 T0/B0/B1：完整受控工作流与本机恢复补证
+
+新tests/integration/pi-tooling-journey.test.ts真Pi/原工具/真Node流式任务，把定位→同轮多读→跨两文件修改→一次实际启动→stdin EOF→实际固定及留出小数数据点→磁盘归档首部诊断串成同一工作流。没有mock工具结果/写入/进程或新Loop，SDK选择动作受控；测试预期/构建脚本写权限拒绝，预期最终字节不改、过程call-ID与返回对应、split credential无泄漏，Node启动计数1。留出数据点没给query但由测试作者设计，不当作未知任务模型泛化。
+
+正式对照ABBA两次兼容/两次批量都传相同since_seq。文件调用每次5→3、总调用13→11，**SDK轮数各12，未少轮数**；工具返回两份合计615366→184296 UTF8 B，SDK messages 2518630→1225244 B，仅这个固定当前兼容形态对照，不是历史完整产品或供应商计费。冷启动/缓冲批次影响绝对时间，最后兼容2.14s比批量2.45/2.56s还快，不能吹通用时间倍数。批量小结果metadata也更大；主要字节减少来自不重复tail。完整数字与八类场景/反例/不适用项见[受控证据索引](tooling-evidence-index-20261112.md)，外部报告tooling-journey-balanced.json。旧未给tail cursor初版保留tooling-journey.json，不用于收益表。
+
+4文件17项（新journey1/真Pi文件2/归档6/async8）通过continuation-journey-final-tests.log约61.43s。同版本typecheck通过，docs/diff通过。现役async组同时真实证明构建在运行时verify回COMMANDS_STILL_RUNNING，不冻结/取消命令、不出PASS；持久旧PID不接管、stdin/EOF/停止/分chunk UTF8/脱敏不变。Pi原native transcript/receipt/torn append恢复测试在最终工具组仍保留，未引入持久call-id exactly-once或全量parallel。
+
+补跑既有file-interactions与long-task-recovery **2文件14项通过**continuation-journey-recovery-tests.log约186.31s。实际owned Electron原生Open对话框取冻结文件、浏览器chooser/拖拽/下载/字节损坏门均实际执行，非skip；不冒充最终平台Cua。真两个Node宿主先exit23后不同PID恢复原Pi项目/预算，真实CLI副作用once、makerCalls=0、不重放，原harness预算requests/output累计不清。另有31分钟心跳**假时钟**用例，不能讲成31分钟实钟压力。双进程evidence保留run-artifacts/closeout-process-fixture/evidence.json；现有原发布/质量链复用，未创建新状态机。最终入口现在工具**41文件**（新journey+原file-interactions+原long-task-recovery纳入），verification原19、Python另组。
+
+只新增集成测试/入口/证据导航，没有为对照改生产实现或放松任何断言、期限/权限。六保护及原唯一dirty保持不变见continuation-protected.journey.json。当前完整offline门禁待立即执行；真实平台Cua、干净Windows和未授权付费模型收益仍为明确外部边界，不再把已补本机长程/复现/基线机制当pending重复实现。
