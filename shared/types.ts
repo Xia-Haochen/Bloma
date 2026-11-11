@@ -808,6 +808,8 @@ export interface CategoryRoutingUpdateEnvelope extends RequestEnvelope {
 
 export interface MessageContentBlock {
   type: 'text' | 'tool_use' | 'tool_result' | 'image'
+  /** Host-only bounded UI facts, never sent as model authority. */
+  tool_display?: import('./tool-display').ToolDisplay
   text?: string
   id?: string
   name?: string

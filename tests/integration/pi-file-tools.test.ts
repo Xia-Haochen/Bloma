@@ -6,6 +6,8 @@ import { runAgentLoop } from '../../main/agent/loop/agent-loop'
 import { buildAgentTools, setJsSyntaxCheckerForTests } from '../../main/agent/tools/agent-tools'
 import { createProject } from '../../main/project/project-service'
 import type { SDKMessage } from '../../shared/types'
+import { getAgentSessionPath } from '../../storage/config-paths'
+import { safeToolDisplay } from '../../shared/tool-display'
 import type { SDKQuery } from '../../main/orchestration/stages/orchestration-contracts'
 
 const originalHome = process.env.PROMA_HOME
@@ -24,6 +26,7 @@ it.each(['same-file','multi-file'])('actual Pi validates %s batch schemas, retai
   writeFileSync(join(project.root_path, 'src/other.js'), 'const other = 1' + String.fromCharCode(10))
   const tools = buildAgentTools({ projectId: project.project_id, software: true, realFullstackVariant: true }).filter(t => ['grep', 'read_file', 'edit_file'].includes(t.name))
   let round = 0
+  const events: Array<{type:string;payload:Record<string,unknown>}> = []
   const observations: Array<{ phase: string; id: string; name: string; output?: string; isError?: boolean }> = []
   const tool = (id: string, name: string, input: Record<string, unknown>): SDKMessage => ({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name, input }] } })
   const query: SDKQuery = async function* (_task, options) {
@@ -41,10 +44,17 @@ it.each(['same-file','multi-file'])('actual Pi validates %s batch schemas, retai
   }
   const result = await runAgentLoop({ runtimeScope: 'desktop-implement', projectId: project.project_id, sessionId: 'pi-file-tools', requestId: 'pi-file-tools',
     system: 'Controlled offline tool contract test', task: 'read and edit', tools, query, env: {}, maxTokens: 1000, maxTurns: 5, permissionMode: 'allow-all',
-    signal: AbortSignal.timeout(30000), publish: () => {}, onToolObservation: event => observations.push(event) })
+    signal: AbortSignal.timeout(30000), publish: (type,payload) => events.push({type,payload}), onToolObservation: event => observations.push(event) })
   expect(result.status).toBe('completed'); expect(round).toBe(4)
   expect(readFileSync(join(project.root_path, 'src/app.js'), 'utf8')).toBe('const first = 3\nconst second = 4\n')
   expect(readFileSync(join(project.root_path, 'src/other.js'), 'utf8').trim()).toBe(mode === 'same-file' ? 'const other = 1' : 'const other = 3')
   expect(observations.filter(e => e.phase === 'completed').map(e => [e.id, e.isError])).toEqual([['search', false], ['windows', true], ['edits', false]])
   expect(result.toolCalls.map(c => c.status)).toEqual(['ok', 'error', 'ok'])
+  const completed = events.find(e=>e.type==='tool_call_completed'&&e.payload.tool_call_id==='edits')
+  const display = safeToolDisplay(completed?.payload.display)
+  expect(display?.kind).toBe('changes')
+  if(display?.kind==='changes') {expect(display.files).toHaveLength(mode==='same-file'?1:2);expect(display.files[0]?.removed).toContain('const first = 1');expect(display.files[0]?.added).toContain('const second = 4')}
+  const history = readFileSync(getAgentSessionPath('pi-file-tools'),'utf8').trim().split(String.fromCharCode(10)).map(line=>JSON.parse(line))
+  const stored = history.flatMap(message=>message.content??[]).find(block=>block.type==='tool_result'&&block.tool_use_id==='edits')
+  expect(stored?.tool_display).toEqual(display)
 }, 45000)

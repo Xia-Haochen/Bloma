@@ -1,3 +1,5 @@
+import type { ToolFeedback } from '../../shared/tool-feedback'
+import type { ToolDisplay } from '../../shared/tool-display'
 import React from 'react'
 import type { ToolCallStatus } from './ToolCallBlock'
 import type { DelegationView } from '../agent-atoms'
@@ -33,6 +35,8 @@ export type ProcessItem =
       outputSummary?: string
       status: ToolCallStatus
       durationMs?: number
+      feedback?: ToolFeedback
+      display?: ToolDisplay
       replay?: boolean
     }
   | { kind: 'delegation'; key: string; item: DelegationView }

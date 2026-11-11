@@ -129,6 +129,8 @@ export function commitFileWrite(input: {
   finalContent: string
   ctx: ToolContext
   expectedRevision?: string
+  /** Optional UI snapshot, bounded to 1MiB; callback failure cannot undo a write. */
+  onCommitted?: (previous: Buffer | null | undefined, current: Buffer) => void
 }): CommitWriteResult {
   const abs = join(input.root, input.rel)
   const committedRevision = input.expectedRevision ?? fileRevisionsOf(input.ctx).get(input.rel)
@@ -143,11 +145,15 @@ export function commitFileWrite(input: {
     if (committedRevision && !fileRevisionMatches(abs, committedRevision)) {
       return { ok: false, code: 'STALE_READ', output: `STALE_READ：${input.rel} 在读取后被修改或删除。请重新 read_file 后再修改。` }
     }
+    let previous: Buffer | null | undefined
+    if (input.onCommitted) { try { previous = existsSync(abs) ? statSync(abs).size <= 1048576 ? readFileSync(abs) : undefined : null } catch { /* UI gap only. */ } }
     mkdirSync(join(abs, '..'), { recursive: true })
     writeFileSync(abs, input.finalContent, 'utf8')
+    try { input.onCommitted?.(previous, Buffer.from(input.finalContent, 'utf8')) } catch { /* A display failure is not a failed write. */ }
   } finally {
     releaseWriteLease(input.projectId, input.rel, leaseHolder)
   }
-  fileRevisionsOf(input.ctx).set(input.rel, fileRevisionOf(abs))
+  // Record our submitted bytes, not a later external rewrite we did not read.
+  fileRevisionsOf(input.ctx).set(input.rel, contentRevision(input.finalContent))
   return { ok: true }
 }

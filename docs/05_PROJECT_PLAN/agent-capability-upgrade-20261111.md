@@ -326,3 +326,13 @@ LS不emit/加载项目插件/执行业务脚本，无默认node_modules越权；
 4文件63项通过：核心31、生产构建worker3（真实定义/Python缺口、硬终止与host ticks、槽上限）、构建新鲜度28（含新增semantic/source变更归属及原实构建/锁/新鲜度断言）、实际Pi1（四语义mode与capabilities，真实工具schema与worker，无付费供应商，另验跨project拒绝及Python缺口）。最初worker夹具把坐标落在标识符前空白，修正为57列；Node构建脚本经Vite转换报语法错、native import正常，构建测试改真实Node加载，未删/放宽任何构建断言。证据continuation-c1-final-tests.log、continuation-c1-typecheck.log、continuation-c1-build.log。
 
 Python仅发现解释器、无真实语言服务器，本批明确返回PYTHON_BACKEND_UNAVAILABLE，**还没有Python stdio桥或正向语义认证，C1/B6不能整体标完成**。T4上下文成本实验仍待做。runtime inventory/G1/C1/build-freshness共7个新增文件已纳入test:tooling:offline，运行前按原build-state构建semantic；最终需再跑全部原门禁与新增，不把本批63项当全套。
+
+### 2026-11-11 V2续：宿主实际提交/进程事实在工具卡展示
+
+补读锁定Vide版本三组件和LICENSE，仅参考、不复制代码。Bloma沿原ToolOutcome.detail、Pi tool receipt/details、audit tool_result和tool_call_completed扩展有界display投影，不新建执行台账或PASS。代码只渲染React文本，不执行HTML/ANSI、工具URL或重放工具。
+
+文件差异在原process-local lease的成功write后产生（原文UI捕获<=1MiB），来自实际UTF-8提交前后字节，含SHA256与行号；是精确连续替换片段而不是最小多hunk算法，片段截断/未捕获明确标注，脱敏先于裁剪。多文件部分写只展示已applied项，原始结果摘要保留失败/未尝试信息。大原文/非UTF-8不可伪造完整diff。版本记录改为本次提交字节hash，不把可能随后外部改写的字节登记成模型已读版本；仍不承诺跨进程文件锁/原子事务。
+
+进程卡显示本次读取时的状态、退出码、有界输出、归档可用/缺口和原会话read_process日志查询入口；入口是可见只读查询说明，不执行重放/启动，不以退出0当产品PASS。通过原反馈明确running/cancel/budget/未验收，修复ChatPanel过程组此前丢掉feedback的接线；请求声明仍“调用已登记”。实时摘要剥离反馈封套再裁剪，避免500字只剩内部元数据。历史有展示元数据就原样校验回放，无元数据明确只有摘要，不能重构假diff。
+
+7文件35项通过（新diff投影3含127组可重构反例、renderer3、原feedback UI2、写租约5、多文件12、实际Pi文件2、真实异步命令8）。实际Pi验证同/多文件host display经过真实事件与历史JSONL一致；单测并非最终平台App界面验证。typecheck通过，最终平台Cua/当前全部新版本离线标准仍待统一验收。证据continuation-v2-tests.log、continuation-v2-typecheck.log；新UI3文件已接test:tooling:offline。

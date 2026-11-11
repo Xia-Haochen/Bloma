@@ -3,6 +3,11 @@ import { findProject } from '../project/project-service'
 import { dependencyFailureCode, inspectProjectDependencies } from './dependency-state'
 import { startSoftwareProcess, softwareProcess, readSoftwareProcess, readSoftwareProcessLog, writeSoftwareProcess, stopSoftwareProcess, redactSoftwareOutput, activeSoftwarePreview, type SoftwareProcessSnapshot } from './process-manager'
 
+function processDisplay(snapshot: SoftwareProcessSnapshot) {
+  const raw = snapshot.output?.map(record=>`[${record.stream}] ${record.text}`).join('') ?? [snapshot.stdout,snapshot.stderr].filter(Boolean).join('\n')
+  const text = redactSoftwareOutput(raw).replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g,'').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g,'')
+  return {version:1,kind:'process',id:snapshot.id,state:snapshot.state,...(typeof snapshot.code==='number'?{exit_code:snapshot.code}:{}),preview:text.slice(-4000),truncated:text.length>4000||snapshot.output_incomplete===true,log_available:snapshot.log?.available===true,log_complete:snapshot.log?.complete===true}
+}
 const commandSchema = { type: 'array', minItems: 1, maxItems: 128, items: { type: 'string' } }
 function admission(projectId: string, ctx: ToolContext) {
   if (ctx.projectId !== projectId) throw new Error('COMMAND_PROJECT_MISMATCH')
@@ -46,7 +51,7 @@ export function buildSoftwareExecutionTools(projectId: string, beforeExecute?: (
         }
         const legacy = input.yield_ms === undefined
         const result = commandView(snapshot, legacy)
-        return { output: JSON.stringify(result), isError: ['failed','cancelled'].includes(result.execution_status), detail: { process_id: started.id },
+        return { output: JSON.stringify(result), isError: ['failed','cancelled'].includes(result.execution_status), detail: { process_id: started.id, display: processDisplay(snapshot) },
           feedback: { schema_version: 1, source: 'host', scope: 'command_execution', execution: result.execution_status as 'running'|'completed'|'failed'|'cancelled',
             verification: 'not_applicable', task_completion: 'unverified', recovery: result.execution_status === 'running' ? 'inspect' : 'none' } }
       } catch (error) {
@@ -63,7 +68,7 @@ export function buildSoftwareExecutionTools(projectId: string, beforeExecute?: (
         const result = await startSoftwareProcess({ projectId, sessionId: ctx.sessionId, root: findProject(projectId).root_path,
           command: input.command, cwd: input.cwd as string | undefined, url: input.url as string | undefined, signal: ctx.signal })
         if (result.ready && result.url) { ctx.state.preview_url = result.url; previewChanged?.(result.url) }
-        return { output: JSON.stringify(result), isError: result.state !== 'running', detail: { process_id: result.id, ...(result.ready ? { preview_url: result.url } : {}) } }
+        return { output: JSON.stringify(result), isError: result.state !== 'running', detail: { process_id: result.id, display: processDisplay(result), ...(result.ready ? { preview_url: result.url } : {}) } }
       } catch (error) { return { output: error instanceof Error ? error.message : String(error), isError: true } }
     } }
   const read: AgentLoopTool = { name: 'read_process', parallelSafe: true, description: '读取本会话拥有的进程。默认只返回since_seq后的增量，不在退出时重复stdout/stderr；mode:tail显式读取兼容尾部。mode:log从磁盘脱敏日志按序号/字面pattern查询，limit≤200；长记录按record_seq/char_offset续读。归档每进程8MiB/每home最多16份，直到手工清理，不自动删证据；容量或长行缺口明确报告。wait_ms有界等待≤30秒，不重启命令、不接管旧PID；退出成功不代表产品验收。',
@@ -80,7 +85,7 @@ export function buildSoftwareExecutionTools(projectId: string, beforeExecute?: (
         const command = result.kind === 'command' ? commandView(result, input.mode === 'tail') : undefined
         const { stdout, stderr, output, ...facts } = result
         const service = input.mode === 'tail' || !output ? { ...facts, stdout, stderr, tail_only: true } : { ...facts, output }
-        return { output: JSON.stringify(command ?? service), isError: Boolean(command && ['failed','cancelled'].includes(command.execution_status)),
+        return { output: JSON.stringify(command ?? service), detail: {display:processDisplay(result)}, isError: Boolean(command && ['failed','cancelled'].includes(command.execution_status)),
           ...(command ? { feedback: { schema_version: 1 as const, source: 'host' as const, scope: 'command_execution', execution: command.execution_status as 'running'|'completed'|'failed'|'cancelled', verification: 'not_applicable' as const, task_completion: 'unverified' as const } } : {}) }
       }
       catch (error) { return { output: String(error), isError: true } }

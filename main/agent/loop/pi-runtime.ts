@@ -1,5 +1,6 @@
 import { resolveProjectRoot } from '../../../shared/project-root-override'
 import { loopThinking } from './loop-thinking'
+import { safeToolDisplay } from '../../../shared/tool-display'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { AgentMessage, AgentToolResult, AgentTurnContext } from '@earendil-works/pi-agent-core'
@@ -174,13 +175,14 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
         }
         budgetHitThisTurn ||= outcome.budgetExhausted === true
         outcomes.set(id, { isError: outcome.isError === true || outcome.budgetExhausted === true })
+        const display = safeToolDisplay(outcome.detail?.display)
         const content = feedback ? formatToolFeedback(feedback, outcome.output) : outcome.output
         const assistantEntry = [...opened.manager.getBranch()].reverse().find(entry => entry.type === 'message' && entry.message.role === 'assistant')
         opened.manager.appendCustomEntry('bloma-tool-receipt', { id, assistantEntryId: assistantEntry?.id, name: tool.name, content,
-          isError: outcome.isError === true || outcome.budgetExhausted === true })
+          isError: outcome.isError === true || outcome.budgetExhausted === true, ...(display ? {display} : {}) })
         try{input.onToolObservation?.({phase:'completed',turn:turns,id,name:tool.name,input:structuredClone(args) as Record<string,unknown>,output:content,isError:outcome.isError===true||outcome.budgetExhausted===true,halted:status!=='completed',duration_ms:performance.now()-toolStarted,input_bytes:inputBytes,output_text_bytes:Buffer.byteLength(content)})}catch{/* Observation cannot alter the execution receipt. */}
         return { content: [{ type: 'text' as const, text: content }, ...(outcome.images ?? []).map(piImage)],
-          details: { ...outcome.detail, feedback, budgetExhausted: outcome.budgetExhausted } }
+          details: { ...outcome.detail, display, feedback, budgetExhausted: outcome.budgetExhausted } }
       },
     }))
     ;({ session } = await createAgentSession({ cwd, agentDir, modelRuntime, settingsManager, resourceLoader,
@@ -354,10 +356,13 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
           const failureKey = toolFailureKey(call.name, result.content.filter(b => b.type === 'text').map(b => b.text).join('\n'))
           if (failureKey) call.failureKey = failureKey
         }
+        const fullOutput = result.content.filter(b => b.type === 'text').map(b => b.text).join('\n')
+        const feedbackEnd = fullOutput.indexOf('</tool-feedback>')
+        const displayOutput = fullOutput.startsWith('<tool-feedback>') && feedbackEnd >= 0 && feedbackEnd < 8192 ? fullOutput.slice(feedbackEnd + '</tool-feedback>'.length).trimStart() : fullOutput
         input.publish('tool_call_completed', { tool: event.toolName, tool_call_id: event.toolCallId, turn: turns,
           status: details?.budgetExhausted ? 'budget' : event.isError ? 'error' : 'ok', is_error: event.isError,
           ...(event.durationMs!==undefined?{duration_ms:event.durationMs}:{}),
-          feedback: details?.feedback, output_text_bytes: Buffer.byteLength(result.content.filter(b => b.type === 'text').map(b => b.text).join('\n')), output_summary: result.content.filter(b => b.type === 'text').map(b => b.text).join('\n').slice(0, 500),
+          display: safeToolDisplay((result.details as Record<string,unknown>|undefined)?.display), feedback: details?.feedback, output_text_bytes: Buffer.byteLength(result.content.filter(b => b.type === 'text').map(b => b.text).join('\n')), output_summary: displayOutput.slice(0, 500),
           ...(() => {const detail=Object.fromEntries(Object.entries((result.details ?? {}) as Record<string, unknown>)
             .filter(([key,value]) => value!==undefined&&['delegation_id', 'child_session_id', 'role', 'goal', 'status', 'pending_question', 'error'].includes(key)))
             return Object.keys(detail).length?{detail}:{} })() })

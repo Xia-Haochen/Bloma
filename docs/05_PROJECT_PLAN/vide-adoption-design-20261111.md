@@ -23,7 +23,7 @@
 | V6a | [verification-first](https://github.com/Norbert515/vide_cli/blob/3ae14cdca9525f65e2b9c0e22391a5c2ad8ccbc6/packages/vide_core/assets/team_framework/behaviors/verification-first.md) | 修复前复现、实现前了解可用验证入口 | 吸收方法，但不增加每个任务强制前置文档；现有冻结标准和真实执行保持权威 |
 | V6b | [handoff etiquette](https://github.com/Norbert515/vide_cli/blob/3ae14cdca9525f65e2b9c0e22391a5c2ad8ccbc6/packages/vide_core/assets/team_framework/etiquette/handoff.md) | 请求具体、范围明确、附文件/验证依据 | 用原Task/Assignment与证据引用承载，不让Agent重复填写一套Markdown协议 |
 
-V2工具展示仅由本次tree确认存在diff renderer、terminal output renderer与tool router；没有完成这些组件源码审查。实施前补读对应文件，不把文件名推断为完成行为认证。
+V2续接已补读锁定版本的lib/modules/agent_network/components/tool_invocations/{tool_invocation_router,diff_renderer,terminal_output_renderer}.dart及顶层LICENSE（Apache-2.0）。只参考分类路由/折叠日志方法，不复制Dart组件或依赖。其Edit差异依cat-n文本与trim后的行集合猜测，Bloma不照搬：实际字节提交时捕获有界前后文、版本指纹，未知/截断明确标注；只有applied的项展示写入，声明/失败不能冒充成功。未运行Vide，不能据源码认证其效果。
 
 ## 3 V1：运行时适配设计
 

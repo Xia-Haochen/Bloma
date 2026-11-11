@@ -1,3 +1,4 @@
+import { safeToolDisplay } from '../../../shared/tool-display'
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
 import type { AssistantMessage, Context, ImageContent, Message, Model, JsonObject } from '@earendil-works/pi-ai'
 import { parseToolCallArguments } from '@earendil-works/pi-ai'
@@ -129,6 +130,7 @@ export function auditBlocks(message: AgentMessage): MessageContentBlock[] {
       : block.type === 'toolCall' ? [{ type: 'tool_use', id: block.id, name: block.name, input: block.arguments }] : [])
   if (message.role === 'user') return userBlocks(message.content)
   if (message.role === 'toolResult') return [{ type: 'tool_result', tool_use_id: message.toolCallId,
-    content: message.content.filter(b => b.type === 'text').map(b => b.text).join('\n'), is_error: message.isError }, ...userBlocks(message.content).filter(b => b.type === 'image')]
+    content: message.content.filter(b => b.type === 'text').map(b => b.text).join('\n'), is_error: message.isError,
+    tool_display: safeToolDisplay((message.details as Record<string,unknown>|undefined)?.display) }, ...userBlocks(message.content).filter(b => b.type === 'image')]
   return []
 }

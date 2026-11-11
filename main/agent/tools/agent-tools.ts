@@ -9,6 +9,9 @@ import { decideWrite, estimateTokenCount } from '../loop/usage-guard'
 import { toolEvidenceEnabled, writeGuardEnabled, preflightEnabled, type AgentLoopTool, type ToolContext, type ToolOutcome } from '../loop/agent-loop';
 import { commitFileWrite, contentRevision, fileRevisionMatches, fileRevisionOf, fileRevisionsOf } from './write-lease'
 import { replaceUniqueText, replaceMultipleTexts, type TextEdit } from './text-edit'
+import { committedChange } from './change-display'
+import { redactSoftwareOutput } from '../../software/process-manager'
+import type { ToolFileChange } from '../../../shared/tool-display'
 import { boundedInteger, readTextWindow, readWindowProperties, searchProjectFiles, pageFileNames, compileFileGlob } from './file-query'
 import { resolveProjectRoot } from '../../../shared/project-root-override'
 import { buildDelegationTools } from '../delegation/delegation-tools'
@@ -424,12 +427,14 @@ export function buildAgentTools(options: BuildAgentToolsOptions): AgentLoopTool[
     // 修复预算门：路径/参数/语法均校验通过后才烧预算（无效调用不烧，对齐注释语义）
     const budget = guardRepairBudget(ctx)
     if (budget) return budget
+    let displayChange: ToolFileChange | undefined
     const committed = commitFileWrite({
       projectId: ctx.projectId,
       root,
       rel,
       finalContent,
       ctx,
+      onCommitted: (before, after) => { displayChange = committedChange(rel, before, after, redactSoftwareOutput) },
       ...(expectedRevision ? { expectedRevision } : {}),
     })
     if (!committed.ok) {
@@ -444,7 +449,7 @@ export function buildAgentTools(options: BuildAgentToolsOptions): AgentLoopTool[
     const stripped = finalContent !== content
     return {
       output: `已写入 ${rel}（${Buffer.byteLength(finalContent, 'utf8')} 字节）${stripped ? '；已剥离与平台 CSP 冲突的 meta 标签' : ''}`,
-      detail: { path: rel, bytes: Buffer.byteLength(finalContent, 'utf8') },
+      detail: { path: rel, bytes: Buffer.byteLength(finalContent, 'utf8'), ...(displayChange ? { display: {version:1,kind:'changes',files:[displayChange]} } : {}) },
     }
   }
 
@@ -679,18 +684,21 @@ export function buildAgentTools(options: BuildAgentToolsOptions): AgentLoopTool[
         }
         if (results.some(result => result.state !== 'prechecked')) return { output: JSON.stringify({ code: 'EDIT_MULTI_PREFLIGHT_FAILED', atomic: false, applied: [], results }), isError: true }
         const applied: string[] = []
+        const changes: ToolFileChange[] = []
         for (const [index, item] of prepared.entries()) {
           try {
             const outcome = await validateAndWrite(root, item.rel, item.content, ctx, item.revision, { syntaxChecked: true })
             if (outcome.isError || outcome.budgetExhausted) throw Error(outcome.output)
+            const display = outcome.detail?.display as { files?: ToolFileChange[] } | undefined
+            changes.push(...(display?.files ?? []))
             applied.push(item.rel); results[index] = { path: item.rel, state: 'applied', revision: fileRevisionsOf(ctx).get(item.rel) }
           } catch (error) {
             results[index] = { path: item.rel, state: 'failed', error: String(error).slice(0, 1200) }
             for (let rest = index + 1; rest < results.length; rest++) results[rest].state = 'not_attempted'
-            return { output: JSON.stringify({ code: 'EDIT_MULTI_PARTIAL', atomic: false, applied, results }), isError: true }
+            return { output: JSON.stringify({ code: 'EDIT_MULTI_PARTIAL', atomic: false, applied, results }), isError: true, detail: { display: changes.length ? {version:1,kind:'changes',files:changes} : undefined } }
           }
         }
-        return { output: JSON.stringify({ code: 'EDIT_MULTI_APPLIED', atomic: false, applied, results }), detail: { paths: applied } }
+        return { output: JSON.stringify({ code: 'EDIT_MULTI_APPLIED', atomic: false, applied, results }), detail: { paths: applied, display: changes.length ? {version:1,kind:'changes',files:changes} : undefined } }
       }
       const project = findProject(projectId)
       const resolved = resolveInsideProject(projectRoot(), toolInput.path)

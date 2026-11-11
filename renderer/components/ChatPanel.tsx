@@ -1,3 +1,5 @@
+import { readToolFeedback, type ToolFeedback } from '../../shared/tool-feedback'
+import { safeToolDisplay } from '../../shared/tool-display'
 import { productionNotice } from '../lib/production-notice'
 import { isModernWorkflowVersion } from '../../shared/workflow-version'
 import React from 'react'
@@ -576,6 +578,8 @@ const LiveProcessGroup: React.FC<{ events: AgentEvent[]; sessionId: string; isSt
       outputSummary: record.outputSummary,
       status: record.status,
       durationMs: record.durationMs,
+      feedback: record.feedback,
+      display: record.display,
     }))
     const delegationItems: ProcessItem[] = delegations.map((item) => ({
       kind: 'delegation',
@@ -598,6 +602,8 @@ const LiveProcessGroup: React.FC<{ events: AgentEvent[]; sessionId: string; isSt
             outputSummary={item.outputSummary}
             status={item.status}
             durationMs={item.durationMs}
+            feedback={item.feedback}
+            display={item.display}
           />
         ) : item.kind === 'delegation' ? (
           <DelegationRow item={item.item} />
@@ -626,6 +632,7 @@ function deriveMessageProcessItems(message: AgentMessage, toolNamesById: Record<
         key: `use-${block.id ?? index}`,
         tool: block.name ?? '',
         inputSummary: safeJsonPreview(block.input),
+        feedback: {schema_version:1,execution:'not_run',verification:'unverified',scope:'call_declared'} as ToolFeedback,
         status: 'ok',
         replay: true,
       })
@@ -635,7 +642,9 @@ function deriveMessageProcessItems(message: AgentMessage, toolNamesById: Record<
         kind: 'tool',
         key: `result-${block.tool_use_id ?? index}`,
         tool: toolNamesById[block.tool_use_id ?? ''] ?? 'tool_result',
-        inputSummary: typeof block.content === 'string' ? block.content : '',
+        outputSummary: typeof block.content === 'string' ? block.content : '',
+        feedback: typeof block.content === 'string' ? readToolFeedback(block.content) : undefined,
+        display: safeToolDisplay(block.tool_display),
         status: block.is_error ? 'error' : 'ok',
         replay: true,
       })
@@ -654,6 +663,8 @@ function renderProcessItem(item: ProcessItem): React.ReactNode {
         outputSummary={item.outputSummary}
         status={item.status}
         durationMs={item.durationMs}
+            feedback={item.feedback}
+            display={item.display}
         replay
       />
     )
@@ -948,6 +959,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ characterCue, characterKi
               outputSummary={item.outputSummary}
               status={item.status}
               durationMs={item.durationMs}
+            feedback={item.feedback}
+            display={item.display}
               replay
             />
           ) : item.kind === 'delegation' ? (
