@@ -225,6 +225,7 @@ E1：复用runtime-manager、release-store、isolated-launch。定义固定候�
 | B3 | 同文件多片段与hash保护完成；最多8文件全部预检后有序应用、逐项部分失败语义与真实Pi接线通过；不是跨文件原子事务 |
 | B4 | G1/V1首期DOM语义、当前观察refs、能力发现、浏览器/Electron真实调试接线专项通过；V2实际提交差异/进程展示及Pi历史回放已接线，最终平台App展示回归待统一 |
 | B5 | 首期可选交互探索接主收尾；真实隔离浏览器/受控Pi及原finding→独立绑定→失败/修复/复验/发布机制通过；真实模型收益未测，V3长程消息贡献仍待集成 |
+| B6 | TS/JS worker之外补真实可选Jedi/Python固定stdio桥，真实Pi/版本/取消/坏后端等验证；T4已抓实际HTTP schema/context与恢复/撤销反例，不泛称总字节或费用下降 |
 | B7/B8 | 原生/故障取证、干净环境等仍在继续；V5共享缓存边界已修复 |
 | B6 | TS/JS真实只读语义已沿inspect_repository接线、独立编译worker+真实Pi通过；Python真实后端与T4实验仍待做 |
 
@@ -349,3 +350,21 @@ Python仅发现解释器、无真实语言服务器，本批明确返回PYTHON_B
 4文件81项组合通过：新浏览器探索7、质量审阅35、质量收尾19、协作选择20。含Ω合成输入保存/重开坏/好对照、源变更/错session/伪造预期/无实际观察拒绝、取消、重复不吞不同触发、预算保护和实际Pi三工具边界；另有正常UI→原finding→实际独立C读取冻结case和trace并绑定→原宿主CLI复现失败→改实际实现→同冻结case通过并关闭→最终C→原release发布的临时fixture闭环。后者证明原质量/发布机制贯通，不是GUI成品全部功能/真实模型普遍自主发现认证。保留整份计划未完成状态；最终版本标准离线门禁、真实平台App、原生和干净Windows仍待后续。typecheck、main/worker/semantic/preload/templates构建、docs通过；六保护文件SHA及原HEAD/dirty/blob未变。
 
 证据：会话工作台continuation-b5-final-tests.log、continuation-b5-typecheck.log、continuation-b5-build.log、continuation-b5-docs.log、continuation-protected.b5.json；初次输入契约/哈希范围/性能失败见continuation-b5-tests*.log。未启动付费模型，不把受控响应解释成供应商或成本认证。
+
+### 2026-11-11 B6：可选Python静态语义桥与T4实际请求测量
+
+Python沿原inspect_repository四mode接固定宿主stdio桥，不新增模型工具/自由命令；真实Jedi0.19.2/Parso0.8.4，非LSP。definition/references/符号为真实静态分析，diagnostics仅语法，不声称类型验收；Jedi不提供一般读/写数据流，references显式writeAccess=unknown。缺依赖会缩小解析域，外部位置不当项目授权。仅宿主明确设置BLOMA_PYTHON_SEMANTICS_EXECUTABLE、BLOMA_PYTHON_SEMANTICS_SITE两条绝对路径才启用；capabilities实际启动固定桥probe，不以文件存在冒充可用。默认无配置仍PYTHON_BACKEND_UNAVAILABLE，不安装系统/产品依赖，不自动搜索项目venv；这是可选开发能力，不影响产品原验证门禁。
+
+宿主有界复制UTF-8 .py及配置（单文件1MiB、总8MiB、最多256文件/深40/目录数和成员限制；链接拒绝、常见依赖/cache忽略），每次全新进程/数据，完整原字节、目录成员、真路径复核及实际分析副本复核，源码/配置/新模块/同mtime-size改写或分析副本被改都不返回旧成功。fileVersion为原字节sha256，indexVersion仅复制观察域+适配器字节/声明后端身份；不是全仓库/可信解释器或所有包字节证明。位置统一1-based UTF-16，覆盖BOM/CRLF/astral Unicode，不切surrogate。输出最多200项、65,536 UTF-8字节，有截断事实。
+
+绝对宿主Python以-I -B -S运行固定main/templates/tools/python-code-service.py，不处理PYTHONPATH/cwd/site/.pth；只显式载入宿主私有Jedi/site。Project固定analysis副本，smart_sys_path=False、load_unsafe_extensions=False、显式sys_path；禁unsafe interpreter执行及auto_import_modules，固定InterpreterEnvironment避免Jedi默认无隔离flag的子进程。Python audit hook限制源读取为宿主清单、项目代码执行/外部进程/网络及越界写，cache仅本次目录；**不是OS沙箱或硬堆限制**。初版fast_parser=False导致真实Jedi函数过滤KeyError；按固定版本实现改为每私有进程一个Script的局部Parso树cache，不跨查询复用，不修改共享依赖源码。宿主共享TS/Python最多2个语义请求，15秒默认/30秒上限；取消/期限终止自己的子进程（Windows沿原tree-kill模式）、等close与停止完成才释放槽；不把Python藏入可被terminate的Node worker。TS原worker/512MiB上限仍保留，未把该堆限制误称Python限制。
+
+验证：5文件50项组合通过（原TS31、executor3、原Pi1、新Python14及新Pi1），再加分析副本篡改防护并重跑Python/Pi **2文件16项通过**；随后增加Windows树停止、编码/stub明确缺口并重测。包含跨模块alias/局部同名/无依赖、版本变化、真实符号/语法错误、类型错误不伪造诊断、双槽/取消/期限、broken backend无词法补位、项目marker/.pth/sitecustomize不执行及实际Pi五操作/原项目权限拒绝。私有验证依赖仅安装在会话工作台python-semantic-deps，独立pip cache，未安装或修改系统/共享node_modules/真实产品。Jedi/Parso及自带stub许可留在原wheel，不复制进源码；wheel/hash清单validation-dependencies.json。专用test:python-semantic:offline要求TEST_PYTHON_SEMANTICS_EXECUTABLE/SITE私有验证路径（测试守卫清除全部BLOMA_，不放松守卫），缺依赖明确失败而不跳过正向认证；常规离线组保留默认缺配置反例，不把可选后端变成系统安装前提。
+
+T4用真实软件Agent parent生产装配（35工具，未含每产品quality/scope/check附加工具）、Pi、原budget与本机HTTP/SSE记录实际序列化字节，不付费不做usage估算。比较“提前把8个topic全部塞系统”的反事实与当前按需策略：schema31,703字节、稳定hash/顺序；系统19,441→6,315、首请求51,407→38,281，省13,126字节。但按需实际多一次工具往返，首任务两请求总77,564，**高于**提前塞入时单次51,407；不能据首包宣传总输入/费用下降。恢复后仍35工具、同schema hash，不重读已读上下文；显式撤销为9个只读工具后schema8,291，未知run_command请求不执行/不写marker、不从历史恢复旧权限。无通用MCP/codemode/tool_search/REPL。只证明稳定集合与薄按需接口可用，不启用无准确率收益证据的动态schema，也不把wire重复当供应商缓存命中保证。
+
+T4实际HTTP专项1项通过；原Pi恢复/中断receipt/原生compaction带当前宿主恢复摘要选择4项通过（不是整47项重测），最终整套待统一。证据：tool-context-wire.json、continuation-b6-t4-tests2.log、continuation-b6-t4-recovery.log、continuation-b6-all-tests.log、continuation-b6-final-python.log、continuation-b6-final-typecheck.log、continuation-b6-final-build.log。失败保留：首轮测试私有环境变量被既有BLOMA_守卫清掉、fast_parser KeyError、BOM fixture转义和HTTP fixture漏PATH，修正输入/适配器，不削生产断言/权限或时限。
+
+B6最终专项将原TS/执行器/Pi、新Python/Pi及实际HTTP测量一并核验；Python .pyi明确不支持，非UTF-8 coding声明拒绝而不按错误编码返回名称。
+
+B6最后版本 **6文件53项组合通过**（Python16、Python实际Pi1、T4实际HTTP1、TS31、原executor3、原Pi1），continuation-b6-env-tests.log；typecheck及main/worker/semantic/preload/templates构建通过。同组前一版本52/53时一条Python symbol触发15秒DEADLINE_EXCEEDED，失败保留continuation-b6-integrated-tests.log，不算通过，也未放宽期限/删断言。取证确认Windows/libuv会给显式env注入USERPROFILE/PATH等默认项；固定Python bootstrap现于导入Jedi前清除这些项，只设置本次workspace HOME/USERPROFILE及cache TEMP，避免宿主profile/cache发现。该环境边界修正与53项新版本通过不证明已穷尽旧次时延根因；独立冷启动3样本2.5–2.9秒仅当前观察，忙碌系统仍可能按原15秒返回明确deadline，不承诺普遍延时。私有阶段计时与importtime日志continuation-python-importtime-fixed-*.log供诊断，不是费用或性能倍数认证。

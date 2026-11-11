@@ -3,15 +3,21 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { mainRootDir } from '../platform/paths'
 import type { CodeServiceRequest, CodeServiceResult } from './code-service'
+import { executePythonCodeService, type PythonCodeServiceResult } from './python-code-service'
 let active = 0
 const failure = (code: string, message: string): CodeServiceResult => ({ ok: false, backend: 'typescript-language-service', error: { code, message } })
 /** Two read-only compiler workers maximum. Not another business lifecycle or
  * permission source: root comes exclusively from the existing project tool. */
-export async function executeCodeService(root: string, request: CodeServiceRequest, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<CodeServiceResult> {
+export async function executeCodeService(root: string, request: CodeServiceRequest, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<CodeServiceResult | PythonCodeServiceResult> {
   if (options.signal?.aborted) return failure('CANCELLED', 'Semantic query cancelled before starting')
   const timeout = options.timeoutMs ?? 15000
   if (!Number.isInteger(timeout) || timeout < 1 || timeout > 30000) return failure('INVALID_OPTIONS', 'Worker deadline must be 1..30000ms')
   if (active >= 2) return failure('CODE_SERVICE_BUSY', 'Two semantic workers are already active; no query started')
+  if (/\.pyi$/i.test(request?.path ?? '')) return { ok: false, backend: 'unavailable', error: {code:'PYTHON_STUBS_UNSUPPORTED',message:'This bounded Python adapter indexes .py only; project .pyi semantics are not implemented'} }
+  if (/\.py$/i.test(request?.path ?? '')) {
+    active++
+    try { return await executePythonCodeService(root, request, options) } finally { active-- }
+  }
   const main = mainRootDir(), deployed = join(main, 'software/code-service-worker.mjs')
   // Source tests use the exact same production-built worker, not a fake service.
   const file = existsSync(deployed) ? deployed : join(main, '../dist-main/main/software/code-service-worker.mjs')
