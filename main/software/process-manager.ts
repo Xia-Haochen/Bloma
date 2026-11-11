@@ -8,6 +8,7 @@ import { projectDirectory, resolveSoftwareCommand, softwareEnvironment, bindSoft
 import { mainRootDir } from '../platform/paths'
 import { softwareVerificationFingerprint } from '../desktop/verification-fingerprint'
 import { createProcessOutput, type ProcessOutput } from './process-output'
+import { createProcessLog, readProcessLog, readProcessLogRecord, type ProcessLogInfo } from './process-log'
 import { dependencyInputVersion, isDependencySetup } from './dependency-state'
 
 export interface SoftwareProcessSnapshot {
@@ -15,6 +16,8 @@ export interface SoftwareProcessSnapshot {
   completion_reason?: 'exit' | 'timeout' | 'cancelled' | 'host_interrupted'
   output_seq?: number
   output?: ProcessOutput[]
+  output_incomplete?: boolean
+  log?: ProcessLogInfo
   dependency_setup?: { root: string; input_version: string }
   purpose?: 'trial' | 'development' | 'acceptance' | 'user' | 'correction'
   source?: string
@@ -38,7 +41,7 @@ export function redactSoftwareOutput(text: string): string {
   return text.replace(/((?:api[_-]?key|authorization|password|access[_-]?token|refresh[_-]?token|token|secret)\s*["']?\s*[:=]\s*["']?)[^\s"',};&]+/gi, '$1[REDACTED]')
 }
 function visibleOutput(snapshot: SoftwareProcessSnapshot, stream: 'stdout' | 'stderr') {
-  return snapshot.kind === 'command' ? (snapshot.output ?? []).filter(line => line.stream === stream).map(line => line.text).join('').slice(-TAIL) : redactSoftwareOutput(snapshot[stream])
+  return snapshot.output ? snapshot.output.filter(line => line.stream === stream).map(line => line.text).join('').slice(-TAIL) : redactSoftwareOutput(snapshot[stream])
 }
 function persist(entry: OwnedProcess) { writeJsonFile(entry.file, { ...entry.snapshot, stdout: visibleOutput(entry.snapshot, 'stdout'), stderr: visibleOutput(entry.snapshot, 'stderr') }) }
 /** Completed one-shot commands have no adoptable PID/handle. */
@@ -117,6 +120,8 @@ export async function startSoftwareProcess(input: { root: string; projectId: str
   if (input.kind === 'command' && isDependencySetup(input.command)) snapshot.dependency_setup = { root: cwd, input_version: dependencyInputVersion(cwd, input.command) }
   // Save ownership before spawn. A failure cannot leave an untracked child.
   const file = pathFor(snapshot.id)
+  const archive = createProcessLog(snapshot.id)
+  snapshot.log = archive.info()
   writeJsonFile(file, snapshot)
   const supervisor = input.independentUserApp ? resolved : resolveSoftwareCommand(input.root,
     ['node', join(mainRootDir(), 'templates/tools/software_process_supervisor.cjs')], softwareEnvironment(input.projectId, input.dataDir))
@@ -128,8 +133,8 @@ export async function startSoftwareProcess(input: { root: string; projectId: str
   processes.set(snapshot.id, entry)
   for (const [id, previous] of processes) if (processes.size > 128 && !['starting', 'running', 'stopping'].includes(previous.snapshot.state)) processes.delete(id)
   snapshot.pid = child.pid
-  const output = createProcessOutput(redactSoftwareOutput)
-  const updateOutput = () => Object.assign(snapshot, output.snapshot())
+  const output = createProcessOutput(redactSoftwareOutput, (record, omitted) => archive.append(record, omitted))
+  const updateOutput = () => Object.assign(snapshot, output.snapshot(), { log: archive.info() })
   const schedule = () => { if (!entry.timer) entry.timer = setTimeout(() => { entry.timer = undefined; try { persist(entry) } catch { entry.abort() } }, 200) }
   child.stdout?.on('data', data => { snapshot.stdout = (snapshot.stdout + data.toString('utf8')).slice(-TAIL); output.push('stdout', data); updateOutput(); schedule() })
   child.stderr?.on('data', data => { snapshot.stderr = (snapshot.stderr + data.toString('utf8')).slice(-TAIL); output.push('stderr', data); updateOutput(); schedule() })
@@ -190,7 +195,14 @@ export async function readSoftwareProcess(projectId: string, id: string, session
   })
   snapshot = softwareProcess(projectId, id, sessionId)
   return { ...snapshot, output: (snapshot.output ?? []).filter(line => line.seq > since),
-    output_truncated: since > (snapshot.output_seq ?? 0) || Boolean(snapshot.output?.length && since < snapshot.output[0].seq - 1), next_seq: snapshot.output_seq ?? 0 }
+    output_truncated: since > (snapshot.output_seq ?? 0) || Boolean(snapshot.output?.length && since < snapshot.output[0].seq - 1) || Boolean(snapshot.output?.some(line => line.seq > since && line.truncated)), next_seq: snapshot.output_seq ?? 0 }
+}
+
+export function readSoftwareProcessLog(projectId: string, id: string, sessionId: string, input: { since?: number; limit?: number; pattern?: string; record_seq?: number; char_offset?: number }) {
+  const snapshot = softwareProcess(projectId, id, sessionId)
+  const result = input.record_seq !== undefined ? readProcessLogRecord(id, snapshot.log, input.record_seq, input.char_offset ?? 0)
+    : readProcessLog(id, snapshot.log, input)
+  return { ...result, state: snapshot.state, completion_reason: snapshot.completion_reason, verification: 'not_applicable', task_completion: 'unverified' }
 }
 
 export function writeSoftwareProcess(projectId: string, id: string, sessionId: string, text: string, closeStdin = false) {

@@ -37,7 +37,9 @@ it('keeps one real command alive, reads incremental UTF-8 logs, sends stdin/EOF 
   read = JSON.parse((await t.read_process.execute({ process_id: id, since_seq: next }, ctx)).output)
   expect(read).toMatchObject({ execution_status: 'completed', exit_code: 0, verification: 'not_applicable', task_completion: 'unverified' })
   expect(read.output.every((line: { seq: number }) => line.seq > next)).toBe(true)
-  expect(read.stdout).toContain('received:hello'); expect(JSON.stringify(read)).not.toContain('PRIVATE_SECRET')
+  expect(read.stdout).toBeUndefined(); expect(read.stderr).toBeUndefined()
+  const tail = JSON.parse((await t.read_process.execute({ process_id: id, mode: 'tail' }, ctx)).output)
+  expect(tail.stdout).toContain('received:hello'); expect(JSON.stringify(read)).not.toContain('PRIVATE_SECRET')
   expect(readFileSync(join(project.root_path, 'starts.txt'), 'utf8')).toBe('1')
 }, 25000)
 it('wait cancellation does not falsely resolve or restart the owned command; stop and timeout release its process', async () => {

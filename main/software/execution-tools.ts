@@ -3,21 +3,23 @@ import { findProject } from '../project/project-service'
 import { executeSoftwareCommand, projectDirectory } from './command-runtime'
 import { DriverExecutionError } from '../desktop/process-driver'
 import { dependencyFailureCode, dependencyInputVersion, inspectProjectDependencies, isDependencySetup } from './dependency-state'
-import { startSoftwareProcess, softwareProcess, readSoftwareProcess, writeSoftwareProcess, stopSoftwareProcess, redactSoftwareOutput, activeSoftwarePreview, type SoftwareProcessSnapshot } from './process-manager'
+import { startSoftwareProcess, softwareProcess, readSoftwareProcess, readSoftwareProcessLog, writeSoftwareProcess, stopSoftwareProcess, redactSoftwareOutput, activeSoftwarePreview, type SoftwareProcessSnapshot } from './process-manager'
 
 const commandSchema = { type: 'array', minItems: 1, maxItems: 128, items: { type: 'string' } }
 function admission(projectId: string, ctx: ToolContext) {
   if (ctx.projectId !== projectId) throw new Error('COMMAND_PROJECT_MISMATCH')
   ctx.signal.throwIfAborted()
 }
-function commandView(snapshot: SoftwareProcessSnapshot & { next_seq?: number; output_truncated?: boolean }) {
+function commandView(snapshot: SoftwareProcessSnapshot & { next_seq?: number; output_truncated?: boolean }, tail = false) {
   const pending = ['starting','running','stopping'].includes(snapshot.state)
   const execution = pending ? 'running' : snapshot.completion_reason === 'timeout' ? 'failed' : snapshot.completion_reason === 'cancelled' ? 'cancelled'
     : snapshot.state === 'exited' && snapshot.code === 0 ? 'completed' : 'failed'
   const setup = snapshot.dependency_setup
   return { process_id: snapshot.id, kind: 'command', state: snapshot.state, execution_status: execution, completion_reason: snapshot.completion_reason,
-    exit_code: pending ? undefined : snapshot.code, next_seq: snapshot.next_seq ?? snapshot.output_seq ?? 0, output: snapshot.output ?? [], output_truncated: snapshot.output_truncated,
-    ...(!pending ? { stdout: snapshot.stdout, stderr: snapshot.stderr } : {}),
+    exit_code: pending ? undefined : snapshot.code, next_seq: snapshot.next_seq ?? snapshot.output_seq ?? 0,
+    ...(tail ? { stdout: snapshot.stdout, stderr: snapshot.stderr, tail_only: true } : { output: snapshot.output ?? [] }), output_truncated: snapshot.output_truncated,
+    log: snapshot.log ?? { available: false, complete: false },
+    ...(snapshot.output_truncated || !snapshot.log?.available ? { log_next: '首部错误用read_process(mode:log,since_seq:0,pattern:字面文本)查询；兼容尾部显式mode:tail。归档容量/长行缺口会明确标记，不保证全文无缺失。' } : {}),
     ...(setup ? { dependencies: inspectProjectDependencies(setup.root), input_version: setup.input_version } : {}),
     ...(execution === 'failed' ? { code: snapshot.state === 'interrupted' ? 'COMMAND_HOST_INTERRUPTED' : setup ? dependencyFailureCode(snapshot.completion_reason === 'timeout' ? 'timeout' : 'exit', snapshot.stderr)
       : snapshot.completion_reason === 'timeout' ? 'COMMAND_TIMEOUT' : 'COMMAND_EXIT_FAILED' } : {}),
@@ -71,13 +73,21 @@ export function buildSoftwareExecutionTools(projectId: string, beforeExecute?: (
         return { output: JSON.stringify(result), isError: result.state !== 'running', detail: { process_id: result.id, ...(result.ready ? { preview_url: result.url } : {}) } }
       } catch (error) { return { output: error instanceof Error ? error.message : String(error), isError: true } }
     } }
-  const read: AgentLoopTool = { name: 'read_process', parallelSafe: true, description: '读取本会话拥有的服务/命令；since_seq传上次next_seq，只返回新增日志，wait_ms可有界等待新输出/退出（上限30秒）。读不重启命令；宿主重启后标interrupted，不接管旧PID。命令退出结果不代表产品验收。',
-    input_schema: { type: 'object', required: ['process_id'], properties: { process_id: { type: 'string' }, since_seq: { type: 'integer', minimum: 0 }, wait_ms: { type: 'integer', minimum: 0, maximum: 30000 } } }, execute: async (input, ctx) => {
+  const read: AgentLoopTool = { name: 'read_process', parallelSafe: true, description: '读取本会话拥有的进程。默认只返回since_seq后的增量，不在退出时重复stdout/stderr；mode:tail显式读取兼容尾部。mode:log从磁盘脱敏日志按序号/字面pattern查询，limit≤200；长记录按record_seq/char_offset续读。归档每进程8MiB/每home最多16份，直到手工清理，不自动删证据；容量或长行缺口明确报告。wait_ms有界等待≤30秒，不重启命令、不接管旧PID；退出成功不代表产品验收。',
+    input_schema: { type: 'object', required: ['process_id'], properties: { process_id: { type: 'string' }, since_seq: { type: 'integer', minimum: 0 }, wait_ms: { type: 'integer', minimum: 0, maximum: 30000 },
+      mode: { type: 'string', enum: ['incremental', 'tail', 'log'] }, pattern: { type: 'string', maxLength: 500 }, limit: { type: 'integer', minimum: 1, maximum: 200 }, record_seq: { type: 'integer', minimum: 1 }, char_offset: { type: 'integer', minimum: 0 },
+    } }, execute: async (input, ctx) => {
       try {
         if (ctx.projectId !== projectId) throw new Error('PROCESS_PROJECT_MISMATCH')
+        ctx.signal.throwIfAborted()
+        if (input.mode !== undefined && !['incremental', 'tail', 'log'].includes(String(input.mode))) throw Error('PROCESS_READ_MODE_INVALID')
+        if (input.mode === 'log') return { output: JSON.stringify(readSoftwareProcessLog(projectId, String(input.process_id), ctx.sessionId,
+          { since: input.since_seq as number | undefined, limit: input.limit as number | undefined, pattern: input.pattern as string | undefined, record_seq: input.record_seq as number | undefined, char_offset: input.char_offset as number | undefined })) }
         const result = await readSoftwareProcess(projectId, String(input.process_id), ctx.sessionId, Number(input.since_seq ?? 0), Number(input.wait_ms ?? 0), ctx.signal)
-        const command = result.kind === 'command' ? commandView(result) : undefined
-        return { output: JSON.stringify(command ?? result), isError: Boolean(command && ['failed','cancelled'].includes(command.execution_status)),
+        const command = result.kind === 'command' ? commandView(result, input.mode === 'tail') : undefined
+        const { stdout, stderr, output, ...facts } = result
+        const service = input.mode === 'tail' || !output ? { ...facts, stdout, stderr, tail_only: true } : { ...facts, output }
+        return { output: JSON.stringify(command ?? service), isError: Boolean(command && ['failed','cancelled'].includes(command.execution_status)),
           ...(command ? { feedback: { schema_version: 1 as const, source: 'host' as const, scope: 'command_execution', execution: command.execution_status as 'running'|'completed'|'failed'|'cancelled', verification: 'not_applicable' as const, task_completion: 'unverified' as const } } : {}) }
       }
       catch (error) { return { output: String(error), isError: true } }
