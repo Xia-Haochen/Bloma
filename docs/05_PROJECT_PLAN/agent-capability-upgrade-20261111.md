@@ -2,7 +2,7 @@
 
 日期：2026-11-11（Asia/Shanghai）。核查基线：`sprint2 / 599ef1c74660e9960ee7c3a6970e3b0c81ce9ed9`。
 
-状态：**方案已整理，以下批次均未实施、未证明提效。** 本次授权是整理实施文档与研究参考项目，不自动开始运行代码改造、付费实验、部署或产品修复。本文承接现役 software-v1，不替代当前交付契约与已有缺陷记录。
+状态：**2026-11-11 用户已授权按计划实施；批次进度与验证边界见第16节。** 原文档批次仅为调研授权，后续工程授权不包含付费实验、部署、push或恢复暂停产品。本文承接现役 software-v1，不替代当前交付契约与已有缺陷记录。
 
 配套阅读：[Vide 源码借鉴与适配设计](vide-adoption-design-20261111.md)。最近已实现能力以 [质量收尾](session-handoff-quality-closeout-20261110.md)、[行动优先界面](session-handoff-ux-action-first-20261110.md)、[启动新鲜度](session-handoff-startup-freshness-20261110.md) 和当前源码为准；旧目录索引的“待实施”不覆盖这些结果。
 
@@ -216,6 +216,14 @@ E1：复用runtime-manager、release-store、isolated-launch。定义固定候�
 - Vide锁定源码、采用/改写/暂缓细项及风险见配套文档。
 
 后续实施在本节追加批次结果与证据位置，并将上表状态改为已实现/已验证/待验证；不能仅因合入代码标记真实模型提效完成。
+
+### 2026-11-11 B0 首批受控基线
+
+用户随后明确要求完成计划。工程工作树以09d8549为起点，原sprint2用户dirty文档保持不动，无付费或产品续跑。本批增加可在前后版本重复执行的`tests/unit/software/tooling-benchmark.test.ts`，产物通过`TOOLING_REPORT`显式输出到工程外。
+
+实际基线：有用内容搜索需要grep→read共2次；4文件读取4次；10万中文字符单行返回300092字节；同文件两处修改含预读共3次。记录每项输入/输出UTF-8字节和执行时长，不把字节估算称为供应商token；单次时长只作观测，不宣布普遍性能收益。原有读写/租约/文本编辑3文件39项及新基线1项通过，typecheck通过。
+
+证据：本次Proma会话工作台`tooling-before.json`、`tooling-before.log`、`baseline-existing-tests.log`、`b0-typecheck.log`。这是T1/T3前置的工具级基线，不代表GUI、原生、真实模型、故障恢复与所有T0样本均已测量；各扩展批次仍须补其对应基线。
 
 ### 2026-11-11 文档批次
 
