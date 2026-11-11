@@ -171,6 +171,33 @@ describe('Pi public assistant message boundaries', () => {
 })
 
 describe('real upstream Pi AgentSession integration', () => {
+  it('keeps per-call contexts/feedback identities separate and exposes numeric text metrics', async () => {
+    const flow = scripted([[{ type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'tool_use', id: 'one', name: 'probe', input: {} }, { type: 'tool_use', id: 'two', name: 'probe', input: {} },
+    ] } }], [text('done')]])
+    const contexts: Array<import('../../main/agent/loop/agent-loop').ToolContext> = [], observations: import('../../main/agent/loop/agent-loop').ToolObservation[] = []
+    const probe = tool('probe', async () => ({ output: '中文🙂', feedback: { schema_version: 1, source: 'host', execution: 'completed', verification: 'not_applicable' } }))
+    probe.recordFeedback = (_feedback, ctx) => contexts.push(ctx)
+    await runAgentLoop(input(flow.query, { tools: [probe], onToolObservation: value => observations.push(value), afterTools: async ctx => {
+      expect(ctx.toolCallId).toBeUndefined(); return undefined
+    } }))
+    expect(contexts.map(ctx => ctx.toolCallId)).toEqual(['one', 'two'])
+    expect(contexts[0]).not.toBe(contexts[1])
+    for (const event of observations) if (event.phase === 'completed') {
+      expect(event.duration_ms).toBeGreaterThanOrEqual(0); expect(event.input_bytes).toBe(2)
+      expect(event.output_text_bytes).toBe(Buffer.byteLength(event.output))
+    }
+  })
+  it('keeps original invocation budget admission for same-round read-only requests', async () => {
+    const flow = scripted([[{ type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'tool_use', id: 'one', name: 'read_file', input: {} }, { type: 'tool_use', id: 'two', name: 'read_file', input: {} },
+    ] } }], [text('stop after the bounded result')]])
+    let executions = 0
+    const result = await runAgentLoop(input(flow.query, { toolBudget: { read_file: 1 }, tools: [tool('read_file', async () => {
+      executions++; return { output: 'read once' }
+    })] }))
+    expect(executions).toBe(1); expect(result.toolCalls.map(call => call.status)).toEqual(['ok', 'error'])
+  })
   it('lets an advisory Agent end quietly only after a successful complete response',async()=>{
     let calls=0
     const publish=vi.fn()

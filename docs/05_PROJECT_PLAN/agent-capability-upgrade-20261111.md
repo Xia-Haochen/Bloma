@@ -217,6 +217,14 @@ E1：复用runtime-manager、release-store、isolated-launch。定义固定候�
 
 后续实施在本节追加批次结果与证据位置，并将上表状态改为已实现/已验证/待验证；不能仅因合入代码标记真实模型提效完成。
 
+### 2026-11-11 B2首期 调用身份与数值观测
+
+Pi包装不再把每次toolCallId写进共享协调上下文；执行、feedback回执各自持有局部调用上下文，工具开始/结束通过原调用ID配对，不按同名末项猜归属。复用原onToolObservation补执行时长、入参UTF-8字节、输出文本UTF-8字节；这些不是供应商计费token，不包括图片payload，也没有新增采集sink或业务台账。
+
+安装的Pi1.4.0确实提供parallel和executionMode=sequential混合批次退化路径，但没有在本批打开：当前白名单文件读取/遍历仍是Node同步IO，缺少并发收益证据；其它工具包含预算、进程、GUI和宿主收尾副作用。采用计划允许的有界只读批处理，不为标记parallelSafe而全局放开。原工具预算、权限、取消、恢复与收尾规则保持，未建第二个Agent loop。完整异步只读并发及命令生命周期统一仍待后续验证。
+
+实际Pi2文件48项通过，包括同轮同名两调用的feedback上下文不串ID、数值字节、余量只够一项时另一项不执行，以及既有恢复/权限/永久预算/公开消息/取消用例；typecheck通过。证据b2-pi-tests.log、b2-typecheck.log。参考本地Proma上游bf3e98ca61dd8365eceaef876c0f7473700878a6的pi-agent-adapter.ts权限包装与sequential策略，以及实际安装SDK的agent-loop.js；仅适配宿主边界，不整体复制上游文件。
+
 ### 2026-11-11 B1b 命令增量投影和诊断归档
 
 异步命令read_process默认只返回本次增量与退出事实，不再退出时重复附stdout/stderr；显式mode:tail保留兼容尾部。mode:log按原process/session归属查询工程外的脱敏归档，可按序号、字面关键词和长记录字符位置续读。同步run_command旧调用保持兼容，尚未统一两条命令生命周期，不将其记为B2完成。

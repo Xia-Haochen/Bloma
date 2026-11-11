@@ -134,7 +134,7 @@ export interface AgentLoopToolCallRecord {
 
 /** Public execution evidence only; no system prompt or reasoning blocks. */
 export type ToolObservation = {turn:number;id:string;name:string;input:Record<string,unknown>} &
-  ({phase:'started'}|{phase:'completed';output:string;isError:boolean;halted?:boolean})
+  ({phase:'started'}|{phase:'completed';output:string;isError:boolean;halted?:boolean;duration_ms?:number;input_bytes?:number;output_text_bytes?:number})
 
 
 /** W1-E1（咨询 D3，2026-09-09）：竹节压缩观测信息——纯埋点零行为变更。

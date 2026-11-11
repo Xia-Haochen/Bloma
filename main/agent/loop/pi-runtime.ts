@@ -51,6 +51,7 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
   const toolByName = new Map(input.tools.map(tool => [tool.name, tool]))
   const budgetUsed: Record<string, number> = {}
   const toolCalls: AgentLoopToolCallRecord[] = []
+  const callsById = new Map<string, AgentLoopToolCallRecord>()
   const decisions: LoopCheckpointDecision[] = []
   const outcomes = new Map<string, { isError: boolean }>()
   const queuedSteers: Array<{ entry: SteerEntry; text: string }> = []
@@ -151,13 +152,14 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
       execute: async (id, args, signal) => {
         const toolSignal = signal ? AbortSignal.any([input.signal, signal]) : input.signal
         toolSignal.throwIfAborted()
-        ctx.toolCallId = id
+        const callCtx: ToolContext = { ...ctx, signal: toolSignal, toolCallId: id }
+        const toolStarted = performance.now(), inputBytes = Buffer.byteLength(JSON.stringify(args))
         try{input.onToolObservation?.({phase:'started',turn:turns,id,name:tool.name,input:structuredClone(args) as Record<string,unknown>})}catch{/* Attempted action is not execution success. */}
         const outcome = await executeToolCall({ ...input, signal: toolSignal }, toolByName, budgetUsed,
-          { name: tool.name, id, input: args as Record<string, unknown> }, { ...ctx, signal: toolSignal })
+          { name: tool.name, id, input: args as Record<string, unknown> }, callCtx)
         let feedback = feedbackForTool(tool.name, outcome)
         if (feedback) {
-          try { tool.recordFeedback?.(feedback, ctx) } catch {
+          try { tool.recordFeedback?.(feedback, callCtx) } catch {
             feedback = { ...feedback, verification: 'unverified', category: 'verification_harness', recovery: 'inspect', reason: 'EVIDENCE_RECORD_FAILED',
               ...(feedback.evidence ? { evidence: { ...feedback.evidence, freshness: 'unknown' } } : {}) }
           }
@@ -176,7 +178,7 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
         const assistantEntry = [...opened.manager.getBranch()].reverse().find(entry => entry.type === 'message' && entry.message.role === 'assistant')
         opened.manager.appendCustomEntry('bloma-tool-receipt', { id, assistantEntryId: assistantEntry?.id, name: tool.name, content,
           isError: outcome.isError === true || outcome.budgetExhausted === true })
-        try{input.onToolObservation?.({phase:'completed',turn:turns,id,name:tool.name,input:structuredClone(args) as Record<string,unknown>,output:content,isError:outcome.isError===true||outcome.budgetExhausted===true,halted:status!=='completed'})}catch{/* Observation cannot alter the execution receipt. */}
+        try{input.onToolObservation?.({phase:'completed',turn:turns,id,name:tool.name,input:structuredClone(args) as Record<string,unknown>,output:content,isError:outcome.isError===true||outcome.budgetExhausted===true,halted:status!=='completed',duration_ms:performance.now()-toolStarted,input_bytes:inputBytes,output_text_bytes:Buffer.byteLength(content)})}catch{/* Observation cannot alter the execution receipt. */}
         return { content: [{ type: 'text' as const, text: content }, ...(outcome.images ?? []).map(piImage)],
           details: { ...outcome.detail, feedback, budgetExhausted: outcome.budgetExhausted } }
       },
@@ -339,10 +341,11 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
       } else if (event.type === 'tool_execution_start') {
         const path = typeof event.args?.path === 'string' ? event.args.path : undefined
         const progressKey = commandProgressKey(event.toolName, event.args ?? {})
-        toolCalls.push({ name: event.toolName, turn: turns, ...(progressKey ? { progressKey } : {}), ...(path ? { path } : {}) })
+        const call: AgentLoopToolCallRecord = { name: event.toolName, turn: turns, ...(progressKey ? { progressKey } : {}), ...(path ? { path } : {}) }
+        toolCalls.push(call); callsById.set(event.toolCallId, call)
         input.publish('tool_call_started', { tool: event.toolName, tool_call_id: event.toolCallId, turn: turns, input_summary: JSON.stringify(event.args).slice(0, 500) })
       } else if (event.type === 'tool_execution_end') {
-        const call = [...toolCalls].reverse().find(call => call.name === event.toolName && call.turn === turns && !call.status)
+        const call = callsById.get(event.toolCallId)
         if (call) call.status = event.isError ? 'error' : 'ok'
         const details = event.result.details as { feedback?: ToolFeedback; budgetExhausted?: boolean } | undefined
         const result = event.result as AgentToolResult<unknown>
@@ -354,7 +357,7 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
         input.publish('tool_call_completed', { tool: event.toolName, tool_call_id: event.toolCallId, turn: turns,
           status: details?.budgetExhausted ? 'budget' : event.isError ? 'error' : 'ok', is_error: event.isError,
           ...(event.durationMs!==undefined?{duration_ms:event.durationMs}:{}),
-          feedback: details?.feedback, output_summary: result.content.filter(b => b.type === 'text').map(b => b.text).join('\n').slice(0, 500),
+          feedback: details?.feedback, output_text_bytes: Buffer.byteLength(result.content.filter(b => b.type === 'text').map(b => b.text).join('\n')), output_summary: result.content.filter(b => b.type === 'text').map(b => b.text).join('\n').slice(0, 500),
           ...(() => {const detail=Object.fromEntries(Object.entries((result.details ?? {}) as Record<string, unknown>)
             .filter(([key,value]) => value!==undefined&&['delegation_id', 'child_session_id', 'role', 'goal', 'status', 'pending_question', 'error'].includes(key)))
             return Object.keys(detail).length?{detail}:{} })() })
