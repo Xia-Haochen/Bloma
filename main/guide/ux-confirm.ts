@@ -607,7 +607,8 @@ async function returnToPrd(pending: PendingUxConfirm, feedback: string): Promise
     await handleLeanGuide({ project_id: pending.project_id, session_id: pending.session_id, request_id: pending.request_id,
       content: feedback, mode: pending.mode, current_stage: 'clarifying', metadata: { source: 'chat' } }, pending.publish,
     { query: pending.query, env: resolution.env ?? pending.env, signal: pending.signal ?? new AbortController().signal,
-      sessionId: pending.session_id, history: [], maxTokens: resolveGenerationMaxTokens(resolution.channel ?? {}), persistAssistant: () => {} })
+      sessionId: pending.session_id, history: [], maxTokens: resolveGenerationMaxTokens(resolution.channel ?? {}),
+      persistAssistant: text => appendSessionMessage(pending.session_id, { role: 'assistant', content: [{ type: 'text', text }], timestamp: Date.now() }) })
     return
   }
   pending.publish(makeUxEvent(pending,'message_delta',{text:'旧需求生成入口已退役，请重新打开当前任务单；历史项目可复制到新流程。'}))

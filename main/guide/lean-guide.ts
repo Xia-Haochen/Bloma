@@ -117,19 +117,33 @@ export async function handleLeanGuide(input: AgentSendMessageInput, publish: (ev
     : turn.content.filter(block => block.type === 'text').map(block => block.text).join('\n'))
   if (humanTexts.at(-1) !== input.content) humanTexts.push(input.content)
   const source = humanTexts.join('\n\n')
+  // Public dialogue carries what the user is answering/correcting. Keep the
+  // existing user-only source identity separate; never expose host/tool blocks.
+  const dialogue = model.history.filter(turn => turn.role === 'user' || turn.role === 'assistant').flatMap(turn => {
+    const content = typeof turn.content === 'string' ? turn.content
+      : turn.content.filter(block => block.type === 'text' && typeof block.text === 'string').map(block => block.text).join('\n')
+    return content.trim() ? [{ role: turn.role, content }] : []
+  }).slice(-20)
+  if (dialogue.at(-1)?.role !== 'user' || dialogue.at(-1)?.content !== input.content) dialogue.push({ role: 'user', content: input.content })
+  const guideContext = { project_name: project.name, stage: project.current_stage, confirmation: saved?.state ?? null }
   const materials = model.materials ? renderMaterialContext(model.materials, input.session_id, true) : ''
   const images = [...(input.images ?? []), ...(model.materials ? materialImageRefs(model.materials) : [])]
   const software = isSoftwareProject(input.project_id)
-  emit('stage_changed', { stage: 'clarifying' })
+  // An ordinary reply must not move a paused/pending task back to clarifying.
+  emit('stage_changed', { stage: project.current_stage })
   let briefIssues: string[] = []
   const result = await withLeanRuntime(input.project_id, 'prepare', model.signal, (signal,budget) => callLlmForJson({ systemPrompt: LEAN_BRIEF_PROMPT + (software ? '\n另填delivery=desktop/browser/command描述用户使用方式；有界面默认desktop，仅用户明确要在浏览器使用才browser；无界面command。distribution描述交付：默认local本机使用，用户明确要复制到其他电脑直接运行用portable，要安装包用installer，只移交源码用source。框架、依赖、语言由工程Agent选择，不让用户做技术问卷。' : ''),
-    prompt: JSON.stringify({ previous: brief.lean_brief ? brief : undefined, conversation: source, sources: intentSources(source, brief.requirements_model?.sources ?? brief.lean_brief?.intent_sources), materials, latest: input.content }),
+    prompt: JSON.stringify({ previous: brief.lean_brief ? brief : undefined, dialogue, guide_context: guideContext, conversation: source, sources: intentSources(source, brief.requirements_model?.sources ?? brief.lean_brief?.intent_sources), materials, latest: input.content }),
     query: (text, options) => budget.wrap(model.query)(text, { ...options, images, accounting: { projectId: input.project_id, runId: input.request_id, role: 'brief', scope: 'prepare' } }),
     env: model.env, signal, sessionId: input.session_id, maxTokens: model.maxTokens, temperature: .1, attempts: 2,
-    retryFeedback: () => JSON.stringify({ conversation: source, sources: intentSources(source, brief.requirements_model?.sources ?? brief.lean_brief?.intent_sources), previous: brief.lean_brief ? brief : undefined, materials, latest: input.content, errors: briefIssues, instruction: '按具体错误重新给出完整JSON，不删除原始要求以规避校验。' }),
+    retryFeedback: () => JSON.stringify({ dialogue, guide_context: guideContext, conversation: source, sources: intentSources(source, brief.requirements_model?.sources ?? brief.lean_brief?.intent_sources), previous: brief.lean_brief ? brief : undefined, materials, latest: input.content, errors: briefIssues, instruction: '按具体错误重新给出完整JSON，不删除原始要求以规避校验。' }),
     parse: text => parseLeanBrief(text, { projectId: input.project_id, sessionId: input.session_id, source, previous: brief, software, assets: model.materials?.attachments, onIssues: issues => { briefIssues = issues } }) }))
   model.signal.throwIfAborted()
   if (!result) { say('任务单暂未就绪：'+(briefIssues.length?briefIssues.join('；'):'返回内容不完整或缺少可观察的完成标准。')+' 原始需求已保留，尚未开工。'); emit('message_completed', { subtype: 'incomplete' }); return }
+  if (result.action === 'reply') {
+    say(result.text)
+    return
+  }
   if (result.action === 'clarify') {
     say(result.question)
     if (result.options.length) emit('user_decision_required', { kind: 'clarification', title: result.question,

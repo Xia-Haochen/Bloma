@@ -14,7 +14,9 @@ import { requirementCapabilities, validRequirementCapabilities } from '../model/
 const texts = (value: unknown): string[] => Array.isArray(value) && value.every(x => typeof x === 'string' && x.trim()) ? value : []
 const object = (x: unknown): x is Record<string, unknown> => Boolean(x && typeof x === 'object' && !Array.isArray(x))
 
-export const LEAN_BRIEF_PROMPT = `把用户目标整理为简短、可执行的工作约定。先保留原话、资料、明确边界和特殊业务规则；只问真正影响结果且无法调查确定的问题，不问内部技术选型。
+export const LEAN_BRIEF_PROMPT = `你是Bloma，帮助用户把想法做成软件，也能直接回答问题和起草文本。先理解latest这一轮要你做什么，结合dialogue中的公开交谈；conversation只是用户原话的来源集合，previous只是已有任务，不代表本轮一定要改任务。
+身份/能力询问、普通问答、解释、只需文本的写作及对话纠正，直接输出JSON：{"action":"reply","text":"给用户的完整回答"}。例如“你是谁”应介绍你是Bloma及用途，不问用户希望你扮演谁；“我让你介绍啊”应直接介绍，不把催促写成将来软件的功能或验收标准。不要编造执行、验证、发布或运行状态；只能根据宿主给出的guide_context和previous解释当前任务，不能替用户确认或开工。
+只有用户明确要求创建或修改软件时，才把目标整理为下面的工作约定。只要文本不等于命令行软件；已有任务期间的插问/暂停后的纠正仍可reply，不自动修改原任务。先保留原话、资料、明确边界和特殊业务规则；只问真正影响软件结果且无法调查确定的问题，不问内部技术选型。
 目标明确时输出JSON：{"action":"brief","name":"简短名称","goal":"要做成什么","ui":"required|none","requirements":[{"id":"已有编号可保留，新项可省略","description":"必须实现的能力","expected":"可观察的完成标准"}],"constraints":[],"out_of_scope":[],"assumptions":[],"work_items":["下一步要调查、实验、实现或验证什么"]}。
 工作清单只列现在有用的少量主项，可以先调查资料和现有环境、运行最小实验，再逐步细化；不是流程门禁，不按固定功能数、阶段数或正常/边界/异常类别凑条目。完成标准不能用“清单已勾完”代替实际结果。
 新任务无需intent_assessment、requirements_model、来源编号或关系图。业务规则、例外、关键体验及不能接受的替代方案，用自然语言写进完成标准和constraints；不要为省字段弱化用户原意。sources由宿主保留。已有确认的详细契约由宿主沿用；确实修改它时才提交更新的requirements_model，不得悄悄丢弃原规则。
@@ -22,11 +24,15 @@ export const LEAN_BRIEF_PROMPT = `把用户目标整理为简短、可执行的�
 材料引用可用design_assets:[{attachment_id,role:required_asset|style_reference|content,usage,transformations}]，只引用宿主提供的附件，不编造来源或hash。不要输出实现代码、完整验收用例库或其他文档。只输出JSON。`
 
 export function parseLeanBrief(raw: string, context: { projectId: string; sessionId: string; source: string; previous: PrdBackplane; software?: boolean; assets?: AttachmentInfo[]; onIssues?: (issues: string[]) => void }):
-  { action: 'clarify'; question: string; options: string[] } | { action: 'brief'; brief: PrdBackplane; suggestions: LeanScopeSuggestion[] } | undefined {
+  { action: 'reply'; text: string } | { action: 'clarify'; question: string; options: string[] } | { action: 'brief'; brief: PrdBackplane; suggestions: LeanScopeSuggestion[] } | undefined {
   const fail=(message:string)=>{context.onIssues?.([message]);return undefined}
   let value: unknown
   try { value = JSON.parse(raw.trim().replace(/^```(?:json)?\s*|\s*```$/g, '')) } catch { return fail('任务单不是完整JSON，请只返回一个完整对象。') }
-  if (!object(value)) return fail('任务单必须是对象。')
+  if (!object(value)) return fail('回复必须是JSON对象。')
+  if (value.action === 'reply') {
+    if (typeof value.text !== 'string' || !value.text.trim()) return fail('reply需要非空的完整回答text。')
+    return { action: 'reply', text: value.text.trim() }
+  }
   if (value.action === 'clarify' && typeof value.question === 'string' && value.question.trim()) {
     return { action: 'clarify', question: value.question, options: texts(value.options) }
   }
