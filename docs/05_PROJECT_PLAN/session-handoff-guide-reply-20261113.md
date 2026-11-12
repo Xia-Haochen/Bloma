@@ -1,6 +1,6 @@
 # Bloma需求引导普通对话修复交接
 
-日期：2026-11-13。工程起点sprint2/eb0cfcb；生产/测试验收点 **3ea5541f084c75be04c8e700d3da2427330ce928**。本批只修需求引导阶段的普通回复和UX回退引导的正文落盘，不扩展新Agent、分类调用或发布状态机。
+日期：2026-11-13。工程起点sprint2/eb0cfcb；生产/测试验收点 **3ea5541f084c75be04c8e700d3da2427330ce928**。本批只修需求引导阶段的普通回复和UX回退引导的正文落盘，不扩展新Agent、分类调用或发布状态机。已快进合入主仓库sprint2（合入点ab14d18），并在主仓库执行node scripts/start.mjs --build-only --no-install退出0：更新main，复用经新鲜度核验的renderer/worker/semantic/preload/templates，未启动常用App。此后仅记录收尾，不改已验生产/测试代码。
 
 ## 根因与修复
 
@@ -43,4 +43,4 @@
 - 最终：guide-repair-final-tests.log、guide-repair-final-typecheck.log、guide-repair-build.log。
 - 实际App：guide-ui-fixture.test.ts/.log/.json、guide-app-smoke.cjs/.json/.log、guide-app-reply.png；脚本错误guide-app-wrong-entry.json、guide-app-fixture-locator-error.json。
 - 原registry、Bloma索引、原会话、usage、确认、prd六文件SHA均与诊断前一致：guide-repair-protected.json。原用户dirty文档blob仍53c7abb3aef8497d8b0522b8aab806c82b2ec164，未覆盖或纳入提交。
-- 代码3ea5541已提交；无push、无常用App重启、无原产品/付费恢复。本交接后的合入与主仓库构建结果另补收尾记录，不用分支构建冒称用户当前实例已加载。
+- 代码3ea5541已提交并合入sprint2；主仓库构建新鲜度通过（guide-repair-main-build.log）。无push、无常用App重启、无原产品/付费恢复；不把主仓库构建成功当成用户旧实例已加载。
