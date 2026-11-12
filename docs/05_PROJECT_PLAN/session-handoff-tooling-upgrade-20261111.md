@@ -9,7 +9,7 @@
 - 通过外部受控测试建立全新临时PROMA_HOME样本：真实Pi完成两文件批改及一次Node命令，原工具审计/交接落盘；响应受控、未连接供应商，不是自主生成能力评测。
 - CUA当前可连接。实际读取当前build的Bloma原生窗口、截图和UIA，操作“查看过程”并核对批改两路径、命令exit0/stdout42/归档信息；Escape关闭详情，Ctrl+R后项目/历史/未交付状态恢复。正常界面仍提示未连接模型、发送禁用，未发送业务请求。初次隐藏启动无可操作窗口，换为可见验收实例后完成；元素点击的坐标信息不足时改用当前截图定位。验收实例已结束，未操作常用App。
 - **以上只是有限的当前平台GUI冒烟**：确认历史回执可读，不将原始工作记录中的JSON等同于新差异卡/进程卡的完整原生视觉验收；实时流、全部布局/交互和真实供应商端到端体验仍未覆盖。“CUA未配置”不再作为本会话阻塞理由。干净Windows和新预算下的真实模型效果实验仍待条件具备。
-- 六保护SHA仍与原最终基线一致，原用户dirty文档blob保持 `53c7abb3aef8497d8b0522b8aab806c82b2ec164`。按已批准顺序将本分支快进合入sprint2并检查主树构建；不push、不重启常用App、不解除费用暂停。
+- 六保护SHA仍与原最终基线一致，原用户dirty文档blob保持 `53c7abb3aef8497d8b0522b8aab806c82b2ec164`。已按授权将本分支快进合入sprint2（合入点d9b131a）；主仓库执行 `node scripts/start.mjs --build-only --no-install` exit0，六个构建单元均更新。后续只记录本文档，不改已验生产代码。未push、未重启常用App、未解除费用暂停。
 
 证据根：`C:/Users/17359/.codex/reviews/bloma-tooling-20261112/`。包含 `offline-f44ea41.log` / `offline-f44ea41-result.json`、`python-f44ea41.log` / `python-f44ea41-result.json`、`ui-fixture.test.ts` / `ui-fixture.log` / `ui-fixture.json`、`ui-app-instance.json`、`final-protected.json`。CUA截图与实际UIA观察保留在本聊天工具记录中；未用模拟IPC页面冒充当前App。
 
