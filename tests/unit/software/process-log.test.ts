@@ -1,5 +1,9 @@
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { pathToFileURL, fileURLToPath } from 'node:url'
+import { build } from 'esbuild'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, truncateSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it } from 'vitest'
@@ -57,8 +61,7 @@ it('keeps explicit gaps/capacity without deleting old evidence or treating corru
   for (let seq = 1; seq < 12; seq++) log.append({ seq, stream: 'stdout', text: 'x'.repeat(1024 * 1024) })
   expect(log.info().bytes).toBeLessThanOrEqual(8 * 1024 * 1024)
   expect(log.info()).toMatchObject({ complete: false, gap: 'capacity' })
-  for (let n = 1; n < 16; n++) expect(createProcessLog(randomUUID()).info().available).toBe(true)
-  expect(createProcessLog(randomUUID()).info()).toMatchObject({ available: false, complete: false, gap: 'capacity' })
+  for (let n = 1; n < 40; n++) expect(createProcessLog(randomUUID()).info().available).toBe(true)
   writeFileSync(join(home, 'software-process-logs', id + '.jsonl'), 'broken\n')
   expect(() => readProcessLog(id, log.info(), {})).toThrow('PROCESS_LOG_CORRUPT')
 })
@@ -90,3 +93,48 @@ it('actual managed command preserves early errors, avoids exit log duplication, 
     expect(readFileSync(join(project.root_path, 'starts.txt'), 'utf8')).toBe('1')
   } finally { await stopSoftwareSession(project.project_id, 's') }
 }, 40000)
+
+it('counts actual bytes including legacy archives rather than lifetime process slots', () => {
+  const dir = join(home, 'software-process-logs'); mkdirSync(dir, {recursive:true})
+  for (let n=0;n<16;n++) writeFileSync(join(dir, `slot-${n}`), randomUUID())
+  for (let n=0;n<40;n++) {
+    const id=randomUUID(),log=createProcessLog(id)
+    expect(log.info().available).toBe(true)
+    log.append({seq:1,stream:'stdout',text:`record-${n}`})
+    expect(readProcessLog(id,log.info(),{}).output[0].text).toBe(`record-${n}`)
+  }
+  const active=createProcessLog(randomUUID()),old=join(dir,randomUUID()+'.jsonl')
+  writeFileSync(old,'');truncateSync(old,128*1024*1024)
+  active.append({seq:1,stream:'stdout',text:'cannot exceed home capacity'})
+  expect(active.info()).toMatchObject({complete:false,gap:'capacity',bytes:0})
+  expect(createProcessLog(randomUUID()).info()).toMatchObject({available:false,gap:'capacity'})
+  // Simulate explicit operator cleanup; the writer never deletes old evidence.
+  truncateSync(old,0)
+  expect(createProcessLog(randomUUID()).info().available).toBe(true)
+})
+
+it('serializes actual byte admission across two Node hosts without evicting old evidence', async () => {
+  const dir=join(home,'software-process-logs');mkdirSync(dir,{recursive:true})
+  const old=join(dir,randomUUID()+'.jsonl');writeFileSync(old,'');truncateSync(old,128*1024*1024-200000)
+  const bundle=join(home,'process-log.mjs')
+  await build({entryPoints:[fileURLToPath(new URL('../../../main/software/process-log.ts',import.meta.url))],outfile:bundle,bundle:true,platform:'node',format:'esm'})
+  const script=`import {createProcessLog} from ${JSON.stringify(pathToFileURL(bundle).href)};import {randomUUID} from 'node:crypto';const log=createProcessLog(randomUUID());log.append({seq:1,stream:'stdout',text:'x'.repeat(150000)});console.log(JSON.stringify(log.info()))`
+  const results=await Promise.all([1,2].map(()=>promisify(execFile)(process.execPath,['--input-type=module','-e',script],{env:{...process.env,PROMA_HOME:home},windowsHide:true,timeout:15000})))
+  const facts=results.map(r=>JSON.parse(r.stdout))
+  expect(facts.filter(f=>f.bytes>0)).toHaveLength(1)
+  expect(facts.filter(f=>f.gap==='capacity')).toHaveLength(1)
+  expect(readFileSync(old).length).toBe(128*1024*1024-200000)
+},30000)
+
+it('archives a complete pipe chunk in one batch while retaining ordered prefix at capacity', () => {
+  const id=randomUUID(),log=createProcessLog(id)
+  let batches=0
+  const output=createProcessOutput(redactSoftwareOutput,undefined,records=>{batches++;log.appendMany(records)})
+  output.push('stdout',Buffer.from(Array.from({length:1000},(_,i)=>`row ${i}`).join('\n')+'\n'))
+  expect(batches).toBe(1)
+  expect(readProcessLog(id,log.info(),{pattern:'row 999'}).output[0].seq).toBe(1000)
+  const path=join(home,'software-process-logs',id+'.jsonl');truncateSync(path,8*1024*1024-100)
+  log.appendMany([{record:{seq:1001,stream:'stdout',text:'kept'},omitted:false},{record:{seq:1002,stream:'stdout',text:'x'.repeat(100)},omitted:false}])
+  expect(log.info()).toMatchObject({complete:false,gap:'capacity'})
+  expect(log.info().bytes).toBeLessThanOrEqual(8*1024*1024)
+})

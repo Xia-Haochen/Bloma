@@ -440,6 +440,9 @@ export function buildAgentTools(options: BuildAgentToolsOptions): AgentLoopTool[
     if (!committed.ok) {
       return { output: committed.output, isError: true, detail: { code: committed.code, path: rel } }
     }
+    // Record at the commit boundary, before callbacks or cancellation can hide
+    // a successful write behind a failed/partial multi-file tool result.
+    ctx.state.successful_file_changes = [...new Set([...(ctx.state.successful_file_changes ?? []), rel])]
     // project-map（Graft 模式，r69）：PR4c 改回调注入（去域依赖；缺省不刷新）
     try {
       options.onProjectFilesChanged?.(root)
@@ -695,7 +698,7 @@ export function buildAgentTools(options: BuildAgentToolsOptions): AgentLoopTool[
           } catch (error) {
             results[index] = { path: item.rel, state: 'failed', error: String(error).slice(0, 1200) }
             for (let rest = index + 1; rest < results.length; rest++) results[rest].state = 'not_attempted'
-            return { output: JSON.stringify({ code: 'EDIT_MULTI_PARTIAL', atomic: false, applied, results }), isError: true, detail: { display: changes.length ? {version:1,kind:'changes',files:changes} : undefined } }
+            return { output: JSON.stringify({ code: 'EDIT_MULTI_PARTIAL', atomic: false, applied, results }), isError: true, detail: { paths: applied, display: changes.length ? {version:1,kind:'changes',files:changes} : undefined } }
           }
         }
         return { output: JSON.stringify({ code: 'EDIT_MULTI_APPLIED', atomic: false, applied, results }), detail: { paths: applied, display: changes.length ? {version:1,kind:'changes',files:changes} : undefined } }

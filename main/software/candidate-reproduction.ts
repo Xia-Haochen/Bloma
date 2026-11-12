@@ -171,7 +171,7 @@ export async function runCandidateReproduction(input: ReproductionReference & { 
   attachments.push({path:`evidence/${rel.split(sep).join('/')}`,bytes:info.size,sha256:digest})
  } catch(error){attachmentGap=String(error)}
  return { protocol: PROTOCOL, manifest_sha256: input.manifestSha256, origin: prepared.manifest.origin,
-  evidence: {workspace,attachments,attachment_gap:attachmentGap,visual_review:'not_reviewed_by_model',transfer:'return this JSON and only listed relative attachments; do not copy the complete HOME/data/profile'}, 
+  evidence: {workspace,attachments,attachment_gap:attachmentGap,visual_review:'not_reviewed_by_model',transfer:'return this JSON and only listed relative attachments; do not copy the complete HOME/data/profile'},
   execution: { project_id: input.executorProjectId, session_id: executionSession, environment: 'directory-isolated', os_reset: 'not_attested', platform: process.platform, arch: process.arch },
   declared_launch: prepared.declaration, effective_launch: prepared.effective, debug: snapshot, verification: 'not_applicable' as const }
 }

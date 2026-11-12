@@ -71,7 +71,7 @@ export function buildSoftwareExecutionTools(projectId: string, beforeExecute?: (
         return { output: JSON.stringify(result), isError: result.state !== 'running', detail: { process_id: result.id, display: processDisplay(result), ...(result.ready ? { preview_url: result.url } : {}) } }
       } catch (error) { return { output: error instanceof Error ? error.message : String(error), isError: true } }
     } }
-  const read: AgentLoopTool = { name: 'read_process', parallelSafe: true, description: '读取本会话拥有的进程。默认只返回since_seq后的增量，不在退出时重复stdout/stderr；mode:tail显式读取兼容尾部。mode:log从磁盘脱敏日志按序号/字面pattern查询，limit≤200；长记录按record_seq/char_offset续读。归档每进程8MiB/每home最多16份，直到手工清理，不自动删证据；容量或长行缺口明确报告。wait_ms有界等待≤30秒，不重启命令、不接管旧PID；退出成功不代表产品验收。',
+  const read: AgentLoopTool = { name: 'read_process', parallelSafe: true, description: '读取本会话拥有的进程。默认只返回since_seq后的增量，不在退出时重复stdout/stderr；mode:tail显式读取兼容尾部。mode:log从磁盘脱敏日志按序号/字面pattern查询，limit≤200；长记录按record_seq/char_offset续读。归档每进程8MiB/每home实际日志总量128MiB（最多10000份），直到手工清理，不自动删证据；容量或长行缺口明确报告。wait_ms有界等待≤30秒，不重启命令、不接管旧PID；退出成功不代表产品验收。',
     input_schema: { type: 'object', required: ['process_id'], properties: { process_id: { type: 'string' }, since_seq: { type: 'integer', minimum: 0 }, wait_ms: { type: 'integer', minimum: 0, maximum: 30000 },
       mode: { type: 'string', enum: ['incremental', 'tail', 'log'] }, pattern: { type: 'string', maxLength: 500 }, limit: { type: 'integer', minimum: 1, maximum: 200 }, record_seq: { type: 'integer', minimum: 1 }, char_offset: { type: 'integer', minimum: 0 },
     } }, execute: async (input, ctx) => {

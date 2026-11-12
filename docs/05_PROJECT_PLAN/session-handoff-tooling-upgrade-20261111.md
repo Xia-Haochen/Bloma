@@ -1,5 +1,20 @@
 # Bloma 工具与工程能力升级：当前交接与首批历史
 
+## 2026-11-12 独立审查后的定向修复（最新）
+
+基于 `d1a3a97`，按用户授权处理两项P2。本节覆盖下方对应旧实现描述；下方“后续只改文档”和整套验收结论只描述Sol原收尾，不覆盖本次修复。
+
+- 实际文件提交成功后即向原 `ToolState.successful_file_changes` 登记路径，早于回调与取消；多文件全部成功及部分成功都保留准确交接，部分失败返回也附已应用paths。真实Pi测试断言 `files_changed` 和 `buildTaskHandoff().changed_files`；部分冲突/取消反例检查只登记已写文件。
+- 日志取消每HOME终身16槽位限制；按已有jsonl实际字节计量，每文件仍8MiB、每HOME合计128MiB，另有10000文件元数据上限。旧日志计入，旧slot保留但不再占配额，不自动删除证据。显式清理释放空间后新归档可继续建立。
+- 容量检查和追加采用跨进程排他锁，最多等250ms；遗留锁/IO错误明确标记缺口，不猜PID或抢锁，不停止工程命令。同一管道输出块一次检查/追加，避免每行重复枚举目录。不保证任意归档数量下固定性能；不宣称旧版本进程继续写入时也受新总配额约束。
+- 清理候选复现文件行尾空白；`git diff --check 09d8549`（包含本次工作树）通过。
+
+最终定向组合 **6文件47项通过**（async8、execution9、process-log9、Pi文件2、batch-edit12、handoff7），包含双Node进程竞争剩余容量、40份小日志/16份旧slot兼容、容量耗尽/释放及管道块有序归档。类型、`build:main`（main/worker/semantic/preload/templates）、docs检查通过。中间45项/10项是重叠批次，不相加。**本次未重跑完整605项或Python正向17项**，旧结果不作为修复后整套认证。
+
+证据：`C:/Users/17359/.codex/reviews/bloma-tooling-20261112/repair-final-combined.log`、`repair-protected.json`。六保护SHA与Sol最终基线一致；原仓库仍 `09d8549`，唯一dirty文档blob仍 `53c7abb3aef8497d8b0522b8aab806c82b2ec164`。无付费请求、合并、push或常用App重启。CUA、干净Windows和真实模型效果边界保留。
+
+## Sol原收尾记录
+
 更新时间：2026-11-12（Asia/Shanghai）。代码验收点：**90b636f1ed626eb61c9bc772cb2914a277b8e08a**；后续本次收尾提交只同步文档，不改生产/测试源码。分支仍为 `proma/tooling-upgrade-20261111`，未合原 `sprint2`、未fetch/push、未发布或重启常用App。
 
 **结论：本轮授权的B0–B8本机工程建设和受控离线验证已收敛；当前同一代码的完整标准门真实通过，不是专项相加。整份计划的最终平台Cua、干净Windows/系统故障矩阵与真实付费模型效果仍未验收，所缺外部条件见下表。不能宣布全部外部认证完成或用户常用App已升级。**

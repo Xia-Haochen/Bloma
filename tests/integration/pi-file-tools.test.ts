@@ -1,3 +1,4 @@
+import { buildTaskHandoff } from '../../main/agent/delegation/task-handoff'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -57,4 +58,6 @@ it.each(['same-file','multi-file'])('actual Pi validates %s batch schemas, retai
   const history = readFileSync(getAgentSessionPath('pi-file-tools'),'utf8').trim().split(String.fromCharCode(10)).map(line=>JSON.parse(line))
   const stored = history.flatMap(message=>message.content??[]).find(block=>block.type==='tool_result'&&block.tool_use_id==='edits')
   expect(stored?.tool_display).toEqual(display)
+  expect(result.files_changed).toEqual(mode === 'same-file' ? ['src/app.js'] : ['src/app.js','src/other.js'])
+  expect(buildTaskHandoff(result).changed_files).toEqual(result.files_changed)
 }, 45000)

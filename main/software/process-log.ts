@@ -1,10 +1,34 @@
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, lstatSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { getPromaHome } from '../../storage/config-paths'
 import type { ProcessOutput } from './process-output'
 
 const LOG_BYTES = 8 * 1024 * 1024
-const LOG_SLOTS = 16 // fixed reservations cap newly archived content at 128MiB/home
+const HOME_BYTES = 128 * 1024 * 1024
+const MAX_LOG_FILES = 10000 // metadata/scan bound, independent of byte capacity
+const lockWait = new Int32Array(new SharedArrayBuffer(4))
+function withArchiveLock<T>(root: string, work: () => T): T {
+  const lock = join(root, "archive.lock"), deadline = Date.now() + 250
+  let fd: number
+  for (;;) {
+    try { fd = openSync(lock, "wx"); break }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST" || Date.now() >= deadline) throw Error("PROCESS_LOG_LOCKED")
+      Atomics.wait(lockWait, 0, 0, 5)
+    }
+  }
+  try { return work() } finally { closeSync(fd); unlinkSync(lock) }
+}
+function archiveUsage(root: string) {
+  let bytes = 0, files = 0
+  for (const name of readdirSync(root)) {
+    if (!/^[a-f0-9-]{36}\.jsonl$/.test(name)) continue
+    const info = lstatSync(join(root, name))
+    if (!info.isFile() || info.isSymbolicLink()) throw Error("PROCESS_LOG_INVALID_FILE")
+    bytes += info.size; files++
+  }
+  return { bytes, files }
+}
 export interface ProcessLogInfo {
   available: boolean; complete: boolean; bytes: number; max_bytes: number
   retention: 'until_manual_cleanup'; gap?: 'capacity' | 'long_line' | 'io_failure'
@@ -14,34 +38,48 @@ function logPath(id: string) {
   if (!/^[a-f0-9-]{36}$/.test(id)) throw Error('PROCESS_LOG_ID_INVALID')
   return join(directory(), `${id}.jsonl`)
 }
-/** Diagnostic quota only, not an execution/quality/budget ledger. Atomic slot
- * claims also bound separate hosts. Never delete or recycle another run's log. */
+/** Actual archived bytes are the quota authority; legacy slot markers are ignored.
+ * No eviction: running and historical evidence survive. All current writers
+ * serialize capacity checks and writes across hosts. A stale lock fails closed
+ * as an explicit IO gap; never break another writer's lock by guessing its PID. */
 export function createProcessLog(id: string) {
-  const path = logPath(id)
+  const path = logPath(id), root = directory()
   const info: ProcessLogInfo = { available: false, complete: true, bytes: 0, max_bytes: LOG_BYTES, retention: 'until_manual_cleanup' }
   try {
-    mkdirSync(directory(), { recursive: true })
-    for (let slot = 0; slot < LOG_SLOTS; slot++) {
-      let handle: number
-      try { handle = openSync(join(directory(), `slot-${slot}`), 'wx') } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue
-        throw error
-      }
-      try { writeFileSync(handle, id) } finally { closeSync(handle) }
-      // Even a failed reservation remains occupied: no accidental overcommit.
-      const file = openSync(path, 'wx'); closeSync(file); info.available = true; break
-    }
-    if (!info.available) { info.complete = false; info.gap = 'capacity' }
+    mkdirSync(root, { recursive: true })
+    withArchiveLock(root, () => {
+      const usage = archiveUsage(root)
+      if (usage.files >= MAX_LOG_FILES || usage.bytes >= HOME_BYTES) { info.complete = false; info.gap = 'capacity'; return }
+      const file = openSync(path, 'wx'); closeSync(file); info.available = true
+    })
   } catch { info.complete = false; info.gap = 'io_failure' }
+  const appendMany = (records: Array<{ record: ProcessOutput; omitted: boolean }>) => {
+    if (!records.length) return
+    if (records.some(row => row.omitted)) { info.complete = false; info.gap ??= 'long_line' }
+    if (!info.available || info.gap === 'capacity' || info.gap === 'io_failure') return
+    try {
+      withArchiveLock(root, () => {
+        const current = lstatSync(path)
+        if (!current.isFile() || current.isSymbolicLink()) throw Error('PROCESS_LOG_INVALID_FILE')
+        const usage = archiveUsage(root)
+        let bytes = 0
+        const lines: string[] = []
+        for (const { record } of records) {
+          const line = JSON.stringify(record) + '\n', size = Buffer.byteLength(line)
+          if (current.size + bytes + size > LOG_BYTES || usage.bytes + bytes + size > HOME_BYTES) {
+            info.complete = false; info.gap = 'capacity'; break
+          }
+          lines.push(line); bytes += size
+        }
+        if (lines.length) appendFileSync(path, lines.join(''))
+        info.bytes = current.size + bytes
+      })
+    } catch { info.complete = false; info.gap = 'io_failure' }
+  }
   return {
     info: () => ({ ...info }),
-    append(record: ProcessOutput, omitted = false) {
-      if (omitted) { info.complete = false; info.gap ??= 'long_line' }
-      if (!info.available || info.gap === 'capacity' || info.gap === 'io_failure') return
-      const line = JSON.stringify(record) + '\n', bytes = Buffer.byteLength(line)
-      if (info.bytes + bytes > LOG_BYTES) { info.complete = false; info.gap = 'capacity'; return }
-      try { appendFileSync(path, line); info.bytes += bytes } catch { info.complete = false; info.gap = 'io_failure' }
-    },
+    append: (record: ProcessOutput, omitted = false) => appendMany([{record, omitted}]),
+    appendMany,
   }
 }
 /** Caller must check project/session ownership through the existing snapshot.

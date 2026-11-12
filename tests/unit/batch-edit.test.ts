@@ -119,13 +119,13 @@ it('returns exact applied/failed/not-attempted facts without rolling back an ext
  let f:ReturnType<typeof fixture>
  f=fixture({onProjectFilesChanged:()=>writeFileSync(join(f.project.root_path,'src/two.js'),'const two = 9\n')})
  const files=await multiple(f),result=JSON.parse((await f.tools.find(t=>t.name==='edit_file')!.execute({files},f.ctx)).output)
- expect(result.code).toBe('EDIT_MULTI_PARTIAL');expect(result.results.map((item:{state:string})=>item.state)).toEqual(['applied','failed','not_attempted'])
+ expect(f.ctx.state.successful_file_changes).toEqual(['src/app.js']);expect(result.code).toBe('EDIT_MULTI_PARTIAL');expect(result.results.map((item:{state:string})=>item.state)).toEqual(['applied','failed','not_attempted'])
  expect(readFileSync(f.file,'utf8')).toContain('first = 7');expect(readFileSync(join(f.project.root_path,'src/two.js'),'utf8')).toContain('two = 9')
  expect(readFileSync(join(f.project.root_path,'src/three.js'),'utf8')).toContain('three = 1')
 })
 it('reports partial application on cancellation and never attempts the remaining files',async()=>{
  let f:ReturnType<typeof fixture>;f=fixture({onProjectFilesChanged:()=>f.controller.abort()})
  const files=await multiple(f),result=JSON.parse((await f.tools.find(t=>t.name==='edit_file')!.execute({files},f.ctx)).output)
- expect(result.code).toBe('EDIT_MULTI_PARTIAL');expect(result.applied).toEqual(['src/app.js'])
+ expect(f.ctx.state.successful_file_changes).toEqual(['src/app.js']);expect(result.code).toBe('EDIT_MULTI_PARTIAL');expect(result.applied).toEqual(['src/app.js'])
  expect(readFileSync(join(f.project.root_path,'src/two.js'),'utf8')).toContain('two = 1')
 })

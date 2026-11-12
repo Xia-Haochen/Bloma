@@ -134,7 +134,7 @@ export async function startSoftwareProcess(input: { root: string; projectId: str
   processes.set(snapshot.id, entry)
   for (const [id, previous] of processes) if (processes.size > 128 && !['starting', 'running', 'stopping'].includes(previous.snapshot.state)) processes.delete(id)
   snapshot.pid = child.pid
-  const output = createProcessOutput(redactSoftwareOutput, (record, omitted) => archive.append(record, omitted))
+  const output = createProcessOutput(redactSoftwareOutput, undefined, archive.appendMany)
   const updateOutput = () => { Object.assign(snapshot, output.snapshot(), { log: archive.info() }); entry.changed.emit('change') }
   const schedule = () => { if (!entry.timer) entry.timer = setTimeout(() => { entry.timer = undefined; try { persist(entry) } catch { entry.abort() } }, 200) }
   child.stdout?.on('data', data => { snapshot.stdout = (snapshot.stdout + data.toString('utf8')).slice(-TAIL); output.push('stdout', data); updateOutput(); schedule() })
