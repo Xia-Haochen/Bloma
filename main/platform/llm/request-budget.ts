@@ -4,6 +4,7 @@ import { activeMonetaryPolicyPath } from './monetary-epoch'
 import { experimentOutputTokens } from './experiment-output-limit'
 import type { SDKQuery } from '../../orchestration/stages/orchestration-contracts'
 import type { SDKMessage } from '../../../shared/types'
+import { HTTPError } from '../upstream/providers/sse-reader'
 
 interface Rate { host: string; model: string; context_tokens: number; input_rmb_per_million: number; output_rmb_per_million: number; cache_rmb_per_million: number }
 interface Limits { requests: number; outputTokens: number; rmb: number }
@@ -27,7 +28,7 @@ export function createRequestBudget(env: Record<string, string>, limits: Limits)
         rate.cache_rmb_per_million > rate.input_rmb_per_million) throw new Error('invalid rate')
     }
   } catch { setupError = 'MONETARY_POLICY_UNAVAILABLE' }
-  const reservations: Array<{ upperMicro: number; rate?: Rate; reported: boolean; started:boolean; notSent?:boolean }> = []
+  const reservations: Array<{ upperMicro: number; rate?: Rate; reported: boolean; started:boolean; notSent?:boolean; rejected?:boolean }> = []
   let queries = 0, physicalStarts = 0
   const used = () => reservations.reduce((sum, row) => sum + row.upperMicro, 0)
   const wrap = (query: SDKQuery): SDKQuery => async function* (prompt, options) {
@@ -67,6 +68,10 @@ export function createRequestBudget(env: Record<string, string>, limits: Limits)
         'MONETARY_BUDGET_EXHAUSTED','MONETARY_OPERATION_EXHAUSTED','REQUEST_BUDGET_EXHAUSTED',
         'MONETARY_MODEL_NOT_ALLOWED','REQUEST_OUTPUT_LIMIT','MONETARY_POLICY_UNAVAILABLE',
       ].includes(error.message)){latest.notSent=true;latest.upperMicro=0}
+      if (latest?.started && !usage && error instanceof HTTPError && error.generationRejected) {
+        latest.rejected = true
+        latest.upperMicro = 0
+      }
       throw error
     } finally {
       if (latest && completed && usage && valid(usage.input_tokens) && valid(usage.output_tokens) &&
@@ -87,5 +92,5 @@ export function createRequestBudget(env: Record<string, string>, limits: Limits)
     admitted_requests: reservations.filter(row=>!row.notSent).length,unsent_requests:reservations.filter(row=>row.notSent).length,
     monetary_control: uncappedExperiment ? 'uncapped_experiment' : setupError ? 'unavailable' : rates ? 'verified_policy' : 'not_configured',
     ...(rates ? { upper_rmb: used() / 1e6, limit_rmb: limits.rmb } : {}), max_requests: limits.requests, max_output_tokens: outputTokens,
-    unreported_requests: reservations.filter(row => !row.reported&&!row.notSent).length }) }
+    unreported_requests: reservations.filter(row => !row.reported&&!row.notSent&&!row.rejected).length }) }
 }

@@ -5,6 +5,7 @@ import { readJsonFile, writeJsonFile } from '../../storage/json-store'
 import type { SDKQuery, SDKQueryOptions } from '../orchestration/stages/orchestration-contracts'
 import { MonetaryBudgetError } from '../platform/llm/monetary-budget'
 import {ModelRequestRefusal} from '../platform/llm/model-request-refusal'
+import { HTTPError } from '../platform/upstream/providers/sse-reader'
 
 interface BudgetState {
   version: 1
@@ -71,12 +72,12 @@ export function createProductionBudget(projectId: string, scope: string, phase: 
   const persist = (value: BudgetState) => {
     try { writeJsonFile(file, value) } catch { throw new Error('HARNESS_BUDGET_UNWRITABLE: 预算不能落盘，未放行后续请求') }
   }
-  const reserve = (requested: number) => {
+  const reserve = (requested: number, minimum = 512) => {
     const state = load()
     if (runtimeMode === 'lease' && liveRuntimeLeases.has(key) && state.runtimeOwner !== liveRuntimeLeases.get(key)) throw Error('HARNESS_RUNTIME_LEASE_LOST')
     if (state.requests >= limits.requests || (state.phases[phase] ?? 0) >= limits.phaseRequests) throw new Error('HARNESS_REQUEST_BUDGET_EXHAUSTED')
     const tokens = Math.min(requested, limits.perResponse, limits.output - state.output)
-    if (tokens < 512) throw new Error('HARNESS_OUTPUT_BUDGET_EXHAUSTED')
+    if (tokens < minimum) throw new Error('HARNESS_OUTPUT_BUDGET_EXHAUSTED')
     state.requests++
     state.phases[phase] = (state.phases[phase] ?? 0) + 1
     state.output += tokens
@@ -115,9 +116,9 @@ export function createProductionBudget(projectId: string, scope: string, phase: 
       const actual = body.max_tokens ?? body.max_output_tokens
       if (typeof actual === 'number' && actual > reservation) throw new Error('HARNESS_RESPONSE_LIMIT_EXCEEDED')
       if (physical++ > 0) {
-        const next = reserve(reservation)
-        if (next < reservation) throw new Error('HARNESS_OUTPUT_BUDGET_EXHAUSTED')
-        reservation = next
+        reservation = reserve(reservation, reservation)
+        transportStarted = false
+        usage = undefined
       }
     }
     try {
@@ -131,12 +132,12 @@ export function createProductionBudget(projectId: string, scope: string, phase: 
         yield message
       }
     } catch (error) {
-      // These typed refusals occur before fetch. Preserve attempt counters, but
-      // do not turn a known unsent request into permanently consumed output.
-      // Network errors, cancelled/unknown calls and earlier physical retries
-      // retain their reservations exactly as before.
-      if (!settled && !transportStarted && !usage && (error instanceof ModelRequestRefusal || error instanceof MonetaryBudgetError
-        && ['MONETARY_BUDGET_EXHAUSTED','MONETARY_OPERATION_EXHAUSTED','MONETARY_RESERVATION_WAIT_TIMEOUT','REQUEST_BUDGET_EXHAUSTED'].includes(error.message))) {
+      // Release the current reservation only with proof that generation did
+      // not start. Earlier uncertain physical attempts keep their reservations.
+      const unsent = !transportStarted && (error instanceof ModelRequestRefusal || error instanceof MonetaryBudgetError
+        && ['MONETARY_BUDGET_EXHAUSTED','MONETARY_OPERATION_EXHAUSTED','MONETARY_RESERVATION_WAIT_TIMEOUT','REQUEST_BUDGET_EXHAUSTED'].includes(error.message))
+      const rejected = transportStarted && error instanceof HTTPError && error.generationRejected
+      if (!settled && !usage && (unsent || rejected)) {
         const state = load(); state.output -= reservation; persist(state); settled = true; notifyOutput(key)
       }
       throw error

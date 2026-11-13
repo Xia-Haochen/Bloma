@@ -7,6 +7,7 @@ import { findProject } from '../project/project-service'
 
 /** Shared platform capacity, separate from the task's monetary authorization. */
 export const SOFTWARE_EXECUTION_REQUEST_CAPACITY=4096
+export const SOFTWARE_EXECUTION_OUTPUT_CAPACITY=16_777_216
 export function remainingSoftwareRequests(used:number){
   if(!Number.isSafeInteger(used)||used<0)throw Error('EXECUTION_REQUEST_COUNT_INVALID')
   return Math.max(0,SOFTWARE_EXECUTION_REQUEST_CAPACITY-used)
@@ -30,13 +31,13 @@ export function fundedExecutionLimits(current:{requests:number;output:number;lim
   if(![current.requests,current.output,window.remainingRequests].every(n=>Number.isSafeInteger(n)&&n>=0)
     ||!Number.isFinite(window.remainingRmb)||window.remainingRmb<=0||!Number.isFinite(window.outputRmbPerMillion)||window.outputRmbPerMillion<=0)throw Error('EXECUTION_WINDOW_INVALID')
   return{requests:Math.min(SOFTWARE_EXECUTION_REQUEST_CAPACITY,Math.max(current.limits.requests,current.requests+window.remainingRequests)),
-    output:Math.min(16777216,Math.max(current.limits.output,current.output+Math.floor(window.remainingRmb*1e6/window.outputRmbPerMillion)))}
+    output:Math.min(SOFTWARE_EXECUTION_OUTPUT_CAPACITY,Math.max(current.limits.output,current.output+Math.floor(window.remainingRmb*1e6/window.outputRmbPerMillion)))}
 }
 const path = (id: string) => { if (!/^[a-zA-Z0-9_-]+$/.test(id)) throw Error('EXECUTION_LIMITS_PROJECT_INVALID'); return join(getPromaHome(),'software-execution-limits',id+'.json') }
 function validate(value: ExecutionLimits) {
   if (!value || value.version !== 1 || typeof value.operation !== 'string'
     || !Number.isSafeInteger(value.requests) || value.requests < 1 || value.requests > SOFTWARE_EXECUTION_REQUEST_CAPACITY
-    || !Number.isSafeInteger(value.output) || value.output < 512 || value.output > 16777216
+    || !Number.isSafeInteger(value.output) || value.output < 512 || value.output > SOFTWARE_EXECUTION_OUTPUT_CAPACITY
     || typeof value.reason !== 'string' || !value.reason.trim() || value.reason.length > 2000) throw Error('EXECUTION_LIMITS_INVALID')
 }
 /** Host/operator policy only; never clears counters, monetary receipts or leases. */

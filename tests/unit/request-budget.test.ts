@@ -6,7 +6,7 @@ import { createRequestBudget } from '../../main/platform/llm/request-budget'
 import {trialOutputCap} from '../../scripts/trial-output-cap'
 import { streamSSE, setSseRetryWaitBudgetForTests } from '../../main/platform/upstream/providers/sse-reader'
 import { ANTHROPIC_SSE_ADAPTER } from '../../main/platform/upstream/providers/anthropic-sse-adapter'
-import { MonetaryBudgetError } from '../../main/platform/llm/monetary-budget'
+import { MonetaryBudgetError, readMonetaryBudget } from '../../main/platform/llm/monetary-budget'
 import type { SDKQuery, SDKQueryOptions } from '../../main/orchestration/stages/orchestration-contracts'
 
 describe('operation request budget', () => {
@@ -28,6 +28,23 @@ describe('operation request budget', () => {
   const options = (): SDKQueryOptions => ({ env: {}, sessionId: 'budget', signal: new AbortController().signal, maxTokens: 100 })
   const drain = async (query: SDKQuery) => { for await (const _ of query('test', options())) {} }
   const request = { url: 'https://test.invalid/messages', headers: {}, body: JSON.stringify({ model: 'test', max_tokens: 100, messages: [] }) }
+  it('settles both monetary reservations on a verified DeepSeek balance rejection', async () => {
+    const policy = process.env.BLOMA_MONETARY_POLICY!
+    writeFileSync(policy, JSON.stringify({version:1,models:[{host:'api.deepseek.com',model:'test',cap_rmb:5,
+      context_tokens:10000,input_rmb_per_million:2,output_rmb_per_million:8,cache_rmb_per_million:.04}]}))
+    const budget = createRequestBudget({}, {requests:3,outputTokens:100,rmb:5})
+    const fetchFn = vi.fn().mockResolvedValue(new Response(JSON.stringify({error:{type:'insufficient_balance_error',message:'Insufficient Balance'}}), {status:402}))
+    const query: SDKQuery = async function* (_prompt, opts) {
+      await streamSSE({
+        request:{...request,url:'https://api.deepseek.com/v1/messages'}, adapter:ANTHROPIC_SSE_ADAPTER, onEvent:()=>{},
+        requestGuard:opts.requestGuard, onAttempt:opts.onTransportAttempt, monetaryPolicyPath:opts.monetaryPolicyPath, fetchFn,
+      })
+    }
+    await expect(drain(budget.wrap(query))).rejects.toMatchObject({status:402,generationRejected:true})
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+    expect(budget.snapshot()).toMatchObject({physical_requests:1,upper_rmb:0,unreported_requests:0})
+    expect(readMonetaryBudget(policy)[0]).toMatchObject({accounted_upper_rmb:0,remaining_rmb:5})
+  })
   it('fits a later request to the remaining operation allowance without releasing previous charges or the full image input reserve',async()=>{
     const rate={context_tokens:10000,input_rmb_per_million:2,output_rmb_per_million:8}
     const budget=createRequestBudget({}, {requests:3,outputTokens:10000,rmb:.1})

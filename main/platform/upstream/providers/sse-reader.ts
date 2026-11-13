@@ -92,6 +92,7 @@ class HTTPError extends Error {
     readonly providerCode?: string,
     readonly nonRetryable = false,
     readonly providerResetAt?: string,
+    readonly generationRejected = false,
   ) {
     super(message)
     this.name = 'HTTPError'
@@ -217,6 +218,7 @@ async function runStreamAttempt(options: StreamSSEOptions): Promise<StreamSSERes
     policyPath)
   let usage: SDKMessage['usage']
   let completed = false
+  let rejection: 'rejected_before_generation' | undefined
   try {
     const result = await runReservedStreamAttempt({ ...options, onEvent: event => {
       if (event.type === 'usage') {
@@ -230,7 +232,12 @@ async function runStreamAttempt(options: StreamSSEOptions): Promise<StreamSSERes
     } })
     completed = true
     return result
-  } finally { reservation?.settle(usage, completed) }
+  } catch (error) {
+    if (error instanceof HTTPError && error.generationRejected && !usage) {
+      rejection = 'rejected_before_generation'
+    }
+    throw error
+  } finally { reservation?.settle(usage, completed, rejection) }
 }
 
 async function runReservedStreamAttempt(options: StreamSSEOptions): Promise<StreamSSEResult> {
@@ -270,8 +277,8 @@ async function runReservedStreamAttempt(options: StreamSSEOptions): Promise<Stre
   // 2. 错误检查
   if (!response.ok) {
     const text = await response.text().catch(() => '')
-    let code: unknown, providerMessage = ''
-    try { const raw = JSON.parse(text); code = raw.error?.code ?? raw.code; providerMessage = typeof raw.error?.message === 'string' ? raw.error.message : '' } catch { /* non-JSON errors keep the ordinary HTTP retry policy */ }
+    let code: unknown, providerType: unknown, providerMessage = ''
+    try { const raw = JSON.parse(text); code = raw.error?.code ?? raw.code; providerType = raw.error?.type; providerMessage = typeof raw.error?.message === 'string' ? raw.error.message : '' } catch { /* non-JSON errors keep the ordinary HTTP retry policy */ }
     const safeCode = typeof code === 'number' || typeof code === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(code) ? String(code) : undefined
     receipt({ response_bytes: Buffer.byteLength(text), body_sha256: createHash('sha256').update(text).digest('hex'), json_error_code: safeCode })
     // BigModel documents 1113 as insufficient prepaid credit, despite HTTP 429.
@@ -280,7 +287,10 @@ async function runReservedStreamAttempt(options: StreamSSEOptions): Promise<Stre
     const fixedQuotaExhausted = new URL(request.url).hostname === 'open.bigmodel.cn' && response.status === 429 && safeCode === '1308'
       && /小时.*(?:上限|限额)|限额将在|(?:usage|quota).*(?:limit|reset)/i.test(providerMessage)
     const resetAt = fixedQuotaExhausted ? providerMessage.match(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/)?.[0] : undefined
-    throw new HTTPError(`provider API 错误 (${response.status}): ${text.slice(0, 300)}`, response.status, safeCode, creditExhausted || fixedQuotaExhausted, resetAt)
+    const generationRejected = new URL(request.url).hostname === 'api.deepseek.com'
+      && response.status === 402 && (providerType === 'insufficient_balance_error' || /^Insufficient Balance\b/i.test(providerMessage))
+    throw new HTTPError(`provider API 错误 (${response.status}): ${text.slice(0, 300)}`, response.status, safeCode,
+      generationRejected || creditExhausted || fixedQuotaExhausted, resetAt, generationRejected)
   }
 
   if (!response.body) {

@@ -4,11 +4,13 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createProductionBudget } from '../../../main/desktop/production-budget'
 import type { SDKQuery, SDKQueryOptions } from '../../../main/orchestration/stages/orchestration-contracts'
-import { leanBudget, withLeanRuntime } from '../../../main/desktop/lean-budget'
+import { leanBudget, SOFTWARE_PRODUCTION_LIMITS, withLeanRuntime } from '../../../main/desktop/lean-budget'
 import { createProject } from '../../../main/project/project-service'
 import { configureSoftwareExecutionLimits, withFundedExecutionWindow } from '../../../main/software/execution-limits'
 import { MonetaryBudgetError } from '../../../main/platform/llm/monetary-budget'
 import {ModelRequestRefusal} from '../../../main/platform/llm/model-request-refusal'
+import { streamSSE } from '../../../main/platform/upstream/providers/sse-reader'
+import { ANTHROPIC_SSE_ADAPTER } from '../../../main/platform/upstream/providers/anthropic-sse-adapter'
 
 beforeEach(() => vi.stubEnv('PROMA_HOME', mkdtempSync(join(tmpdir(), 'bloma-production-budget-'))))
 afterEach(() => vi.unstubAllEnvs())
@@ -21,11 +23,11 @@ const ok: SDKQuery = async function* (_prompt, opts) {
 const limits = { requests: 3, phaseRequests: 3, output: 8192, perResponse: 2048 }
 
 describe('production admission is shared and durable', () => {
-  it('uses the fourfold global defaults across software preparation and execution', () => {
+  it('uses the maximum supported capacity across software preparation and execution', () => {
     const project=createProject({request_id:'defaults',mode:'quick'},{workflowVersion:'software-v1'})
     for(const phase of ['prepare','desktop-implement','desktop-verify']){
       expect(leanBudget(project.project_id,phase).snapshot()).toMatchObject({requests:0,output:0,
-        limits:{requests:1024,phaseRequests:1024,output:1048576}})
+        limits:{requests:4096,phaseRequests:4096,output:16777216}})
     }
     expect(createProductionBudget('defaults','defaults','desktop-implement').snapshot().limits.perResponse).toBe(16384)
   })
@@ -37,20 +39,22 @@ describe('production admission is shared and durable', () => {
     writeFileSync(before.file,JSON.stringify(state))
     const resumed=leanBudget(project.project_id,'desktop-implement')
     expect(resumed.admission()).toEqual({allowed:true,reason:undefined})
-    expect(resumed.snapshot()).toMatchObject({...state,limits:{requests:1024,output:1048576}})
+    expect(resumed.snapshot()).toMatchObject({...state,limits:{requests:4096,output:16777216}})
     expect(leanBudget(project.project_id,'prepare').snapshot()).toMatchObject(state)
   })
   it('still stops at the new global request and output ceilings', () => {
     const project=createProject({request_id:'new-ceilings',mode:'quick'},{workflowVersion:'software-v1'})
     const budget=leanBudget(project.project_id,'desktop-implement');budget.recordRuntime(0)
     const file=budget.snapshot().file
-    writeFileSync(file,JSON.stringify({version:1,requests:175,output:1048576,phases:{'desktop-implement':173,prepare:2}}))
+    writeFileSync(file,JSON.stringify({version:1,requests:175,output:SOFTWARE_PRODUCTION_LIMITS.output,phases:{'desktop-implement':173,prepare:2}}))
     expect(budget.admission()).toEqual({allowed:false,reason:'HARNESS_OUTPUT_BUDGET_EXHAUSTED'})
-    writeFileSync(file,JSON.stringify({version:1,requests:1024,output:100,phases:{'desktop-implement':1022,prepare:2}}))
+    writeFileSync(file,JSON.stringify({version:1,requests:SOFTWARE_PRODUCTION_LIMITS.requests,output:100,phases:{'desktop-implement':4094,prepare:2}}))
     expect(budget.admission()).toEqual({allowed:false,reason:'HARNESS_REQUEST_BUDGET_EXHAUSTED'})
   })
   it('aligns preparation with the same funded window before exposing its budget without clearing prior usage',async()=>{
     const project=createProject({request_id:'prepare',mode:'quick'},{workflowVersion:'software-v1'})
+    configureSoftwareExecutionLimits(project.project_id,project.lean_operation_id??'initial',{
+      requests:1024,output:1048576,reason:'Use a smaller authorized window for the fixture.'})
     const initial=leanBudget(project.project_id,'prepare');initial.recordRuntime(0)
     const prior=initial.snapshot()
     writeFileSync(prior.file,JSON.stringify({version:1,requests:prior.limits.requests,output:prior.limits.output,phases:{prepare:prior.limits.requests}}))
@@ -78,6 +82,21 @@ describe('production admission is shared and durable', () => {
     expect(budget.snapshot()).toMatchObject({requests:1,output:0})
     const unknown:SDKQuery=async function*(_prompt,opts){opts.onTransportAttempt?.('started');throw new MonetaryBudgetError('MONETARY_BUDGET_EXHAUSTED')}
     await expect(drain(budget.wrap(unknown))).rejects.toThrow()
+    expect(budget.snapshot()).toMatchObject({requests:2,output:2048})
+  })
+  it('releases the rejected generation, but retains an unclassified HTTP 402', async () => {
+    const budget = createProductionBudget('p', 'provider-refusal', 'desktop-implement', limits)
+    const response = (body: unknown): SDKQuery => async function* (_prompt, opts) {
+      await streamSSE({
+        request: {url:'https://api.deepseek.com/v1/messages',headers:{},body:JSON.stringify({max_tokens:opts.maxTokens})},
+        adapter: ANTHROPIC_SSE_ADAPTER, monetaryPolicyPath: '', onEvent: () => {},
+        requestGuard: opts.requestGuard, onAttempt: opts.onTransportAttempt,
+        fetchFn: vi.fn().mockResolvedValue(new Response(JSON.stringify(body), {status:402})),
+      })
+    }
+    await expect(drain(budget.wrap(response({error:{type:'insufficient_balance_error',message:'Insufficient Balance'}})))).rejects.toThrow('402')
+    expect(budget.snapshot()).toMatchObject({requests:1,output:0})
+    await expect(drain(budget.wrap(response({error:{type:'unknown',message:'Unexpected response'}})))).rejects.toThrow('402')
     expect(budget.snapshot()).toMatchObject({requests:2,output:2048})
   })
   it('waits for a concurrent maximum reservation instead of repeatedly failing a new reviewer', async () => {
@@ -132,6 +151,17 @@ describe('production admission is shared and durable', () => {
     }
     await drain(budget.wrap(retried))
     expect(budget.snapshot()).toMatchObject({ requests: 2, output: 2148 })
+  })
+  it('does not debit a partial reservation when a retry cannot fit', async () => {
+    const budget = createProductionBudget('p', 'retry-refused', 'desktop-implement', { ...limits, output: 3072 })
+    const retried: SDKQuery = async function* (_prompt, opts) {
+      const request = { url: 'https://model.invalid', body: JSON.stringify({ max_tokens: opts.maxTokens }) }
+      opts.requestGuard?.(request)
+      opts.onTransportAttempt?.('started')
+      opts.requestGuard?.(request)
+    }
+    await expect(drain(budget.wrap(retried))).rejects.toThrow('HARNESS_OUTPUT_BUDGET_EXHAUSTED')
+    expect(budget.snapshot()).toMatchObject({ requests: 1, output: 2048 })
   })
   it('bounds each response and total output, and refuses corrupt records', async () => {
     const budget = createProductionBudget('p', 'v', 'desktop-implement', { ...limits, output: 2048 })

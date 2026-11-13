@@ -1,7 +1,14 @@
-import { softwareExecutionLimits, currentFundedExecutionWindow, fundedExecutionLimits, configureSoftwareExecutionLimits } from '../software/execution-limits'
+import { softwareExecutionLimits, currentFundedExecutionWindow, fundedExecutionLimits, configureSoftwareExecutionLimits,
+  SOFTWARE_EXECUTION_REQUEST_CAPACITY, SOFTWARE_EXECUTION_OUTPUT_CAPACITY } from '../software/execution-limits'
 import { GENERATION_MAX_TOKENS } from '../platform/llm/model-resolution'
 import { findProject } from '../project/project-service'
-import { createProductionBudget, productionDeadlineMs, PRODUCTION_LIMITS, RUNTIME_HEARTBEAT_MS } from './production-budget'
+import { createProductionBudget, productionDeadlineMs, RUNTIME_HEARTBEAT_MS } from './production-budget'
+
+export const SOFTWARE_PRODUCTION_LIMITS = {
+  requests: SOFTWARE_EXECUTION_REQUEST_CAPACITY,
+  output: SOFTWARE_EXECUTION_OUTPUT_CAPACITY,
+  perResponse: GENERATION_MAX_TOKENS,
+}
 
 export function leanBudget(projectId: string, phase: string) {
   const project = findProject(projectId)
@@ -9,8 +16,9 @@ export function leanBudget(projectId: string, phase: string) {
   const configured = software ? softwareExecutionLimits(projectId, project.lean_operation_id ?? 'initial') : undefined
   // Software has one shared allowance. A second, smaller implementation-phase
   // limit must not strand an otherwise admitted continuous task.
+  const limits = { ...SOFTWARE_PRODUCTION_LIMITS, ...configured }
   return createProductionBudget(projectId, `lean-v1/${project.lean_operation_id ?? 'initial'}`, phase,
-    software ? { ...PRODUCTION_LIMITS, ...configured, perResponse: GENERATION_MAX_TOKENS, phaseRequests: configured?.requests ?? PRODUCTION_LIMITS.requests } : undefined, software ? 'lease' : 'legacy')
+    software ? { ...limits, phaseRequests: limits.requests } : undefined, software ? 'lease' : 'legacy')
 }
 
 export function leanBudgetStopMessage(projectId: string, phase: string, reason: string): string {

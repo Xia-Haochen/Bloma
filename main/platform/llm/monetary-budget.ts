@@ -218,10 +218,15 @@ export function reserveModelRequest(url: string, body: string, policyPath = proc
       reserved_micro_rmb: reserved, charged_micro_rmb: reserved, status: 'reserved' })
   }) } finally { releaseEpoch() }
   return {
-    settle(usage?: Usage, completed = false) {
+    settle(usage?: Usage, completed = false, rejection?: 'rejected_before_generation') {
       mutate(state => {
         const entry = state.entries.find(row => row.id === id)
         if (!entry || entry.status !== 'reserved') return fail('MONETARY_RESERVATION_INVALID')
+        if (rejection === 'rejected_before_generation' && !usage && !completed) {
+          entry.status = 'reconciled_pre_execution'
+          entry.charged_micro_rmb = 0
+          return
+        }
         const keys = ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'] as const
         const valid = completed && usage && integer(usage.input_tokens) && integer(usage.output_tokens)
           && keys.every(key => usage[key] === undefined || integer(usage[key]))

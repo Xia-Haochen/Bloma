@@ -9,8 +9,8 @@ import { parseLeanBrief } from '../../../main/guide/lean-brief'
 import { readPrdBackplane, markPrdUserConfirmed } from '../../../main/project/prd-store'
 import { syncDocuments } from '../../../main/project/document-sync'
 import { enterDesktopLine, type DesktopRouteDeps } from '../../../main/desktop/desktop-route'
-import { leanBudget } from '../../../main/desktop/lean-budget'
-import { createProductionBudget, PRODUCTION_LIMITS } from '../../../main/desktop/production-budget'
+import { leanBudget, SOFTWARE_PRODUCTION_LIMITS } from '../../../main/desktop/lean-budget'
+import { createProductionBudget } from '../../../main/desktop/production-budget'
 import { persistTerminalMessage } from '../../../main/orchestration/stages/persistence'
 import { buildLeanCliTool } from '../../../main/desktop/lean-cli-check'
 import { createToolState } from '../../../main/agent/loop/agent-loop'
@@ -54,19 +54,19 @@ it('runs real Pi tools beyond both old 96-turn and 160-request cutoffs, then ver
   expect(findProject(project.project_id).status).toBe('completed')
   expect(readFileSync(join(project.root_path, 'parts/step-163.txt'), 'utf8')).toBe('completed 163')
   expect(accountedCalls).toBeGreaterThan(calls)
-  expect(leanBudget(project.project_id, 'desktop-implement').snapshot()).toMatchObject({ requests: accountedCalls, limits: { requests: PRODUCTION_LIMITS.requests, phaseRequests: PRODUCTION_LIMITS.requests } })
+  expect(leanBudget(project.project_id, 'desktop-implement').snapshot()).toMatchObject({ requests: accountedCalls, limits: { requests: SOFTWARE_PRODUCTION_LIMITS.requests, phaseRequests: SOFTWARE_PRODUCTION_LIMITS.requests } })
   expect(deps.complete).toHaveBeenLastCalledWith('s', project.project_id)
 }, 180000)
 it('rejects an exhausted continuation before a model call, preserves its counters and persists the real incomplete reason', async () => {
   const { project, input, deps } = setup(), budget = leanBudget(project.project_id, 'desktop-implement')
   mkdirSync(join(home, 'harness-budgets'), { recursive: true })
-  writeFileSync(budget.snapshot().file, JSON.stringify({ version: 1, requests: PRODUCTION_LIMITS.requests, output: 12000, phases: { 'desktop-implement': PRODUCTION_LIMITS.requests-3, prepare: 3 }, runtimeMs: 99 }))
+  writeFileSync(budget.snapshot().file, JSON.stringify({ version: 1, requests: SOFTWARE_PRODUCTION_LIMITS.requests, output: 12000, phases: { 'desktop-implement': SOFTWARE_PRODUCTION_LIMITS.requests-3, prepare: 3 }, runtimeMs: 99 }))
   const query = vi.fn(async function* () { throw Error('must-not-call-provider') })
   deps.complete = (sid, pid, outcome) => persistTerminalMessage(sid, outcome === 'incomplete' ? 'incomplete' : 'completed', { message: findProject(pid).desktop_blocked?.note })
   await enterDesktopLine({ ...input, content: '继续' }, withEmptyQualityReview(query), {}, deps)
   expect(query).not.toHaveBeenCalled()
-  expect(budget.snapshot()).toMatchObject({ requests: PRODUCTION_LIMITS.requests, output: 12000, phases: { 'desktop-implement': PRODUCTION_LIMITS.requests-3, prepare: 3 } })
-  expect(deps.persistAssistant).toHaveBeenCalledWith('s', expect.stringContaining(`累计请求 ${PRODUCTION_LIMITS.requests}/${PRODUCTION_LIMITS.requests}`))
+  expect(budget.snapshot()).toMatchObject({ requests: SOFTWARE_PRODUCTION_LIMITS.requests, output: 12000, phases: { 'desktop-implement': SOFTWARE_PRODUCTION_LIMITS.requests-3, prepare: 3 } })
+  expect(deps.persistAssistant).toHaveBeenCalledWith('s', expect.stringContaining(`累计请求 ${SOFTWARE_PRODUCTION_LIMITS.requests}/${SOFTWARE_PRODUCTION_LIMITS.requests}`))
   const history = readFileSync(join(home, 'agent-sessions/s.jsonl'), 'utf8')
   expect(history).toContain('status=incomplete'); expect(history).toContain('HARNESS_REQUEST_BUDGET_EXHAUSTED'); expect(history).not.toContain('status=completed')
 })
@@ -76,7 +76,7 @@ it('retains the legacy phase cap and the software shared output guard', () => {
   writeFileSync(legacy.snapshot().file, JSON.stringify({ version: 1, requests: 160, output: 1000, phases: { 'desktop-implement': 160 } }))
   expect(legacy.admission()).toMatchObject({ allowed: false, reason: 'HARNESS_REQUEST_BUDGET_EXHAUSTED' })
   const { project } = setup(), software = leanBudget(project.project_id, 'desktop-implement')
-  writeFileSync(software.snapshot().file, JSON.stringify({ version: 1, requests: 160, output: PRODUCTION_LIMITS.output, phases: { 'desktop-implement': 160 } }))
+  writeFileSync(software.snapshot().file, JSON.stringify({ version: 1, requests: 160, output: SOFTWARE_PRODUCTION_LIMITS.output, phases: { 'desktop-implement': 160 } }))
   expect(software.admission()).toMatchObject({ allowed: false, reason: 'HARNESS_OUTPUT_BUDGET_EXHAUSTED' })
 })
 it.each([5, 999])('checks already registered behavior after a fully exhausted continuation without another model request (actual=%s)', async actual => {
@@ -87,12 +87,12 @@ it.each([5, 999])('checks already registered behavior after a fully exhausted co
     { projectId: project.project_id, sessionId: 's', requestId: 'r', signal: input.signal, state: createToolState() })
   expect(registered.isError, registered.output).not.toBe(true)
   mkdirSync(join(home, 'harness-budgets'), { recursive: true })
-  writeFileSync(budget.snapshot().file, JSON.stringify({ version: 1, requests: PRODUCTION_LIMITS.requests, output: 12000, phases: { 'desktop-implement': PRODUCTION_LIMITS.requests-3, prepare: 3 }, runtimeMs: 99 }))
+  writeFileSync(budget.snapshot().file, JSON.stringify({ version: 1, requests: SOFTWARE_PRODUCTION_LIMITS.requests, output: 12000, phases: { 'desktop-implement': SOFTWARE_PRODUCTION_LIMITS.requests-3, prepare: 3 }, runtimeMs: 99 }))
   const query = vi.fn(async function* () { throw Error('must-not-call-provider') })
   await enterDesktopLine({ ...input, content: '继续' }, withEmptyQualityReview(query), {}, deps)
   expect(query).not.toHaveBeenCalled()
   if(actual===5) expect(findProject(project.project_id).desktop_blocked?.note).toContain('QUALITY_REVIEW_REQUIRED')
   expect(query).not.toHaveBeenCalled()
   expect(findProject(project.project_id).status === 'completed').toBe(false)
-  expect(budget.snapshot()).toMatchObject({ requests: PRODUCTION_LIMITS.requests, output: 12000 })
+  expect(budget.snapshot()).toMatchObject({ requests: SOFTWARE_PRODUCTION_LIMITS.requests, output: 12000 })
 }, 90000)
