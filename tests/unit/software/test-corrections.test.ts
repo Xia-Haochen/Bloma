@@ -237,6 +237,8 @@ it('real browser: failed frozen expectation is retained, independently corrected
   const reviewQuery:import('../../../main/orchestration/stages/orchestration-contracts').SDKQuery=async function*(prompt){
     const packet=JSON.parse(prompt)
     expect(packet.proposed_execution).toMatchObject({product_verified:false,source_unchanged:true,result:{status:'passed'}})
+    expect(packet).toHaveProperty('baseline_execution')
+    expect(packet).not.toHaveProperty('execution')
     expect(readFileSync(join(project.root_path,'acceptance.mjs'),'utf8')).toBe(workingEdit)
     expect(readProjectStages(id).attempts.map(a=>a.status)).toEqual(['failed'])
     yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify({verdict:'approve',reason:'对照确认预期和独立隔离执行',assessment:[{feature:'F-001',preserved:true,reason:'实际加载并检查创建时值，旧失败保留'}]})}]}}
