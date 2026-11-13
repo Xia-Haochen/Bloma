@@ -1113,7 +1113,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ characterCue, characterKi
         {characterCue && !isUser && <div className="conversation-character-scene"><div className="conversation-character-lead"><small>Bloma 的回复</small></div><ReplyCharacter cue={characterCue} kind={characterKind} /></div>}
         {/* assistant 旁白/完成总结渲染 Markdown（模型输出天然带 md）；user 输入保持纯文本语义 */}
         {isUser || !text ? text || (isStreaming ? '…' : '') : compact ? <CompactReply text={displayText} /> : <Markdown text={displayText} />}
-        {notice && <details className="production-notice-details"><summary>查看停止原因与检查详情</summary><Markdown text={text} /></details>}
+        {notice && <details className="production-notice-details"><summary>查看停止原因与检查详情</summary><pre className="production-notice-record">{rawText}</pre></details>}
         {textAttachments?.length ? <MessageAttachments attachments={textAttachments} /> : null}
         {imageBlocks.length > 0 && (
           <span
@@ -1141,7 +1141,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ characterCue, characterKi
               if (copyLock.current) return
               copyLock.current = true; setCopying(true); setCopied(false); setActionError('')
               try {
-                await copyText(text)
+                await copyText(notice ? rawText : text)
                 setCopied(true)
                 if (copyTimer.current) clearTimeout(copyTimer.current)
                 copyTimer.current = setTimeout(() => setCopied(false), 1800)

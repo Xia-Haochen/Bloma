@@ -1,4 +1,5 @@
 import type { Project, WorkflowStage } from '../../shared/types'
+import { productionNotice } from './production-notice'
 
 export type ProgressState = 'pending' | 'active' | 'done' | 'attention'
 export type ProgressKey = 'requirements' | 'design' | 'build' | 'verify' | 'deliver'
@@ -58,8 +59,9 @@ export function deriveWorkspaceProgress(input: {
     else if (index === current) {
       if (blocked || error) {
         state = 'attention'
+        const reason = blocked?.note || error || ''
         detail = blocked?.reason === 'user-stop' ? '本轮已按你的操作停止，当前修改尚需验证。'
-          : blocked?.note || error || '制作需要处理，请查看原因后继续。'
+          : (productionNotice(reason) ?? reason) || '制作需要处理，请查看原因后继续。'
       } else if (decision || stage === 'sketch_ready') detail = '等待你确认，可查看内容或提出调整。'
       else if (!busy) detail = '当前停在这一步，可查看已有内容。'
     }

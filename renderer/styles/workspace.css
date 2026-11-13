@@ -103,6 +103,7 @@
 @keyframes workspace-progress-flow { from { transform: translateX(-120%); } to { transform: translateX(400%); } }
 .workspace-progress-popover { position: fixed; z-index: 110; width: min(400px, calc(100vw - 24px)); max-height: calc(100dvh - 16px); overflow: auto; box-sizing: border-box; padding: 12px; border: 1px solid #e1e4da; border-radius: 12px; background: #f8f8f4; box-shadow: 0 8px 35px -12px #26302840; color: #353e30; font: 12px/1.8 var(--font-sans); }
 .workspace-progress-popover[data-expanded="true"] { width: min(700px, calc(100vw - 24px)); }
+.production-notice-record { max-width: 100%; max-height: 18rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--font-size-xs); }
 .workspace-progress-popover header { display: flex; align-items: center; gap: 9px; padding-bottom: 9px; font-size: 12px; }
 .workspace-progress-popover header strong { font-weight: 500; color: #374531; }
 .workspace-progress-popover header > span { font-size: 10px; color: #6a7463; }
