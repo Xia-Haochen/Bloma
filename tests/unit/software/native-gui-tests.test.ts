@@ -18,6 +18,7 @@ import { guiSuitePath } from '../../../main/desktop/gui-acceptance';
 import { verifySoftwareCandidate, recentSoftwareVerification } from '../../../main/software/verification';
 import { closeAllDebugSessions } from '../../../main/software/debug-sessions';
 import { buildSoftwareVerifyTool } from '../../../main/software/verification-tool';
+import { verificationResponse } from '../../../main/software/verification-report';
 import { createSoftwareCollaborationPolicy } from '../../../main/software/collaboration-policy';
 import { createToolState } from '../../../main/agent/loop/agent-loop';
 import { saveSoftwareRegressionBaseline } from '../../../main/software/regression-baseline';
@@ -34,7 +35,7 @@ it.each(['passed','failed'])('retains %s case evidence when a later case hits th
   vi.spyOn(commandRuntime,'executeSoftwareCommand').mockImplementation(input=>execute(input.browserBinding?.nativeTest?{...input,timeoutMs:10000}:input))
   writeFileSync(join(project.root_path,'tests/acceptance.mjs'),`export default async({test,page,expect})=>{
     await test('F-001 completed',async()=>{await page.goto('/');await page.locator('#name').fill('Alice');await page.locator('#save').click();await expect(page.locator('#list')).toHaveText('${first==='passed'?'Alice':'WRONG'}')});
-    await test('F-002 interrupted',async()=>{await new Promise(()=>{})});
+    await test('F-002 interrupted',async()=>{await page.waitForFunction(()=>false,{},{timeout:0})});
   }`)
   registerNativeGuiTests(project.project_id,'tests/acceptance.mjs')
   const result=await verifySoftwareCandidate(project.project_id,'partial-deadline',AbortSignal.timeout(60000))
@@ -42,9 +43,13 @@ it.each(['passed','failed'])('retains %s case evidence when a later case hits th
   expect(result.core?.host_gui?.status).toBe(first==='failed'?'failed':'unverified')
   expect(result.core?.host_gui?.case_results).toEqual(expect.arrayContaining([
     expect.objectContaining({name:'F-001 completed',status:first}),
-    expect.objectContaining({name:'F-002 interrupted',status:'unverified'}),
+    expect.objectContaining({name:'F-002 interrupted',status:'unverified',error:expect.stringContaining('last_operation=waitForFunction (started)')}),
   ]))
   expect(result.core?.host_gui?.error).toContain('GUI_NATIVE_EXECUTION_INCOMPLETE')
+  const response=verificationResponse(project.project_id,result)
+  expect(response.evidence.cases).toEqual(expect.arrayContaining([
+    expect.objectContaining({name:'F-002 interrupted',error:expect.stringContaining('last_operation=waitForFunction (started)')})
+  ]))
 },60000)
 it('owns registered case lifetimes even when the entry does not await each case',async()=>{
   writeFileSync(join(project.root_path,'tests/acceptance.mjs'),script.replaceAll('await test(', 'test('))

@@ -37,11 +37,27 @@ await test('Bloma native application suite', async () => {
                 if (typeof member !== 'function')
                     return object(member);
                 return (...args) => {
+                    const record = current.getStore();
+                    const operation = { method: String(key), state: 'started', at: Date.now() };
+                    const track = record && (actions.has(String(key)) || ['evaluate', 'waitForFunction', 'waitForSelector', 'waitForTimeout'].includes(String(key)));
+                    const progress = state => {
+                        if (!track) return;
+                        operation.state = state;
+                        operation.at = Date.now();
+                        record.last_operation = operation;
+                        persistCounts();
+                    };
+                    progress('started');
                     if (actions.has(String(key))) { observed('interactions_attempted'); persistCounts(); }
-                    const result = member.apply(target, args.map(unwrap));
-                    if (actions.has(String(key)))
-                        return Promise.resolve(result).then(actual => { observed('interactions'); return actual; });
-                    return result?.then ? result.then(object) : object(result);
+                    try {
+                        const result = member.apply(target, args.map(unwrap));
+                        const complete = actual => {
+                            if (actions.has(String(key))) observed('interactions');
+                            progress('completed');
+                            return actions.has(String(key)) ? actual : object(actual);
+                        };
+                        return result?.then ? result.then(complete, error => { progress('failed'); throw error; }) : complete(result);
+                    } catch (error) { progress('failed'); throw error; }
                 };
             } });
         cache.set(value, proxy);
@@ -69,7 +85,7 @@ await test('Bloma native application suite', async () => {
             return current.run(record, async () => { try { await lifecycle.run(() => callback(new Proxy(t, { get(target, key) { if (key === 'assert')
                     return checkedAssertion(target.assert); if (key === 'test')
                     return (...nested) => runCase(target.test.bind(target), nested); const member = Reflect.get(target, key, target); return typeof member === 'function' ? member.bind(target) : member; } }))); if (/\bF-\d+\b/.test(record.name) && !record.assertions)
-                throw Error('GUI_NATIVE_ASSERTION_REQUIRED: 每项业务测试需实际断言'); } finally { persistCounts(); } });
+                throw Error('GUI_NATIVE_ASSERTION_REQUIRED: 每项业务测试需实际断言'); } finally { delete record.last_operation; persistCounts(); } });
         }));
     };
     const checkedTest = new Proxy(test, { apply(target, self, args) { return runCase(target, args); }, get(target, key) { const member = Reflect.get(target, key); return ['skip', 'todo', 'only'].includes(String(key)) ? (...args) => runCase(member, args) : member; } });

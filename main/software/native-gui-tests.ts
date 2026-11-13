@@ -362,6 +362,10 @@ export function nativeGuiObservations(suite: GuiAcceptanceSuite, reports: Array<
             if (row.status !== 'failed') row.status = 'unverified';
             row.assertions += Number.isSafeInteger(started.assertions) && started.assertions >= 0 ? started.assertions : 0;
             row.interactions += Number.isSafeInteger(started.interactions) && started.interactions >= 0 ? started.interactions : 0;
+            const operation = started.last_operation;
+            const detail = operation && typeof operation.method === 'string' && ['started','completed','failed'].includes(operation.state)
+                ? `; last_operation=${operation.method.slice(0,80)} (${operation.state})` : '';
+            row.error = `GUI_NATIVE_CASE_INTERRUPTED: ${row.name}${detail}`;
         }
         if (!phasePassedCases) incompletePhase = true;
     }

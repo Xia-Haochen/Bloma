@@ -25,11 +25,12 @@ export async function probeTestCorrection(projectId:string,proposal:ReturnType<t
   else writeFileSync(file,proposal.after.text)
   const expected=await runtimeInventory(candidate.root,signal,candidate.dependencies)
   const security=runSecurityScan({project_id:projectId,root_path:candidate.root,profile:'local-software'})
-  if(!security.passed)throw Error('TEST_CORRECTION_PROBE_SECURITY_FAILED')
   const suite=parseGuiSuite({version:1,scope_hash:proposal.scope,design_hash:findProject(projectId).ux_confirmation?.design_hash,
     covers:[...new Set(proposal.native.cases.map(c=>c.feature))],steps:[],native_tests:proposal.native})
   let result:unknown
-  try{result=await runNativeGuiTests({projectId,root:candidate.root,launch:candidate.launch,suite,signal})}
+  try{result=security.passed
+    ? await runNativeGuiTests({projectId,root:candidate.root,launch:candidate.launch,suite,signal})
+    : {status:'unverified',error:'TEST_CORRECTION_PROBE_SECURITY_FAILED',execution:'not_started',security}}
   catch(error){signal.throwIfAborted();result={status:'unverified',error:String(error)}}
   signal.throwIfAborted()
   if((await runtimeInventory(root,signal)).digest!==candidate.source.digest||(await runtimeInventory(candidate.root,signal,candidate.dependencies)).digest!==expected.digest)throw Error('TEST_CORRECTION_PROBE_BYTES_CHANGED')

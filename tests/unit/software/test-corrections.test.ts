@@ -348,6 +348,24 @@ it('approves a helper-only repair that exposes a product failure, retains the fa
  expect((await import('../../../main/project/project-service')).findProject(id).software_release_id).toBeUndefined()
 },180000)
 
+it('delivers candidate-bound security locations to the independent correction reviewer',async()=>runScopedFixture(async signal=>{
+ writeFileSync(join(p.root_path,'server.cjs'),"require('http').createServer((q,s)=>s.end('fixture')).listen(17899,'127.0.0.1')")
+ writeFileSync(join(p.root_path,'LAUNCH.json'),JSON.stringify({schema_version:2,ui:'browser',command:['node','server.cjs'],url:'http://127.0.0.1:17899'}))
+ writeFileSync(join(p.root_path,'unsafe.cjs'),"const {exec}=require('node:child_process');\nexec(process.argv[2]);\n")
+ const proposed=proposeTestCorrection(p.project_id,{contract_digest:before.digest,file:'acceptance.mjs',old_text:"toHaveText('current')",new_text:"toHaveText('created')",feature_ids:['F-001'],reason:'Correct expected historical value'})
+ let reviewed=false
+ const query:import('../../../main/orchestration/stages/orchestration-contracts').SDKQuery=async function*(prompt){
+   const packet=JSON.parse(prompt),probe=packet.proposed_execution
+   expect(probe).toMatchObject({proposal:proposed.id,product_verified:false,source_unchanged:true,result:{status:'unverified',execution:'not_started',error:'TEST_CORRECTION_PROBE_SECURITY_FAILED',security:{passed:false}}})
+   expect(probe.candidate).toBeTruthy();expect(probe.source).toBeTruthy()
+   expect(probe.result.security.issues).toEqual(expect.arrayContaining([expect.objectContaining({file:'unsafe.cjs',line:2,category:'dangerous_execution'})]))
+   reviewed=true
+   yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify({verdict:'reject',reason:'unsafe.cjs:2 prevents isolated execution',assessment:[{feature:'F-001',preserved:false,reason:'Changed path has not executed'}]})}]}}
+ }
+ await reviewPendingTestCorrections({projectId:p.project_id,sessionId:'s',query,env:{},maxTokens:8192,signal})
+ expect(reviewed).toBe(true)
+ expect(testCorrectionView(p.project_id).proposals.find(row=>row.id===proposed.id)?.status).toBe('rejected')
+}),60000)
 it('feeds rejected semantic corrections into the existing guard despite unrelated successful writes',()=>{
  const a=proposal();decideTestCorrection(p.project_id,a.id,{...decision(a.id),verdict:'reject'})
  const feedback=testCorrectionRejectionFeedback(p.project_id)!,guard=createProtocolFailureGuard()
