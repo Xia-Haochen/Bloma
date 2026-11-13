@@ -12,7 +12,16 @@
 // （EPERM/EACCES 在 POSIX 是真实权限拒绝，不应重试掩盖）。
 // ============================================================
 
-import { rmSync, renameSync, existsSync, type RmOptions } from 'node:fs'
+import * as nodeFs from 'node:fs'
+import type { RmOptions } from 'node:fs'
+import { createRequire } from 'node:module'
+
+// Persistence operations address physical files. Electron's patched fs treats
+// ASAR archives as directories, so recursive removal otherwise reaches rmdir
+// on the archive file and fails even when no process holds it open.
+const physicalFs: typeof nodeFs = process.versions.electron
+  ? createRequire(import.meta.url)('original-fs')
+  : nodeFs
 
 /** win32 可重试码集（fs.watch 句柄释放竞争） */
 export const WIN32_RETRYABLE = new Set(['EBUSY', 'EPERM', 'EACCES', 'ENOTEMPTY'])
@@ -42,9 +51,9 @@ const DEFAULT_DEPS: FsRetryDeps = {
   retryableCodes: DEFAULT_RETRYABLE_CODES,
   maxAttempts: 5,
   sleepSync: realSleepSync,
-  rmSync,
-  renameSync,
-  existsSync,
+  rmSync: physicalFs.rmSync,
+  renameSync: physicalFs.renameSync,
+  existsSync: physicalFs.existsSync,
 }
 
 /** 指数退避重试（50/100/200/400ms，累计 ≤750ms；不可重试码立即抛） */
