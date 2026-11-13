@@ -2,7 +2,31 @@
 
 配套[完整讲稿](group-meeting-script-20261114.md)。核对基线为 `686c0af`，汇报覆盖 2026 年 10 月 14 日至 11 月 13 日。本说明用于理解实现、准备追问和限定结果口径。
 
-**一　一次子 Agent 委派究竟发生了什么**
+**先核对当前主流程与汇报重点**
+
+用户沿同一个 Bloma 主会话完成需求沟通、确认与制作。`handleLeanGuide` 负责准备阶段的结构化回复、澄清和任务单；确认后经 `enterDesktopLine` 把同一 session ID 传入 `runLeanProduction`。制作进入持续 Pi 循环。准备与制作有不同调用逻辑和可配置模型路由，共享产品会话身份与确认材料。
+
+当前指令明确采用一个主负责人直接实现，只在工作独立且值得并行时委派。普通实现委派属于可选工具能力。本月扩展能力边界的重点是独立实验委派，讲稿以“关键未知→实验子 Agent→封存证据→主负责人集成复验”为主线。
+
+入口见[需求与确认](../../main/guide/lean-guide.ts)、[制作入口](../../main/desktop/lean-production.ts)、[默认工程指令](../../main/software/agent-tools.ts)。
+
+**核心机制　独立实验子 Agent 怎样扩展能力边界**
+
+主 Agent 调用既有 `delegate_agent`，task 描述未知问题，experiment 携带 criterion 和可选 inputs。代码中的 explore 角色属于只读代码探索。可执行实验使用 implement/custom 或默认角色，并由 experiment 参数选择独立实验工具配置；显式 readOnly 和共享工程 writePaths 不能与该实验契约混用。
+
+`createSoftwareCollaborationPolicy.prepare` 遇到 experiment 时转入 `createExperiments.prepare`。宿主创建 `PROMA_HOME/software-experiments/<project>/<child>/work`，复制指定输入，保存问题、判定条件、父子归属及主工程源码指纹。
+
+`buildSoftwareAgentTools` 识别实验子会话后返回专用工具。文件操作通过 `runWithProjectRootOverride` 指向实验目录，提供读取、写入、编辑、搜索和 web_fetch；实验 run_command 复用命令执行器，传入实验 root、独立 dataDir 与取消信号，保存真实输出和退出码。当前每条命令最多六十秒，目录隔离的能力边界是工程组织与工具约束，进程仍具有当前用户权限。
+
+`record_experiment_result` 接收 method、finding、verdict 和 artifacts。supports/refutes 要求存在运行记录，保存时标记 interpretation=agent_claim。平台封存产物副本及 SHA-256，并返回 product_verified=false。继续编辑或运行会使当前结果指针失效，历史证据保留。
+
+父会话通过 `read_experiment` 获取方法、运行记录、结论和封存代码，读取产物时再次校验哈希。主工程变化用 source_changed 标记，主负责人评估适用性后，通过正常文件工具集成并正式验证。结束时没有提交解释的实验会封存有界产物清单并标记 unverified。
+
+这种机制允许围绕未知问题编写和执行新探针，平台组件只是可选资源。实验产物也可能只解决部分问题，实际功能边界由最终集成及验收结果确定。
+
+实现见[实验工作区与工具](../../main/software/experiments.ts)、[委派入口契约](../../main/agent/delegation/delegation-tools.ts)、[实验工具接线](../../main/software/agent-tools.ts)。历史证据见[探索实验实施与真实复测](exploration-harness-20261105.md)。
+
+**一　实验与其他子任务共用的委派底座**
 
 正常制作入口先注册父循环上下文，包括模型查询接口、工具构造器、材料构造器、执行预算作用域，以及子会话事件回调。主 Agent 调用 `delegate_agent` 后，`startDelegation` 校验当前是否为父会话、并发是否已满、渠道覆盖是否被允许，再创建 `delegationId`、`childSessionId`、`AbortController` 和完成通知。
 
@@ -26,7 +50,7 @@
 
 实现入口见 [Pi 运行时](../../main/agent/loop/pi-runtime.ts)、[会话持久化与工具恢复](../../main/agent/loop/pi-session-store.ts)。Pi 属于采用的上游运行时，本月成果主要是集成及领域工程约束。
 
-**三　普通共享工程子任务怎样限制写入**
+**三　补充能力　可选共享工程实现委派怎样限制写入**
 
 `createSoftwareCollaborationPolicy` 保存当前任务的路径范围、只读标记和活跃状态。实现任务需声明 `writePaths`。路径经过绝对路径、越界路径、符号链接祖先解析及保留目录检查，Windows 下统一大小写后再检查目录和文件范围是否重叠。
 
@@ -40,7 +64,7 @@
 
 **四　开发子任务与 C/V 审阅的调用关系**
 
-普通开发委派由制作 Agent 选择。`productionAgentTools` 对制作工具面移除直接安排正式审阅、应用测试修订等宿主职责，并从普通 `delegate_agent` 的角色枚举中去掉 review。宿主的收尾流程根据当前候选与证据安排 C/V，复用现有子会话运行时。
+实验及普通开发委派由制作 Agent 按需选择，默认正式实现由主负责人完成。`productionAgentTools` 对制作工具面移除直接安排正式审阅、应用测试修订等宿主职责，并从普通 `delegate_agent` 的角色枚举中去掉 review。宿主的收尾流程根据当前候选与证据安排 C/V，复用现有子会话运行时。
 
 C 使用独立任务书、确认需求和候选资料，以及只读代码工具。V 获得经过归属校验的图片材料和观察事实。质量子会话使用专门的 system、材料和工具构造路径。当前 C/V 自动接线继承父级渠道，角色独立性主要由材料、会话和权限形成。
 
@@ -93,6 +117,7 @@ B 是可选的实现前独立案例设计，存在单独配置和授权。它的
 | 一个月 468 次提交 | 当前基线 HEAD 可达历史中，2026-10-14 至 2026-11-13 的提交数，包含文档和实验。适合背景统计。 |
 | 六组 L2，每组一轮、14 场景 | 早期探索试验，业务全过 4/6，原生交付 5/6，两者同时满足 3/6。两个直接基线 14/14。详见[原报告](dispatch-experiment-report-20261017.md)。 |
 | 多对象污染被独立案例发现 | 真实本地程序与受控 query 的回归，验证了案例及修复链路。详见[Q3 记录](quality-q3-implementation-20261030.md)。 |
+| 视频能力探索 | 历史真实实验中，子 Agent 找到 imageio_ffmpeg 并生成拼接产物。16 次请求、21 次工具调用、14 条命令回执后达到该轮限制，未提交 record_experiment_result；停止后独立解码检查支持部分媒体结果。详见[探索复测记录](exploration-harness-20261105.md)。 |
 | 工具字节量下降约 70% 和 51% | 两种调用形态的固定工作流合计，真实工具加受控响应，分别对应工具返回和 SDK messages。详见[工具索引](tooling-evidence-index-20261112.md)。 |
 | 60 文件、605 项；Python 另组 17 项 | 指定历史代码 `90b636f` 的标准 check:offline 与另组 Python 验证。详见[工具交接](session-handoff-tooling-upgrade-20261111.md)。 |
 | 工作台 17 项正式验收通过 | 修复后的本机候选，含外部工程介入。最新原始记录为仓库忽略目录中的 run-artifacts/workbench-third-acceptance-repair/formal-04.json。 |
@@ -109,6 +134,7 @@ B 是可选的实现前独立案例设计，存在单独配置和授权。它的
 | c75738a | 视觉材料关联候选与宿主证据 |
 | 69ff1ed | 独立案例依据与问题关闭 |
 | 48f72c5 | 基于已验证基线和当前风险选择协作 |
+| 43105ab、db22d82 | 独立实验委派与真实预览观察，保留未完成实验产物 |
 | 40e9674 | 收敛交付资格、问题证据和发布更新 |
 | 5b35ee5 | 持续工程监视伙伴 |
 | e69bddc | 冻结完整测试修订候选以供审阅及精确应用 |
