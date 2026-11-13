@@ -2,7 +2,7 @@ import {withFundedExecutionWindow,remainingSoftwareRequests} from '../main/softw
 import {createTrialWallet} from './trial-wallet'
 import {readPendingDecision} from '../main/guide/pending-decision'
 import {loadUserTestFiles} from './user-test-files'
-import { trialOutputCap } from './trial-output-cap'
+import { TRIAL_MINIMUM_OUTPUT_TOKENS, trialOutputCap } from './trial-output-cap'
 import {createTrialRequestRecorder,serializeTrialRecord} from './trial-request-recorder'
 import {softwareVerificationFingerprint} from '../main/desktop/verification-fingerprint'
 import {readQualityLedger} from '../main/software/quality-ledger'
@@ -194,7 +194,7 @@ export async function main() {
   }
   const model = { query, env: binding.env, signal, sessionId: sid, history: [{role:'user' as const,content:task.goal}], maxTokens: requestMaxTokens,
     persistAssistant: (text: string) => appendSessionMessage(sid, { role: 'assistant', origin: 'agent', content: [{ type: 'text', text }], timestamp: Date.now() }) }
-  await withFundedExecutionWindow(()=>({remainingRequests:Math.max(0,requestLimit-control.snapshot().physical_requests),remainingRmb:availableFunding(),outputRmbPerMillion:policyRate.output_rmb_per_million,deadlineAt}),async()=>{
+  await withFundedExecutionWindow(()=>({remainingRequests:Math.max(0,requestLimit-control.snapshot().physical_requests),remainingRmb:availableFunding(),outputRmbPerMillion:policyRate.output_rmb_per_million,deadlineAt,minimumOutputTokens:TRIAL_MINIMUM_OUTPUT_TOKENS}),async()=>{
   const releaseAttempt=continuation?claimSimulatedRun(root,{at:new Date().toISOString(),runtimeHash,previous_report:continuation.session_id},()=>assertSimulatedContinuation(root,thinking,runtimeTree)):undefined
   const walletTimer=setInterval(()=>{void wallet.sample()},30000)
   try {

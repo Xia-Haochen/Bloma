@@ -36,6 +36,7 @@ const fail = (code: string): never => { throw new MonetaryBudgetError(code) }
 const integer = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0
 const micro = (tokens: number, rmbPerMillion: number) => Math.ceil(tokens * rmbPerMillion)
 const requestReserveMicro=(rate:Rate,output:number)=>micro(rate.context_tokens,rate.input_rmb_per_million)+micro(output,rate.output_rmb_per_million)
+const MINIMUM_FITTED_OUTPUT_TOKENS = 512
 const reportedCharge=(state:State,host:string,model:string)=>state.entries.filter(e=>e.host===host&&e.model===model&&e.status==='reported').reduce((sum,e)=>sum+e.charged_micro_rmb,0)
   -(state.reported_pricing_checkpoints??[]).filter(c=>c.host===host&&c.model===model).reduce((sum,c)=>sum+c.original_micro_rmb-c.settled_micro_rmb,0)
 
@@ -118,7 +119,7 @@ export function fitMonetaryRequest(url: string, body: string, policyPath = proce
   // Floating point rounding must never turn a quote into a one-micro overspend.
   while (limit > 0 && micro(limit, rate.output_rmb_per_million) > available) limit--
   const thinking = request.thinking?.type === 'enabled' && integer(request.thinking.budget_tokens) ? request.thinking.budget_tokens + 1 : 0
-  const minimum = Math.min(requested, Math.max(512, thinking))
+  const minimum = Math.min(requested, Math.max(MINIMUM_FITTED_OUTPUT_TOKENS, thinking))
   if (limit < minimum || limit >= requested) return body
   return JSON.stringify({ ...request, max_tokens: limit })
 }
@@ -289,12 +290,14 @@ export async function fetchWithMonetaryBudget(url: string, init: RequestInit, fe
 }
 
 /** Conservative scheduling quote only; physical admission remains atomic above. */
-export function quoteMonetaryWork(baseUrl:string|undefined,model:string|undefined,output:number,policyPath=process.env.BLOMA_MONETARY_POLICY){
+export function quoteMonetaryWork(baseUrl:string|undefined,model:string|undefined,output:number,policyPath=process.env.BLOMA_MONETARY_POLICY,
+ minimumOutput=MINIMUM_FITTED_OUTPUT_TOKENS){
  if(!policyPath||!baseUrl||!model)return
  monetaryInputBlocked(baseUrl,model,policyPath) // validates policy/state without mutation
  const policy=JSON.parse(readFileSync(policyPath,'utf8').replace(/^\uFEFF/,'')) as Policy
  const host=new URL(baseUrl).host,rate=policy.models.find(r=>r.host===host&&r.model===model)!
- if(!integer(output)||!output||output>rate.context_tokens)fail('MONETARY_OUTPUT_LIMIT_REQUIRED')
+ if(!integer(output)||!output||output>rate.context_tokens||!integer(minimumOutput)||minimumOutput>rate.context_tokens)fail('MONETARY_OUTPUT_LIMIT_REQUIRED')
  const spent=existsSync(policyPath+'.state.json')?accountedSpent(JSON.parse(readFileSync(policyPath+'.state.json','utf8')),host,model):0
- return{remaining_micro_rmb:Math.max(0,Math.floor(rate.cap_rmb*1e6)-spent),request_micro_rmb:requestReserveMicro(rate,output)}
+ return{remaining_micro_rmb:Math.max(0,Math.floor(rate.cap_rmb*1e6)-spent),request_micro_rmb:requestReserveMicro(rate,output),
+   minimum_request_micro_rmb:requestReserveMicro(rate,Math.max(MINIMUM_FITTED_OUTPUT_TOKENS,minimumOutput))}
 }

@@ -16,7 +16,7 @@ import { productDesignPolicy } from '../project/product-design-policy'
 import { beginProjectAssignment } from '../software/task-assignment'
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import type { SDKQuery } from '../orchestration/stages/orchestration-contracts'
+import type { SDKQuery, SDKQueryOptions } from '../orchestration/stages/orchestration-contracts'
 import { runAgentLoop, withAbort } from '../agent/loop/agent-loop'
 import { registerParentLoopContext, disposeParentDelegationState, stopDelegations, settleParentDelegationRuns } from '../agent/delegation/agent-collaboration'
 import { findProject, updateProject } from '../project/project-service'
@@ -150,7 +150,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   const pairedEngineering=process.env.BLOMA_ENGINEERING_PARTNER==='1'
   // Maker, peer and isolated adjudication use the same transport queue, so an
   // in-flight peer reservation is not mistaken for permanently exhausted funds.
-  let admitQueued: (options: import('../orchestration/stages/orchestration-contracts').SDKQueryOptions)=>void=()=>{}
+  let admitQueued: (options: SDKQueryOptions)=>void=()=>{}
   let optionalSession=(session:string)=>false
   const executionQuery=pairedEngineering?serializeModelQueries(input.query,options=>optionalSession(options.sessionId)?1:0,options=>admitQueued(options)):input.query
   const correctionQuery=leanBudget(input.projectId,'desktop-implement').wrap(executionQuery)
@@ -178,19 +178,32 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     recover:recoverEngineeringMonitor,attached:recordEngineeringMonitor,history:recentProductionObservations,
   })
   optionalSession=session=>partner.isMonitor(session)
-  const admitPartner=()=>{
+  const assertPartnerActive=()=>{
     if(!partner.isObserving())throw new ModelRequestRefusal('ENGINEERING_MONITOR_IDLE')
+  }
+  const admitPartner=(request:Parameters<NonNullable<SDKQueryOptions['requestGuard']>>[0],policyPath?:string)=>{
+    assertPartnerActive()
+    const body=JSON.parse(request.body) as {model:string;max_tokens:number;thinking?:{type?:string;budget_tokens?:number}}
+    const window=currentFundedExecutionWindow()
+    const thinking=body.thinking?.type==='enabled'?body.thinking.budget_tokens:undefined
+    const minimumOutput=Math.max(window?.minimumOutputTokens??0,thinking===undefined?0:thinking+1)
+    const quote=quoteMonetaryWork(request.url,body.model,body.max_tokens,policyPath,minimumOutput)
     const ledger=readQualityLedger(input.projectId)
     const bindingKinds=new Set(ledger.findings.filter(f=>['suspected','confirmed'].includes(f.disposition)&&['high','critical'].includes(f.severity)&&!f.retest).map(f=>f.review_kind??'code'))
     const needsCoverage=(brief.lean_brief?.ui==='required'||Boolean(brief.requirements_model?.workflows?.length))&&!ledger.reviews.some(r=>r.purpose==='coverage'&&r.status==='complete'&&r.rules===qualityCoverageRulesVersion(input.projectId))
     const mandatory=1+(brief.lean_brief?.ui==='required'?1:0)+bindingKinds.size+(needsCoverage?1:0)
-    const quote=quoteMonetaryWork(input.env.ANTHROPIC_BASE_URL,input.env.ANTHROPIC_MODEL,input.maxTokens)
-    const window=currentFundedExecutionWindow()
     const remaining=quote?Math.min(quote.remaining_micro_rmb,window?Math.floor(window.remainingRmb*1e6):Infinity):undefined
-    const decision=optionalExecutionAdmission({remainingMicro:remaining,requestMicro:quote?.request_micro_rmb,mandatoryRequests:mandatory,deadlineAt:window?.deadlineAt,drainMs:DEFAULT_STREAM_PROGRESS_TIMEOUT_MS})
-    if(!decision.allowed){partner.suspend();recordEvaluationEvent(input.projectId,'optional_parked',decision);throw new ModelRequestRefusal(decision.reason!)}
+    // Requests run serially and settle before the next dispatch. Keep room
+    // for one minimally sized required request and protect time for all reviews.
+    const decision=optionalExecutionAdmission({remainingMicro:remaining,requestMicro:quote?.request_micro_rmb,
+      protectedMicro:quote?.minimum_request_micro_rmb,mandatoryRequests:mandatory,deadlineAt:window?.deadlineAt,drainMs:DEFAULT_STREAM_PROGRESS_TIMEOUT_MS})
+    if(!decision.allowed){
+      partner.suspend()
+      recordEvaluationEvent(input.projectId,'optional_parked',{...decision,request_micro_rmb:quote?.request_micro_rmb,remaining_micro_rmb:remaining})
+      throw new ModelRequestRefusal(decision.reason!)
+    }
   }
-  admitQueued=options=>{if(partner.isMonitor(options.sessionId))admitPartner()}
+  admitQueued=options=>{if(partner.isMonitor(options.sessionId))assertPartnerActive()}
   const quality = createQualityReview(input.projectId, input.sessionId, collaboration, input.env, ()=>partner.latest())
   const observeRuntime = (observation: import('../agent/loop/runtime-observation').RuntimeObservation) => {
     const review = readQualityLedger(input.projectId).reviews.find(r => r.child === observation.session_id)
@@ -265,7 +278,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   const guardedQuery: SDKQuery = async function* (prompt, options) {
     if(partner.isMonitor(options.sessionId)&&!partner.isObserving())throw new ModelRequestRefusal('ENGINEERING_MONITOR_IDLE: 制作已交给宿主收尾，保留调查，不再新增监视请求。')
     try { yield* budgetedQuery(prompt, { ...options, requestGuard: request => {
-      if(partner.isMonitor(options.sessionId))admitPartner()
+      if(partner.isMonitor(options.sessionId))admitPartner(request,options.monetaryPolicyPath)
       options.requestGuard?.(request)
       try {
         const body = JSON.parse(request.body)

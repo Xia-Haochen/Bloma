@@ -11,7 +11,9 @@ import { syncDocuments } from '../../../main/project/document-sync'
 import { enterDesktopLine } from '../../../main/desktop/desktop-route'
 import { activeSoftwareRelease } from '../../../main/software/release-store'
 import type { SDKQuery } from '../../../main/orchestration/stages/orchestration-contracts'
-import { MonetaryBudgetError } from '../../../main/platform/llm/monetary-budget'
+import { MonetaryBudgetError, readMonetaryBudget, reserveModelRequest } from '../../../main/platform/llm/monetary-budget'
+import { currentFundedExecutionWindow, withFundedExecutionWindow } from '../../../main/software/execution-limits'
+import { TRIAL_MINIMUM_OUTPUT_TOKENS, trialOutputCap } from '../../../scripts/trial-output-cap'
 import { debugWorkspace } from '../../../main/software/debug-workspace'
 import { softwareVerificationFingerprint } from '../../../main/desktop/verification-fingerprint'
 import { buildLeanCliTool } from '../../../main/desktop/lean-cli-check'
@@ -62,7 +64,7 @@ it.each([{ output: 5, rules: true, cancel: false, passed: true }, { output: 999,
         // This fixture does not claim a real GUI run or business PASS.
         writeFileSync(join(debugWorkspace(project.project_id, 's'), 'checkpoint.json'), JSON.stringify({
           id: '00000000-0000-0000-0000-000000000001', projectId: project.project_id, sessionId: 's', version: 1,
-          state: 'closed', source: softwareVerificationFingerprint(project.root_path),
+          state: 'closed', source: softwareVerificationFingerprint(project.root_path), observations: [], steps: [],
         }))
         writeFileSync(join(project.root_path, 'app.cjs'), 'console.log(5) // later unobserved edit')
       }
@@ -84,7 +86,8 @@ it.each([{ output: 5, rules: true, cancel: false, passed: true }, { output: 999,
   if (monetary && !rules) expect(findProject(project.project_id).desktop_blocked?.note).toContain('上次宿主观察之后的修改')
 }, 60000)
 
-it.each([false,true])('hands a verified candidate to C despite optional advice without another maker request (real peer=%s)',async(realPeer)=>{
+it.each(['advice','peer','funded-peer','parked-peer'])('hands a verified candidate to C despite optional advice without another maker request (%s)',async(mode)=>{
+ const realPeer=mode!=='advice', funded=mode==='funded-peer'||mode==='parked-peer'
  const project=createProject({request_id:'create',mode:'quick'},{workflowVersion:'software-v1'})
  const parsed=parseLeanBrief(JSON.stringify({action:'brief',goal:'Print 5',ui:'none',delivery:'command',requirements:[{description:'输出5',expected:'输出5'}]}),{projectId:project.project_id,sessionId:'s',source:'输出5',previous:readPrdBackplane(project.project_id),software:true})!
  if(parsed.action!=='brief')throw Error('fixture')
@@ -94,8 +97,25 @@ it.each([false,true])('hands a verified candidate to C despite optional advice w
  writeFileSync(join(project.root_path,'LAUNCH.json'),JSON.stringify({schema_version:2,command:['node','app.cjs'],mode:'command'}))
  await buildLeanCliTool(project.project_id).execute({expectations:{'F-001':'输出5'},cases:[{name:'five',covers:['F-001'],args:[],stdout:'5',exit_code:0}]},{projectId:project.project_id,sessionId:'s',requestId:'r',signal:AbortSignal.timeout(10000),state:createToolState()})
  let maker=0,review=0,peer=0
+ const policy=join(home,'policy.json'),url='https://test.invalid/v1/messages'
+ const rate={host:'test.invalid',model:'M1',cap_rmb:10,context_tokens:1048576,input_rmb_per_million:2,output_rmb_per_million:8,cache_rmb_per_million:.04}
+ const env:Record<string,string>=funded?{ANTHROPIC_BASE_URL:url,ANTHROPIC_MODEL:'M1'}:{}
+ if(funded){
+  writeFileSync(policy,JSON.stringify({version:1,models:[rate]}))
+  vi.stubEnv('BLOMA_MONETARY_POLICY',policy)
+  vi.stubEnv('BLOMA_MONETARY_EPOCH_DIR',join(home,'epochs'))
+ }
  const use=(id:string,name:string,input:Record<string,unknown>)=>({type:'tool_use' as const,id,name,input})
  const query:SDKQuery=async function*(_prompt,options){
+  const usage={input_tokens:10,output_tokens:10}
+  if(funded){
+   const affordable=trialOutputCap(currentFundedExecutionWindow()!.remainingRmb,options.maxTokens!,rate)
+   const body=JSON.stringify({model:'M1',max_tokens:Math.min(affordable,384000)})
+   options.requestGuard?.({url,body})
+   const reservation=reserveModelRequest(url,body,policy)!
+   options.onTransportAttempt?.('started')
+   reservation.settle(usage,true)
+  }
   const isMaker=options.sessionId==='s'
   if(isMaker&&++maker>1)throw Error('OPTIONAL_ADVICE_STARVED_CLOSEOUT')
   if(!isMaker&&!readQualityLedger(project.project_id).reviews.some(r=>r.child===options.sessionId)){peer++;yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:'Optional documentation suggestion; consider more examples.'}]}};yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}};return}
@@ -106,8 +126,16 @@ it.each([false,true])('hands a verified candidate to C despite optional advice w
  advisory.enabled=!realPeer
  if(realPeer)vi.stubEnv('BLOMA_ENGINEERING_PARTNER','1')
  try{
-  await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'r',content:'实现输出5',signal:AbortSignal.timeout(90000),maxTokens:4096},query,{}, {publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
-  expect(maker).toBe(1);expect(review).toBe(1);expect(peer).toBe(realPeer?1:0)
+  const run=()=>enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'r',content:'实现输出5',signal:AbortSignal.timeout(90000),maxTokens:funded?394748:4096},query,env, {publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
+  // The engineering child has a 16,384-token output cap. Its request plus
+  // one trial-sized review requires 4,341,760 micro-RMB at these rates.
+  const deadlineAt=Date.now()+90*60_000
+  const initialRmb=mode==='parked-peer'?4.341759:9.736795
+  if(funded)await withFundedExecutionWindow(()=>({remainingRmb:initialRmb-(existsSync(policy+'.state.json')?readMonetaryBudget(policy)[0].accounted_upper_rmb:0),
+   remainingRequests:4096,outputRmbPerMillion:8,deadlineAt,minimumOutputTokens:TRIAL_MINIMUM_OUTPUT_TOKENS}),run)
+  else await run()
+  expect(maker).toBe(1);expect(review).toBe(1);expect(peer).toBe(realPeer&&mode!=='parked-peer'?1:0)
+  if(funded)expect(readMonetaryBudget(policy)[0]).toMatchObject({cap_rmb:10,accounted_upper_rmb:(maker+review+peer)/10000,reported_peak_rmb:(maker+review+peer)/10000})
   expect(findProject(project.project_id).desktop_phase,findProject(project.project_id).desktop_blocked?.note).toBe('delivered')
   expect(await activeSoftwareRelease(project.project_id)).toBeTruthy()
  }finally{advisory.enabled=false}

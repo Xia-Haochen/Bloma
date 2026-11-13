@@ -274,6 +274,9 @@ it('quotes optional planning from the same complete-input reservation without wr
  const reservation=reserveModelRequest(url,body,path)!;reservation.settle(undefined,false)
  const before=readFileSync(path+'.state.json')
  expect(quoteMonetaryWork(url,'M1',2048,path)?.request_micro_rmb).toBe(2113536)
+ expect(quoteMonetaryWork(url,'M1',384000,path,2048)).toMatchObject({
+   request_micro_rmb:5169152,minimum_request_micro_rmb:2113536,
+ })
  expect(quoteMonetaryWork(url,'M1',2048,path)?.remaining_micro_rmb).toBe(15000000-2105152)
  expect(readFileSync(path+'.state.json').equals(before)).toBe(true)
  expect(state(path).entries[0].status).toBe('unknown')

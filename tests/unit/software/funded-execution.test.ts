@@ -27,3 +27,11 @@ it('protects mandatory work without booking it as spend or relaxing the campus r
  expect(optionalExecutionAdmission({mandatoryRequests:2,deadlineAt:360000,now:0,drainMs:120000})).toMatchObject({allowed:false,reason:'OPTIONAL_DEADLINE_PROTECTED'})
  expect(optionalExecutionAdmission({mandatoryRequests:2,deadlineAt:360001,now:0,drainMs:120000})).toMatchObject({allowed:true})
 })
+
+it('admits the serialized campus partner at the wire limit and parks it before consuming the next required request reserve',()=>{
+ const next={requestMicro:2228224,protectedMicro:2113536,mandatoryRequests:3,drainMs:120000}
+ expect(optionalExecutionAdmission({...next,remainingMicro:9736795})).toEqual({allowed:true,protected_micro_rmb:2113536})
+ expect(optionalExecutionAdmission({...next,remainingMicro:4341760}).allowed).toBe(true)
+ expect(optionalExecutionAdmission({...next,remainingMicro:4341759})).toMatchObject({allowed:false,reason:'OPTIONAL_CLOSEOUT_BUDGET_PROTECTED'})
+ expect(optionalExecutionAdmission({...next,remainingMicro:9736795,now:0,deadlineAt:480000})).toMatchObject({allowed:false,reason:'OPTIONAL_DEADLINE_PROTECTED'})
+})
