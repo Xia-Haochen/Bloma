@@ -1,6 +1,6 @@
-# Bloma 组会技术实现核对说明
+# Bloma 组会技术实现核对说明终稿
 
-配套[完整讲稿](group-meeting-script-20261114.md)。核对基线为 `686c0af`，汇报覆盖 2026 年 10 月 14 日至 11 月 13 日。本说明用于理解实现、准备追问和限定结果口径。
+配套[完整讲稿终稿](group-meeting-script-20261114.md)。生产代码基线为 `686c0af`，汇报覆盖 2026 年 10 月 14 日至 11 月 13 日。本说明依据当前代码核对，后续提交为文稿更新，用于理解实现、准备追问和限定结果口径。
 
 **先核对当前主流程与汇报重点**
 
@@ -9,6 +9,12 @@
 当前指令明确采用一个主负责人直接实现，只在工作独立且值得并行时委派。普通实现委派属于可选工具能力。本月扩展能力边界的重点是独立实验委派，讲稿以“关键未知→实验子 Agent→封存证据→主负责人集成复验”为主线。
 
 入口见[需求与确认](../../main/guide/lean-guide.ts)、[制作入口](../../main/desktop/lean-production.ts)、[默认工程指令](../../main/software/agent-tools.ts)。
+
+正常新项目的主线为需求回复或澄清与任务单→确认目标及适用的界面确认→主负责人持续制作→按需独立实验与集成→登记测试并由宿主实际验证→必要的候选审阅与问题处理→快速项目发布或长期里程碑待确认。失败返回当前制作上下文，成功后的收尾由宿主继续执行。
+
+首个适用的正式验证入口，在缺少有效覆盖审阅时调用 `quality.ensureCoverage`。此时的 C 子会话 purpose 为 coverage，用于核对业务旅程与测试覆盖。候选通过后的审阅另有 candidate、binding 等用途。可选 B 则在制作前运行。各用途接在不同时间点，终稿以当前入口调用顺序解释。
+
+调用位置见[verify_app 的 beforeVerify](../../main/software/verification-tool.ts)、[覆盖审阅](../../main/software/quality-review.ts)、[advanceCloseout 与长期里程碑分支](../../main/desktop/lean-production.ts)。
 
 **核心机制　独立实验子 Agent 怎样扩展能力边界**
 
@@ -68,7 +74,7 @@
 
 C 使用独立任务书、确认需求和候选资料，以及只读代码工具。V 获得经过归属校验的图片材料和观察事实。质量子会话使用专门的 system、材料和工具构造路径。当前 C/V 自动接线继承父级渠道，角色独立性主要由材料、会话和权限形成。
 
-B 是可选的实现前独立案例设计，存在单独配置和授权。它的设计调用与持续 Pi 子任务的运行形态有所区别。因此口述时称为独立设计角色即可。
+B 是可选的实现前 GUI 业务案例设计，存在单独配置和授权，当前入口要求其模型与主模型不同。它通过结构化模型调用设计案例，可能根据规模分批，与持续 Pi 子任务的运行形态有所区别。因此口述时称为独立设计角色即可。
 
 风险选择读取已发布基线、质量记录和实际文件差异。没有完整基线、存在重要待核对问题或发生逻辑等变化时，采用完整审阅。纯样式缩减要求最多两份已有小 CSS 文件，且 AST 结构一致、仅允许的样式值改变。相同输入复用还需要目标、环境和有效证据一致。
 
@@ -86,6 +92,8 @@ B 是可选的实现前独立案例设计，存在单独配置和授权。它的
 
 发布时，`sealSoftwareRelease` 校验候选与证据，`promoteSoftwareRelease` 更新活动版本。完成交付时，活动版本和项目完成字段在同一项目更新中提交。
 
+快速项目在相关条件满足后进入 deliver；长期项目先 seal 候选并登记待确认里程碑，用户确认后才推进对应交付。需要干净环境而当前仅本机通过时，还有 trial/waiting_environment 分支。当前讲稿不把一份 verify_app PASS 直接称为已发布。
+
 实现入口见 [质量数据结构](../../main/software/quality-ledger.ts)、[验证结算](../../main/software/quality-settlement.ts)、[原生 GUI 执行](../../main/software/native-gui-observer.ts)、[发布入口](../../main/software/release-store.ts)。
 
 **六　测试修订怎样避免旧测试与新证据混用**
@@ -102,9 +110,13 @@ B 是可选的实现前独立案例设计，存在单独配置和授权。它的
 
 **七　持续工程伙伴和工具效率怎么解释**
 
-伙伴沿独立工程工作区运行，通过公开行动及工具实际结果接收事实；运行中更新上下文，闲置且有新事实时续接原子会话。制作收尾时暂停新增调查动作，待业务缺口返回制作后再依流程处理。该能力已实现并试验，作为可选配置，其真实收益需要按任务衡量。
+伙伴沿独立工程工作区运行，通过公开行动及工具实际结果接收事实；运行中更新上下文，闲置且有新事实时续接原子会话。当前制作入口只有 `BLOMA_ENGINEERING_PARTNER === '1'` 时启用。制作收尾时暂停新增调查动作，待业务缺口返回制作后再依流程处理。该能力已实现并试验，作为可选配置，其真实收益需要按任务衡量。
+
+另有由 `BLOMA_INTERACTION_EXPLORER === '1'` 启用的 UI 交互探索，用于从界面观察中查找问题。它与本文重点介绍的 experiment 技术探针、持续工程伙伴各有入口。讲稿的“能力探索”专指主负责人按关键未知委派的独立实验。
 
 工具升级包括有界文件读取与分页、批量编辑、内容版本检查、进程输入和日志管理、TS/Python 语义查询，以及 DOM/UIA 观察。批量编辑报告每项应用结果和可能的部分成功，失败恢复需依这些事实处理。
+
+TS/JS 查询基于 TypeScript language service。Python 基于 Jedi/parso，当前 capability 明确 diagnostics 为 syntax-only。两个后端都提供定义、引用等查询，诊断能力按各自实现说明。
 
 固定工作流的受控对照使用真实 Pi 和工具执行、受控模型响应。ABBA 顺序为兼容、批量、批量、兼容。每轮文件调用 5→3、总调用 13→11、SDK 轮数 12→12。两个样本工具返回合计 615366→184296 B，下降约 70.05%；SDK messages 累计 2518630→1225244 B，下降约 51.35%。这里统计 messages 字节，供应商计费 token、缓存和费用需另测。耗时受冷启动影响，最后一份兼容样本还快于批量样本。
 
@@ -122,7 +134,7 @@ B 是可选的实现前独立案例设计，存在单独配置和授权。它的
 | 60 文件、605 项；Python 另组 17 项 | 指定历史代码 `90b636f` 的标准 check:offline 与另组 Python 验证。详见[工具交接](session-handoff-tooling-upgrade-20261111.md)。 |
 | 工作台 17 项正式验收通过 | 修复后的本机候选，含外部工程介入。最新原始记录为仓库忽略目录中的 run-artifacts/workbench-third-acceptance-repair/formal-04.json。 |
 
-工作台最新记录的 status、host_gui、speech、llm 和正常启动检查均通过。LLM 部分是回环协议检查，B 独立设计在该次记录中为 disabled。原生 GUI 检查包含重开。项目的 C/V 与正式发布应继续查看当前项目状态，单份本机通过报告不能覆盖这些后续条件。
+工作台最新记录的 status、host_gui、speech、llm 和正常启动检查均通过。LLM 部分是回环协议检查，B 独立设计在该次记录中为 disabled。原生 GUI 检查包含重开。2026-11-13 本轮读取 projects.json，项目 9bbb0c6c-ca5a-4ccb-aa67-cd82090274d9 的 desktop_phase 为 desktop-implement，software_release_id 为空。汇报称修复后本机正式验收通过，交付收尾仍需完成。这是文稿核对时的状态快照。
 
 **九　关键提交对应什么工程变化**
 
@@ -142,3 +154,23 @@ B 是可选的实现前独立案例设计，存在单独配置和授权。它的
 | f91f8b5、686c0af | 区分历史基线与提案实测，保留探针失败及中断操作证据 |
 
 本月主要是对既有委派能力的接入、强化和职责收敛。通用 Agent 委派与 Pi 运行时各有其已有基础。汇报中将候选绑定、角色权限、可复验问题关闭和可审查测试修订称为本项目工程特色；学术新颖性与真实质量增益仍需对应研究证据。
+
+**十　终稿逐项核对表**
+
+| 讲稿内容 | 当前实现依据 | 汇报口径 |
+| --- | --- | --- |
+| 需求与制作的关系 | lean-guide 的 begin 沿原 session_id 调用 enterDesktopLine；制作进入 runAgentLoop | 同一产品主会话，内部按阶段执行，模型路由可配置 |
+| 默认实现负责人 | SOFTWARE_ENGINEERING_INSTRUCTIONS 明确默认一个负责人 | 主负责人直接实现，普通写代码委派属于按需能力 |
+| 本月能力探索 | experiments 的独立目录、命令记录、产物封存与父级读取 | 关键未知驱动的实验、主负责人集成复验 |
+| 模板和组件定位 | lean-production 明确组件为可选资源 | 查契约、调查、实验、集成，最终能力由实测确定 |
+| 子会话约束 | registerParentLoopContext 的并发、渠道和深度检查 | 当前软件委派并发最多两个，深度一层，沿父级约束 |
+| 审阅时机 | verify_app 的 beforeVerify、advanceCloseout、quality.completionAction | 覆盖审阅与候选 C/V 用途分开，宿主按条件安排 |
+| 可选 B | prepareIndependentDesign 的 enabled、授权、GUI 和 distinct model 检查 | 实现前独立案例设计，按配置启用 |
+| C/V 身份与材料 | quality-review、visual-review-material、quality-ledger | 角色材料和权限独立，C/V 当前沿父级渠道 |
+| 测试修订 | proposeTestTransaction、probeTestCorrection、reviewPendingTestCorrections | 封存、隔离实测、独立裁定、精确应用、正式复验 |
+| 产品缺陷关闭 | quality-settlement 及案例绑定检查 | 按具体问题与候选证据结算，失败原因保持可核查 |
+| 持续工程伙伴 | BLOMA_ENGINEERING_PARTNER 显式开关 | 已实现并试验的可选能力 |
+| 发布方式 | promoteSoftwareRelease、stageLongtermMilestone | 快速项目与长期项目分别说明 |
+| 实验数字 | 各日期原报告与指定源码记录 | 历史调度、受控工具对照、本机产品验收各按原范围表述 |
+
+文稿核对采用只读代码和已有证据，文稿提交包含两份组会文件。后续效果实验写为建议安排，最终验收数字对应已有报告及其版本。
