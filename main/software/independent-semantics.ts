@@ -26,6 +26,56 @@ function explicitlyRequested(source: string, category: IndependentCategory) {
 /** Contains only a stable code and a schema path, never model response text. */
 export class IndependentCaseFormatError extends Error {}
 
+function validateOracle(value: unknown, path: string): void {
+  const fail = (field: string, message: string): never => {
+    throw new IndependentCaseFormatError(`INDEPENDENT_ORACLE_INVALID: ${path}${field} ${message}`)
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return fail('', '须为 JSON 对象')
+  }
+  const oracle = value as Record<string, unknown>
+  const fields = (required: string[]) => {
+    for (const field of required) {
+      if (!Object.hasOwn(oracle, field)) fail(`.${field}`, '缺少必填字段')
+    }
+    if (!keys(oracle, ['kind', ...required])) fail('', `仅允许字段 kind、${required.join('、')}，请删除多余字段`)
+  }
+  const nonblank = (field: 'quote' | 'question') => {
+    const value = oracle[field]
+    if (!text(value) || !value.trim()) fail(`.${field}`, '须为非空字符串，最多 4000 字符')
+  }
+  const stepNumber = (index: unknown) => typeof index === 'number' && Number.isSafeInteger(index) && index >= 0
+
+  switch (oracle.kind) {
+    case 'input':
+      fields(['step'])
+      if (!stepNumber(oracle.step)) fail('.step', '须为从 0 开始的整数步骤序号')
+      return
+    case 'literal':
+      fields(['quote'])
+      nonblank('quote')
+      return
+    case 'derived': {
+      fields(['version', 'rule_id', 'steps'])
+      if (oracle.version !== 1) fail('.version', '须为数字 1')
+      if (typeof oracle.rule_id !== 'string' || !/^BR-\d{3,}$/.test(oracle.rule_id)) fail('.rule_id', '须为已确认的规则编号，格式如 BR-001')
+      const steps = oracle.steps
+      if (!Array.isArray(steps) || !steps.length || steps.length > 32 || new Set(steps).size !== steps.length || !steps.every(stepNumber)) {
+        fail('.steps', '须含 1 至 32 个互不重复的从 0 开始的整数步骤序号')
+      }
+      return
+    }
+    case 'unresolved':
+      fields(['question'])
+      nonblank('question')
+      return
+    default:
+      fail('.kind', Object.hasOwn(oracle, 'kind')
+        ? '须为 input、literal、derived 或 unresolved'
+        : '缺少必填字段，须为 input、literal、derived 或 unresolved')
+  }
+}
+
 /** Shape validation keeps all proposed business assertions intact. Semantic
  * disputes are assessed separately, never repaired by changing B's bytes. */
 export function parseIndependentCases(textValue: string, features: string[]): IndependentCases {
@@ -61,11 +111,7 @@ export function parseIndependentCases(textValue: string, features: string[]): In
       if (step.subject !== undefined && !identifier(step.subject)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.subject`)
       if (step.kind === 'click' && step.intent !== undefined && !['submit', 'cancel'].includes(step.intent)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.intent`)
       if (step.kind === 'expect' && step.oracle !== undefined) {
-        const oracle = step.oracle
-        if (!oracle || (oracle.kind === 'input' ? !keys(oracle, ['kind', 'step']) || !Number.isSafeInteger(oracle.step)
-          : oracle.kind === 'literal' ? !keys(oracle, ['kind', 'quote']) || !text(oracle.quote) || !oracle.quote.trim()
-          : oracle.kind === 'derived' ? !keys(oracle, ['kind','version','rule_id','steps']) || oracle.version !== 1 || !/^BR-\d{3,}$/.test(oracle.rule_id) || !Array.isArray(oracle.steps) || !oracle.steps.length || oracle.steps.length > 32 || new Set(oracle.steps).size !== oracle.steps.length || oracle.steps.some(n => !Number.isSafeInteger(n))
-          : oracle.kind === 'unresolved' ? !keys(oracle, ['kind', 'question']) || !text(oracle.question) || !oracle.question.trim() : true)) throw new IndependentCaseFormatError(`INDEPENDENT_ORACLE_INVALID: ${stepPath}.oracle`)
+        validateOracle(step.oracle, `${stepPath}.oracle`)
       }
     }
   }
@@ -122,4 +168,18 @@ export function assessIndependentCases(brief: PrdBackplane, contract: Independen
   return { version: 1, digest: hash({ contract, cases, coverage }), cases, coverage,
     ready: cases.every(c => c.status === 'grounded') && coverage.every(c => ['declared_cases', 'declared_not_applicable'].includes(c.status)) }
 }
-export const INDEPENDENT_SEMANTICS_INSTRUCTIONS = '返回严格JSON {cases:[{id,feature,basis:{requirement_hash,expected_source},coverage:[normal|multi_object|exception|cancel|reopen],steps}],coverage_notes:[{feature,category,disposition:not_applicable|unresolved,reason,source}]}。basis逐字引用确认expected与requirement_hash。step仅fill(control,value,subject可选)、click(control,subject可选,intent可选submit|cancel)、expect(control,equals,subject可选,oracle)、restart；control是逻辑控件名，不是选择器。expect.oracle可用derived(version:1,rule_id:已确认规则编号,steps:先前同对象fill序号数组)，运算仅取该规则verification.operation，equals必须与宿主计算一致；没有明确规则不得推断。其余仅input(step:先前fill的从0开始序号，equals须等于该输入且对象一致)、literal(quote:确认expected中逐字业务值，equals等于quote)、unresolved(question:规则未明)。不凭常识新增规则；规则未明用unresolved，不硬编预期。每需求有normal；其余四种错误面用案例coverage或coverage_notes说明不适用/待澄清及确认来源；不适用声明不是覆盖证明。多对象须不同subject及不同值并各自断言，取消操作标intent:cancel且其后断言，重开后必须断言。related可引用本批其它需求的{feature,requirement_hash,expected_source}作为跨模块规则依据，引用必须逐字对应确认资料；关联引用本身不计入该需求覆盖，仍须其自己的正常案例。最多12案例，每案例32步；不得返回PASS或修改目标。'
+export const INDEPENDENT_SEMANTICS_INSTRUCTIONS = [
+  '返回严格 JSON {cases:[{id,feature,basis:{requirement_hash,expected_source},coverage:[normal|multi_object|exception|cancel|reopen],steps}],coverage_notes:[{feature,category,disposition:not_applicable|unresolved,reason,source}]}。basis 逐字引用确认 expected 与 requirement_hash。',
+  '步骤仅支持 fill（control、value、可选 subject）、click（control、可选 subject、可选 intent: submit 或 cancel）、expect（control、equals、可选 subject、oracle）、restart。每个步骤用 kind 指定类型。control 是逻辑控件名，不是选择器。',
+  '每个 expect 的 oracle 是一个 JSON 对象，必须含 kind。以下每行是完整步骤示例。只使用对应 oracle 示例中的字段，值须根据当前确认资料填写。',
+  '{"kind":"expect","control":"result","equals":"Alice","oracle":{"kind":"input","step":0}}',
+  'input 引用同对象之前的 fill。step 是从 0 开始的整数步骤序号，equals 等于该输入原值。',
+  '{"kind":"expect","control":"result","equals":"已保存","oracle":{"kind":"literal","quote":"已保存"}}',
+  'literal 逐字引用当前或关联需求已确认 expected 中的业务值，equals 必须等于 quote。',
+  '{"kind":"expect","control":"result","equals":"5","oracle":{"kind":"derived","version":1,"rule_id":"BR-001","steps":[0,1]}}',
+  'derived 仅引用确认资料中带 verification.operation 的规则。version 为数字 1，rule_id 为确认的规则编号，steps 是之前同对象 fill 的从 0 开始且互不重复的整数序号。equals 须等于按该规则对这些输入的确定性计算结果。',
+  '{"kind":"expect","control":"result","equals":"","oracle":{"kind":"unresolved","question":"输入“嗯，我下午三点到”时，清理后的完整文本应是什么？"}}',
+  '缺少可确认的预期值或规则时，用 unresolved。equals 填空字符串，question 给出一个具体输入并询问应观察到的结果。该步骤供用户澄清，不能作为通过依据。示例内容不属于当前任务，不能直接照搬。',
+  '每需求有 normal。其余四种错误面用案例 coverage 或 coverage_notes 说明不适用或待澄清及确认来源，不适用声明不是覆盖证明。多对象须不同 subject 及不同值并各自断言。取消操作标 intent:cancel 且其后断言，重开后必须断言。',
+  'related 可引用本批其他需求的 {feature,requirement_hash,expected_source} 作为跨模块规则依据，引用必须逐字对应确认资料。关联引用本身不计入该需求覆盖，仍须其自己的正常案例。最多 12 案例，每案例 32 步，不得返回 PASS 或修改目标。',
+].join('\n')

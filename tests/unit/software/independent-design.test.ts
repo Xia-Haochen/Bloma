@@ -166,12 +166,34 @@ it('retains a safe field diagnostic for invalid B output and freezes only a vali
   expect(resumed).toMatchObject({status:'frozen', contract})
   expect(calls).toBe(2)
 })
-it('records default B disputes before an application launch file exists',async()=>{
+it('reports the exact oracle field without echoing unchecked model values or keys', () => {
+  const base = contract.cases[0]
+  const step = base.steps.at(-1)!
+  const failures: Array<[unknown, string]> = [
+    ['private-sample', 'steps[2].oracle 须为 JSON 对象'],
+    [{ kind: 'private-sample' }, 'steps[2].oracle.kind 须为 input、literal、derived 或 unresolved'],
+    [{ kind: 'input' }, 'steps[2].oracle.step 缺少必填字段'],
+    [{ kind: 'input', step: 0, 'private-sample': true }, '仅允许字段 kind、step，请删除多余字段'],
+    [{ kind: 'derived', version: '1', rule_id: 'BR-001', steps: [0] }, 'steps[2].oracle.version 须为数字 1'],
+    [{ kind: 'derived', version: 1, rule_id: 'BR-001', steps: [0, 0] }, 'steps[2].oracle.steps 须含 1 至 32 个互不重复'],
+    [{ kind: 'literal', quote: '   ' }, 'steps[2].oracle.quote 须为非空字符串'],
+    [{ kind: 'unresolved', question: '' }, 'steps[2].oracle.question 须为非空字符串'],
+  ]
+  for (const [oracle, diagnostic] of failures) {
+    const proposal = { cases: [{ ...base, steps: [...base.steps.slice(0, -1), { ...step, oracle }] }] }
+    const parse = () => parseIndependentCases(JSON.stringify(proposal), ['F-001'])
+    expect(parse).toThrow('INDEPENDENT_ORACLE_INVALID: cases[0].steps[2].oracle')
+    expect(parse).toThrow(diagnostic)
+    expect(parse).not.toThrow(/private-sample/)
+  }
+})
+it('routes an unresolved oracle to user clarification before implementation',async()=>{
  const options=sharedInput(),messages:string[]=[]
  const unresolved=structuredClone(contract)
  const last=unresolved.cases[0].steps.at(-1)!
  if(last.kind!=='expect')throw Error('fixture')
- last.oracle={kind:'unresolved',question:'Which saved value is required?'}
+ last.equals=''
+ last.oracle={kind:'unresolved',question:'输入“嗯，我下午三点到”时，清理后的完整文本应是什么？'}
  const routed:SDKQuery=async function*(_prompt,settings){
   expect(settings.accounting?.role).toBe('acceptance_designer')
   yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify(unresolved)}]}}
@@ -179,7 +201,7 @@ it('records default B disputes before an application launch file exists',async()
  await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'default-dispute',content:'按已确认目标制作',maxTokens:8192,signal:AbortSignal.timeout(30000)},routed,options.primaryEnv,
   {publish:()=>{},persistAssistant:(_session,text)=>messages.push(text),persistSystem:()=>{},complete:()=>{}})
  expect(findProject(project.project_id).current_stage,JSON.stringify(messages)).toBe('blocked_for_user_decision')
- expect(messages.join('\n')).toContain('Which saved value is required?')
+ expect(messages.join('\n')).toContain(last.oracle.question)
  const ledger=JSON.parse(readFileSync(join(home,'software-quality',project.project_id+'.json'),'utf8'))
  expect(ledger.findings.some((finding:any)=>finding.disposition==='disputed')).toBe(true)
 },60000)
