@@ -64,6 +64,7 @@ select, input[type="datetime-local"], input[type="search"] { min-height: 40px; m
 .metric span, .metric small { font-size: 13px; color: var(--muted); }
 .metric strong { font-size: clamp(19px, 2.5vw, 29px); line-height: 1.25; letter-spacing: -.025em; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .analysis, .conversation { margin-bottom: 16px; padding: 20px; }
+#turns-title { scroll-margin-top: 12px; }
 fieldset { min-width: 0; border: 0; margin: 0; padding: 0; }
 .switcher { display: flex; flex-wrap: wrap; gap: 3px; padding: 3px; border-radius: 9px; background: #edf1f8; }
 .switcher label { display: grid; position: relative; cursor: pointer; }
@@ -118,7 +119,8 @@ dialog::backdrop { background: #121b3466; }
 #failure-list details { padding: 8px 0; border-bottom: 1px solid var(--line); }
 .audit-evidence { margin: 6px 0 8px; padding-left: 20px; color: var(--muted); overflow-wrap: anywhere; white-space: normal; }
 .request-audit { max-width: 330px; min-width: 200px; white-space: normal; }
-.audit-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* Keep the screen-reader labels in this panel's scroll container. */
+.audit-filters { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .module-option { display: block; color: var(--muted); font-size: 13px; margin: 8px 0; }
 .track .success { background: #239484; }
 .track .failed { background: #bc3849; }

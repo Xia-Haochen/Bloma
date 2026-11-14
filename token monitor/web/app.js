@@ -418,6 +418,9 @@ export function mountTokenMonitor(root, transport) {
     $(id).addEventListener("click", () => {
       state.page += step;
       renderTurns(state.data.rows.filter(inRange));
+      const heading = $("turns-title");
+      heading.focus({preventScroll: true});
+      heading.scrollIntoView({block: "start", inline: "nearest"});
     });
   }
   function refreshPriceView() {
