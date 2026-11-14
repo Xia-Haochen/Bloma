@@ -37,6 +37,7 @@ import { randomUUID } from 'node:crypto'
 import { isLongtermSoftware, readLongtermState } from '../software/longterm-state'
 import { performLongtermAction } from '../software/longterm-control'
 import { softwareModelSettings, saveSoftwareModelSettings } from '../software/independent-settings'
+import { assistedAcceptanceAction, assistedAcceptanceView } from '../software/assisted-acceptance'
 
 const SKIP_DIRS = new Set(['archive', 'node_modules', 'dist', '.git', '__pycache__', '00_VERIFY/screenshots'])
 const MAX_FILES = 200
@@ -77,6 +78,10 @@ function listFiles(rootPath: string): string[] {
 }
 
 export function registerProjectDeliverablesIpc(ipcMain: IpcMain, _mainWindow: BrowserWindow): void {
+  ipcMain.handle(IPC_CHANNELS.ASSISTED_ACCEPTANCE, (_event,payload:unknown)=>safeInvoke(extractRequestId(payload),async()=>{
+    const input=requireFields<import('../../shared/types').AssistedAcceptanceInput>(payload,['request_id','project_id','action'])
+    return assistedAcceptanceAction(input,hasRunForProject(input.project_id))
+  }))
   ipcMain.handle(IPC_CHANNELS.SOFTWARE_MODEL_SETTINGS_GET, (_event,payload:unknown)=>safeInvoke(extractRequestId(payload),()=>{
     const input=requireFields<ProjectDeliverablesInput>(payload,['request_id','project_id'])
     const state=softwareModelSettings(input.project_id)
@@ -151,6 +156,7 @@ export function registerProjectDeliverablesIpc(ipcMain: IpcMain, _mainWindow: Br
       }
       result.can_launch = (project.current_stage === 'completed' || Boolean(stable)) && result.launch.parse_ok
       if (isSoftwareProject(project.project_id)) {
+        result.assisted_acceptance = assistedAcceptanceView(project.project_id) ?? undefined
         try{result.project_progress=projectProgress(project.project_id,hasRunForProject(project.project_id))}catch{result.project_progress_error='项目执行记录暂不可读，不能据此推断完成。'}
         result.status_view = softwareStatusView(project.project_id, hasRunForProject(project.project_id))
         if(isLongtermSoftware(project.project_id))try{result.longterm=readLongtermState(project.project_id)}catch(error){result.longterm_error=String(error)}

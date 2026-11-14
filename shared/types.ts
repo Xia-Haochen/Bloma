@@ -97,6 +97,7 @@ export const IPC_CHANNELS = {
   /** 交付面板（2026-10-04 呈现层收口）：桌面项目文件清单+DELIVERY.md+启动声明；启动程序 */
   PROJECT_DELIVERABLES: 'project:deliverables',
   PROJECT_LAUNCH_APP: 'project:launch-app',
+  ASSISTED_ACCEPTANCE: 'project:assisted-acceptance',
   SOFTWARE_SUGGESTIONS_DECIDE: 'software:suggestions-decide',
   SOFTWARE_LONGTERM_ACTION: 'software:longterm-action',
   SOFTWARE_MODEL_SETTINGS_GET: 'software:model-settings-get',
@@ -478,6 +479,7 @@ export interface SoftwareProjectProgress {
   observed_strategy_segments:number;note:string
 }
 export interface ProjectDeliverablesResult {
+  assisted_acceptance?: AssistedAcceptanceView
   project_progress?:SoftwareProjectProgress
   project_progress_error?:string
   status_view?: SoftwareStatusView
@@ -508,6 +510,27 @@ export interface ProjectDeliverablesResult {
   }
   /** 仅 completed 项目可启动（安全门/冒烟已过） */
   can_launch: boolean
+}
+
+export interface AssistedAcceptanceView {
+  candidate_id: string
+  attempt_id?: string
+  phase: 'available'|'preparing'|'ready'|'recording'|'decoding'|'verifying'|'passed'|'failed'|'unavailable'|'cancelled'|'interrupted'|'stale'
+  devices?: Array<{id:number;name:string}>
+  observation?: { text?:string; rms?:number; device_name?:string }
+  can_confirm?: boolean
+  assessment_source?: 'automatic'|'user_observation'
+  remaining_seconds?:number
+  level?:number
+  detail: string
+}
+export interface AssistedAcceptanceInput extends RequestEnvelope {
+  project_id: string
+  action: 'query'|'start'|'capture'|'cancel'|'open'|'feedback'
+  candidate_id?: string
+  attempt_id?: string
+  device?: number
+  accepted?: boolean
 }
 
 /** 启动程序输入。 */
@@ -1945,6 +1968,7 @@ export type ElectronAPI = {
     onArtifactEvent(listener: (payload: DesktopArtifactEventPayload) => void): () => void
   }
   projectDeliverables: {
+    assistedAcceptance(input:AssistedAcceptanceInput):Promise<ApiResult<AssistedAcceptanceView | null>>
     modelSettings(input:ProjectDeliverablesInput):Promise<ApiResult<SoftwareModelSettings>>
     saveModelSettings(input:SoftwareModelSettingsSave):Promise<ApiResult<SoftwareModelSettings>>
     longtermAction(input:LongtermActionInput):Promise<ApiResult<{state:LongtermProjectState;detail:string}>>

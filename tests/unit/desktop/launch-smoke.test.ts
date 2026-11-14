@@ -1,13 +1,13 @@
 /**
  * launch-smoke 单测（2026-10-04 呈现层收口）：声明解析 + 冒烟编排（spawn/capture 注入）。
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { EventEmitter } from 'node:events'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { parseLaunchDeclaration, parseProbeJson, runLaunchSmoke, requireLaunchDeclaration, LAUNCH_RELATIVE_PATH, type LaunchProbeCriteria, type ProbeRunInput } from '../../../main/desktop/launch-smoke'
-import type { ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 
 class FakeChild extends EventEmitter {
   exitCode: number | null = null
@@ -333,3 +333,24 @@ describe('parseProbeJson（探针输出解析）', () => {
     expect(parseProbeJson('not json at all')).toBeNull()
   })
 })
+
+it.runIf(process.platform==='win32')('observes a real owned window whose title changes, retaining process, responsiveness and close checks',async()=>{
+  const root=makeRoot(JSON.stringify({schema_version:1,command:['python','app.py'],window_title:'Original static title'}))
+  writeFileSync(join(root,'app.py'),'import tkinter as tk\nroot=tk.Tk()\nroot.title("Current document title")\nroot.geometry("320x160")\nroot.mainloop()\n')
+  try {
+    const result=await runLaunchSmoke(root,{graceMs:300,probeReadyMs:4000,probeStableMs:300,probeCloseMs:2000})
+    expect(result.passed,result.detail).toBe(true)
+    expect(result.criteria).toMatchObject({window_found:true,responsive:true,stable:true,closed_gracefully:true,title_hint_matched:false,observed_title:'Current document title'})
+  } finally {rmSync(root,{recursive:true,force:true,maxRetries:3,retryDelay:100})}
+},20000)
+it.runIf(process.platform==='win32')('never uses an unrelated visible window to satisfy a windowless owned launch',async()=>{
+  const root=makeRoot(JSON.stringify({schema_version:1,command:['python','waiting.py'],window_title:'Unrelated visible window'}))
+  writeFileSync(join(root,'other.py'),'import tkinter as tk\nroot=tk.Tk()\nroot.title("Unrelated visible window")\nroot.geometry("320x160")\nroot.mainloop()\n')
+  writeFileSync(join(root,'waiting.py'),'import time\ntime.sleep(20)\n')
+  const other=spawn('python',['other.py'],{cwd:root,windowsHide:true,stdio:'ignore'})
+  try {
+    const result=await runLaunchSmoke(root,{graceMs:300,probeReadyMs:1500,probeStableMs:200,probeCloseMs:1000})
+    expect(result.passed).toBe(false)
+    expect(result.criteria?.window_found).toBe(false)
+  } finally {other.kill();await new Promise(resolve=>other.once('exit',resolve));rmSync(root,{recursive:true,force:true,maxRetries:3,retryDelay:100})}
+},20000)

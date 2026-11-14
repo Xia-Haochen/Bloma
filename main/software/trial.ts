@@ -31,7 +31,7 @@ export function softwareTrial(projectId: string): SoftwareTrial | undefined {
 }
 /** User-owned trial snapshots have synthetic data and no delivery authority.
  * A replacement is started and checked before the previous usable one stops. */
-export async function launchSoftwareTrial(projectId: string, expectedVersion?: string, restart = false): Promise<ProjectLaunchAppResult> {
+export async function launchSoftwareTrial(projectId: string, expectedVersion?: string, restart = false, candidateId?:string): Promise<ProjectLaunchAppResult> {
   if (busy.has(projectId)) return { started: false, detail: '试用版本正在准备。' }
   busy.add(projectId)
   let started: string | undefined
@@ -42,7 +42,7 @@ export async function launchSoftwareTrial(projectId: string, expectedVersion?: s
       try { process.kill(previous.pid, 0) } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') alive = false; else throw error }
       if (alive) throw Error('TRIAL_PREVIOUS_HOST_INSTANCE: 请自行保存并关闭旧试用；不会接管旧PID')
     }
-    if (previous?.state === 'running' && !restart) return { started: true, trial: previous, url: previous.url, detail: '继续使用已固定版本；自动验收不影响此实例。' }
+    if (previous?.state === 'running' && !restart && (!candidateId || candidateId===previous.release_id)) return { started: true, trial: previous, url: previous.url, detail: '继续使用已固定版本；自动验收不影响此实例。' }
     if (restart && expectedVersion !== previous?.release_id) throw Error('TRIAL_VERSION_CHANGED')
     const project = findProject(projectId), brief = readPrdBackplane(projectId), scope = prdScopeFingerprint(brief)
     if (!brief.user_confirmed_at || project.ux_confirmation?.prd_fingerprint !== scope) throw Error('TRIAL_CONFIRMED_SCOPE_REQUIRED')
@@ -51,7 +51,8 @@ export async function launchSoftwareTrial(projectId: string, expectedVersion?: s
     if(sealed)await verifyReleaseSource(sealed)
     const stageId = !sealed && project.status !== 'completed' && brief.project_plan ? latestCheckedStageCandidate(projectId) : undefined
     const stageRelease = stageId ? await readSoftwareCandidate(projectId, stageId) : undefined
-    const release = sealed??stageRelease??await prepareSoftwareRelease(projectId, project.root_path)
+    const release = candidateId ? await readSoftwareCandidate(projectId,candidateId) : sealed??stageRelease??await prepareSoftwareRelease(projectId, project.root_path)
+    if(candidateId)await verifyReleaseSource(release)
     assertSoftwareDelivery(brief, release.launch)
     if (!['browser', 'electron'].includes(release.launch.ui ?? '')&&release.launch.mode!=='command') throw Error('TRIAL_RUNTIME_UNSUPPORTED: 当前独立试用支持Electron/浏览器及一次性命令')
     const scan = runSecurityScan({ project_id: projectId, root_path: release.root, profile: 'local-software' })

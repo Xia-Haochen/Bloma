@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, afterEach, describe, expect, it } from 'vitest'
-import { runHostSpeechProbe, hasCurrentMicrophoneEvidence, recordManualSpeechComponentAcceptance } from '../../../main/desktop/speech-verification'
+import { runHostSpeechProbe, hasCurrentMicrophoneEvidence, recordManualSpeechComponentAcceptance, saveMicrophoneEvidence, microphoneEvidenceVersion } from '../../../main/desktop/speech-verification'
 import { createHash } from 'node:crypto'
 import { restorePromaHome } from '../../support/proma-home-guard'
 
@@ -54,5 +54,15 @@ describe('host speech evidence', () => {
     expect(hasCurrentMicrophoneEvidence('p1', root, speech)).toBe(true)
     writeFileSync(join(root, 'speech_runtime.py'), '# changed product')
     expect(hasCurrentMicrophoneEvidence('p1', root, speech)).toBe(false)
+  })
+  it('separately records human acceptance without rewriting the automatic mismatch, invalidating cached verification',()=>{
+    const before=microphoneEvidenceVersion('p1')
+    const observed={...report,status:'passed' as const,real_decode_calls:4,microphone:{status:'failed',rms:.003,text:'嗯下周四下午3点开会。'}}
+    expect(()=>saveMicrophoneEvidence('p1',root,speech,observed)).toThrow('INCOMPLETE')
+    saveMicrophoneEvidence('p1',root,speech,observed,{attempt_id:'attempt',candidate_id:'a'.repeat(64)})
+    expect(observed.microphone.status).toBe('failed')
+    expect(hasCurrentMicrophoneEvidence('p1',root,speech)).toBe(true)
+    expect(microphoneEvidenceVersion('p1')).not.toBe(before)
+    expect(()=>saveMicrophoneEvidence('p1',root,speech,{...observed,real_decode_calls:3},{attempt_id:'attempt',candidate_id:'a'.repeat(64)})).toThrow('INCOMPLETE')
   })
 })

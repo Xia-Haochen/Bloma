@@ -10,6 +10,8 @@ import json
 import re
 import sys
 import wave
+import time
+import os
 from pathlib import Path
 import numpy as np
 
@@ -31,6 +33,7 @@ def main():
     parser.add_argument("--rate-argument", action="store_true")
     parser.add_argument("--fixture", required=True)
     parser.add_argument("--microphone", action="store_true")
+    parser.add_argument("--control-dir")
     args = parser.parse_args()
     for symbol in [args.module, args.factory, args.method]:
         if not re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", symbol):
@@ -85,16 +88,50 @@ def main():
         mic = {"status": "not_run"}
         if args.microphone:
             import sounddevice
+            device = None
+            def progress(value):
+                if args.control_dir:
+                    target = Path(args.control_dir) / "progress.json"
+                    temporary = target.with_suffix(".tmp")
+                    temporary.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+                    os.replace(temporary, target)
+            if args.control_dir:
+                devices = [{"id": i, "name": d["name"]} for i, d in enumerate(sounddevice.query_devices()) if d["max_input_channels"] > 0]
+                if not devices:
+                    raise RuntimeError("MICROPHONE_NO_INPUT_DEVICE")
+                progress({"phase": "ready", "devices": devices})
+                deadline = time.monotonic() + 180
+                command = Path(args.control_dir) / "capture.json"
+                while not command.exists():
+                    if time.monotonic() > deadline:
+                        raise RuntimeError("MICROPHONE_START_EXPIRED")
+                    time.sleep(.1)
+                device = json.loads(command.read_text(encoding="utf-8"))["device"]
+                if type(device) is not int or device not in [d["id"] for d in devices]:
+                    raise RuntimeError("MICROPHONE_DEVICE_CHANGED")
             print("MICROPHONE_READY: 请说：我们下周四下午三点开会。录音 8 秒。", flush=True)
-            captured = sounddevice.rec(8 * 16000, samplerate=16000, channels=1, dtype="float32")
+            captured = sounddevice.rec(8 * 16000, samplerate=16000, channels=1, dtype="float32", device=device)
+            # Announce readiness only after PortAudio has opened the device.
+            started = time.monotonic()
+            while args.control_dir and time.monotonic() - started < 8:
+                elapsed = time.monotonic() - started
+                end = min(len(captured), int(elapsed * 16000))
+                recent = captured[max(0, end - 4000):end]
+                level = float(np.sqrt(np.mean(recent * recent))) if len(recent) else 0
+                progress({"phase": "recording", "device": device, "remaining_seconds": max(1, 8 - int(elapsed)), "level": level})
+                time.sleep(.25)
             sounddevice.wait()
+            progress({"phase": "decoding", "device": device})
             before = observed["real_decode_calls"]
             text = target(captured, 16000) if args.rate_argument else target(captured)
             rms = float(np.sqrt(np.mean(captured * captured)))
-            mic = {"status": "passed" if rms >= .001 and normalized(str(text)) == "我们下周四下午3点开会" and observed["real_decode_calls"] > before else "failed", "rms": rms, "text": str(text), "seconds": 8}
+            mic = {"status": "passed" if rms >= .001 and normalized(str(text)) == "我们下周四下午3点开会" and observed["real_decode_calls"] > before else "failed", "rms": rms, "text": str(text), "seconds": 8,
+                   "device": device, "device_name": sounddevice.query_devices(device, "input")["name"]}
         report = {"probe_version": 1, "status": "passed" if all(t["passed"] for t in tests) else "failed", "source": "host_audio_fixture", "tests": tests, "microphone": mic, **observed}
         print(json.dumps(report, ensure_ascii=False), flush=True)
-        return 0 if report["status"] == "passed" and mic["status"] != "failed" else 1
+        # Process success describes a complete measurement. Microphone failure
+        # remains a separate observation, not a missing fixed-fixture report.
+        return 0 if report["status"] == "passed" else 1
     finally:
         sherpa_onnx.OfflineRecognizer = original
 

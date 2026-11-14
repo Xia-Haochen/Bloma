@@ -1,4 +1,5 @@
 import { ProjectExecutionPanel } from './ProjectExecutionPanel'
+import { AssistedAcceptancePanel } from './AssistedAcceptancePanel'
 import React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { RotateCw, LayoutTemplate, Play } from './icons'
@@ -165,6 +166,7 @@ export const DeliveryPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
         </button>
       </div>
 
+      {projectId&&<AssistedAcceptancePanel key={projectId} projectId={projectId} onChanged={()=>void refresh()} />}
       <Inspection className={hasCanvas ? 'workspace-delivery-inspector workspace-status-inspector' : undefined}>
       {hasCanvas && <summary onClick={inspect}>{data?.status_view?.execution.label ?? '当前状态'} · 检查与启动</summary>}
       <div className={hasCanvas ? 'workspace-inspection-content' : undefined}>

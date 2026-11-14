@@ -31,6 +31,7 @@ import { independentAdapterVersion, verifyIndependentDesign } from './independen
 import { recordEvaluationEvent } from './harness-evaluation'
 import { capabilityBindingVersion } from './capability-bindings'
 import { recordIndependentFindings, independentChallengeVersion } from './independent-quality'
+import { microphoneEvidenceVersion } from '../desktop/speech-verification'
 import { settleObservedQuality } from './quality-settlement'
 
 export interface SoftwareVerification { status: 'passed' | 'failed' | 'unverified' | 'environment_blocked'; summary: string; candidate?: SoftwareRelease;
@@ -47,6 +48,14 @@ export function locallyVerifiedSoftware(result: SoftwareVerification): boolean {
     && result.core.distribution?.status === 'environment_blocked' && result.launch?.passed === true
 }
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
+export function awaitingUserChecks(core?: CoreVerificationResult): boolean {
+  const pending = new Set(core?.pending_user_checks?.map(check => check.feature))
+  return !!core && pending.size > 0 && core.status === 'unverified'
+    && core.host_gui?.status === 'passed' && core.speech?.status === 'passed'
+    && core.requirements?.every(row => row.verification === 'passed'
+      || row.verification === 'unverified' && pending.has(row.id)) === true
+    && core.distribution?.status === 'passed' && (!core.llm || core.llm.status === 'passed')
+}
 const poisoned = new Set<string>()
 function receiptPath(projectId: string) {
   if (!/^[A-Za-z0-9_-]+$/.test(projectId)) throw Error('SOFTWARE_VERIFY_PROJECT_INVALID')
@@ -87,7 +96,7 @@ export async function verificationInputs(projectId: string, requestId: string, s
   const source=(await runtimeInventory(project.root_path,signal)).digest
   const input_identity={source,scope:prdScopeFingerprint(brief),rules:digest([ruleVersion,fixtureVersion]),
     environment:digest([runtime,resolved.command,resolved.env,runtimeBindingVersion(projectId),capabilityBindingVersion(projectId),implementation,process.platform,process.arch,process.versions.node]),request_id:requestId,operation_id:project.lean_operation_id}
-  return { input_identity, key: digest({ protocol: 2, source, operation: project.lean_operation_id,test_corrections:testCorrectionVersion(projectId),
+  return { input_identity, key: digest({ protocol: 2, source, operation: project.lean_operation_id,test_corrections:testCorrectionVersion(projectId),microphone_evidence:microphoneEvidenceVersion(projectId),
     scope: prdScopeFingerprint(brief), confirmed: brief.user_confirmed_at, ux: project.ux_confirmation, rules: ruleVersion, fixtures: fixtureVersion,
     runtime, command: resolved.command, environment: resolved.env, managed: runtimeBindingVersion(projectId),capabilities:capabilityBindingVersion(projectId), independent:independentDesignVersion(projectId),independent_challenges:independentChallengeVersion(projectId),adapter:independentAdapterVersion(project.root_path),implementation, platform: process.platform, arch: process.arch, node: process.versions.node }), reusable }
 }
@@ -153,14 +162,15 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
     if (result.native_plan) result.native_plan.execution = 'attempted'
     const core = result.core = await runCoreVerification({ projectId, sandboxRoot: candidate.root, signal })
     const localPending = core.local_status === 'passed' && core.distribution?.status === 'environment_blocked'
-    if (core.status !== 'passed' && !localPending) { result.status = core.status; result.summary = [core.summary, ...core.missing].join('\n'); return result }
+    const userPending = awaitingUserChecks(core)
+    if (core.status !== 'passed' && !localPending && !userPending) { result.status = core.status; result.summary = [core.summary, ...core.missing].join('\n'); return result }
     const independent = result.independent = await verifyIndependentDesign(projectId,candidate,signal,core)
     if(independent.status!=='disabled'&&independent.status!=='passed'){
       result.status = independent.status
       result.summary = independent.semantics?.ready === false ? '独立案例的预期或覆盖仍需核对。'
         : independent.status === 'failed' ? '独立验收发现实际行为未达到预期。'
         : '独立验收未完成，请查看执行记录。'
-      return result
+      if(independent.status==='failed')return result
     }
     const launch = result.launch = await runLaunchSmoke(candidate.root, { signal, allowCleanExit: candidate.launch.mode === 'command',projectId })
     const brief = readPrdBackplane(projectId), windowReady = brief.lean_brief?.ui !== 'required'
@@ -169,7 +179,11 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
     if (!launch.passed || !windowReady) { result.status = 'unverified'; result.summary = `正常启动未通过：${launch.detail}${launch.outputExcerpt?'\n'+launch.outputExcerpt.slice(-4000):''}`; return result }
     await verifyReleaseSource(candidate, signal)
     if ((await verificationInputs(projectId, requestId, signal)).key !== version.key) throw Error('SOFTWARE_VERIFY_INPUT_CHANGED')
-    result.status = localPending ? 'environment_blocked' : 'passed'; result.summary = localPending ? core.distribution!.detail : '当前候选已登记的本机案例、安全静态检查与正常启动通过；完整实现和真实模型效果尚未由这些检查评定。'
+    // An unconfigured B adapter must not suppress independent launch evidence.
+    if(independent.status==='unverified')return result
+    result.status = userPending ? 'unverified' : localPending ? 'environment_blocked' : 'passed'
+    result.summary = userPending ? '自动检查已完成，请在“继续验收”中完成麦克风实测。'
+      : localPending ? core.distribution!.detail : '当前候选已登记的本机案例、安全静态检查与正常启动通过；完整实现和真实模型效果尚未由这些检查评定。'
     return result
   } catch (error) {
     signal?.throwIfAborted(); result.status = 'unverified'; result.summary = error instanceof Error ? error.message : String(error); result.failure = verificationFailure(result, error); return result

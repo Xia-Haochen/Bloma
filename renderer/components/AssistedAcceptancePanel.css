@@ -1,0 +1,22 @@
+.assisted-acceptance { padding: 16px; border-bottom: 1px solid var(--color-border, #d5dcd4); font-size: 15px; line-height: 1.6; }
+.assisted-acceptance button { min-height: 44px; padding: 9px 20px; border: 1px solid #8b9989; border-radius: 9px; background: #fff; color: #283b2d; font: inherit; font-weight: 600; cursor: pointer; }
+.assisted-acceptance button:hover:not(:disabled) { background: #eef3ed; }
+.assisted-acceptance button:disabled { background: #e4e8e2; border-color: #c5cdc2; color: #6f796b; cursor: not-allowed; }
+.assisted-acceptance button:focus-visible, .assisted-acceptance select:focus-visible { outline: 3px solid #48704e; outline-offset: 3px; }
+.assisted-acceptance .assisted-toggle { display: flex; align-items: center; gap: 24px; }
+.assisted-content { margin-top: 16px; padding: 18px; border: 1px solid #c6d2c2; border-radius: 12px; background: #fff; color: #26342a; }
+.assisted-content h3 { margin: 0 0 12px; font-size: 20px; }
+.assisted-content p { margin: 10px 0; overflow-wrap: anywhere; }
+.assisted-status { padding: 12px 14px; background: #eef3ed; border-left: 4px solid #59765b; border-radius: 5px; }
+.assisted-status-recording { color: #902f26; background: #fff0ed; border-left-color: #b74435; }
+.assisted-status-failed, .assisted-status-unavailable { background: #fff6e5; border-left-color: #b77b20; }
+.assisted-content label { display: grid; gap: 8px; margin-top: 18px; font-weight: 600; }
+.assisted-content select { box-sizing: border-box; min-height: 46px; width: 100%; min-width: 0; padding: 10px; border: 1px solid #82977b; border-radius: 8px; color: #26342a; background: #fff; font: inherit; }
+.assisted-phrase strong { display: block; margin-top: 5px; font-size: 18px; }
+.assisted-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 20px 0; }
+.assisted-acceptance .assisted-primary { min-width: 156px; background: #365e3d; border-color: #365e3d; color: #fff; }
+.assisted-acceptance .assisted-primary:hover:not(:disabled) { background: #284a2e; }
+.assisted-acceptance .assisted-primary:disabled { background: #e4e8e2; border-color: #c5cdc2; color: #6f796b; }
+.assisted-content details { padding-top: 10px; border-top: 1px solid #e0e6dc; color: #536450; }
+.assisted-content summary { cursor: pointer; padding: 5px 0; }
+.assisted-content meter { width: 100%; height: 20px; }

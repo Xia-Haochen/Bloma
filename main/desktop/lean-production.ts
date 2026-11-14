@@ -15,6 +15,7 @@ import {executionWindowFacts,currentFundedExecutionWindow,optionalExecutionAdmis
 import { productDesignPolicy } from '../project/product-design-policy'
 import { beginProjectAssignment } from '../software/task-assignment'
 import { readFileSync, existsSync } from 'node:fs'
+import { pendingAssistedCandidate } from '../software/assisted-acceptance'
 import { join } from 'node:path'
 import type { SDKQuery, SDKQueryOptions } from '../orchestration/stages/orchestration-contracts'
 import { runAgentLoop, withAbort } from '../agent/loop/agent-loop'
@@ -51,7 +52,7 @@ import { stopSoftwareSession, settleSoftwareCommands,redactSoftwareOutput } from
 import { closeDebugSessions, retainedDebugVersion } from '../software/debug-sessions'
 import { prepareSoftwareRelease, promoteSoftwareRelease, sealSoftwareRelease, verifyReleaseSource } from '../software/release-store'
 import { saveSoftwareRegressionBaseline } from '../software/regression-baseline'
-import { verifySoftwareCandidate, recentSoftwareVerification } from '../software/verification'
+import { verifySoftwareCandidate, recentSoftwareVerification, awaitingUserChecks } from '../software/verification'
 import { verificationResponse, verificationToolFeedback } from '../software/verification-report'
 import { importedProjectContext } from '../software/import-project'
 import { saveSoftwareRunState, readSoftwareRunState, recordSoftwareRepair, type SoftwareRunStatus } from '../software/run-state'
@@ -80,6 +81,16 @@ export async function runLeanProduction(input: DesktopRouteInput, deps: DesktopR
     deps.publish(input,'message_delta',{text:'项目已归档或放弃，版本和数据保留；恢复项目后才能继续制作。'});deps.complete(input.sessionId,input.projectId,'incomplete');return
   }
   if(await handleLongtermMessage(input,deps))return
+  if (!isStop(input.content) && /^(?:继续|继续完成原任务|恢复|查看进度|查看结果)[。！!\s]*$/.test(input.content.trim())) {
+    const candidate = await pendingAssistedCandidate(input.projectId)
+    if (candidate) {
+      saveSoftwareRunState({projectId:input.projectId,sessionId:input.sessionId,runId:randomUUID(),status:'waiting_user',candidateId:candidate.id,
+        error:'请在“继续验收”中完成实体麦克风实测。'})
+      const text='请打开“继续验收”，选择麦克风完成实测。'
+      deps.persistAssistant(input.sessionId,text);deps.publish(input,'message_delta',{text});deps.complete(input.sessionId,input.projectId,'incomplete')
+      return
+    }
+  }
   project=findProject(input.projectId)
   if(input.cardOptionId){deps.publish(input,'message_delta',{text:'确认卡已不属于当前制作阶段，请刷新任务单或当前里程碑后操作。'});deps.complete(input.sessionId,input.projectId,'incomplete');return}
   if (isSoftwareProject(input.projectId) && /^(?:继续|恢复|查看进度|查看结果)[。！!\s]*$/.test(input.content.trim())) {
@@ -534,6 +545,9 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
           return undefined
         },
         afterTools: async (ctx, calls) => {
+          if (calls.some(call=>call.name==='verify_app') && await pendingAssistedCandidate(input.projectId, input.requestId)) {
+            throw new ModelRequestRefusal('USER_ACCEPTANCE_REQUIRED')
+          }
           // Only an actual full verification for the exact current inputs
           // starts closeout. Partial stage checks and self-reported success do not.
           if(scopePending)return
@@ -581,6 +595,16 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
         // attempt invalidates earlier receipts, including failures at closure.
         checkpoint('verifying', { source: softwareVerificationFingerprint(project.root_path) })
         const checked = await verifySoftwareCandidate(input.projectId, input.requestId, runSignal)
+        if (awaitingUserChecks(checked.core) && checked.security?.passed && checked.candidate
+          && checked.independent?.status!=='failed'
+          && !checked.independent?.case_results?.some(row=>row.status==='failed')) {
+          checkpoint('waiting_user',{candidateId:checked.candidate.id,source:checked.candidate.source.digest,
+            error:'请在“继续验收”中完成实体麦克风实测。'})
+          updateProject(input.projectId,{current_stage:'testing',desktop_phase:'desktop-verify'})
+          const text='自动检查已保存。请打开“继续验收”，选择麦克风完成实测。'
+          deps.persistAssistant(input.sessionId,text);emit('message_delta',{text});deps.complete(input.sessionId,input.projectId,'incomplete')
+          return
+        }
         if (checked.status === 'unverified' && checked.independent?.semantics?.ready === false) {
           await waitForIndependentDesign(checked.independent.semantics)
           return
@@ -706,6 +730,16 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     }
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
+    if (!runSignal.aborted && reason.includes('USER_ACCEPTANCE_REQUIRED')) {
+      const candidate = await pendingAssistedCandidate(input.projectId, input.requestId)
+      if (candidate) {
+        checkpoint('waiting_user',{candidateId:candidate.id,source:candidate.source.digest,error:'请在“继续验收”中完成实体麦克风实测。'})
+        updateProject(input.projectId,{current_stage:'testing',desktop_phase:'desktop-verify'})
+        const text='自动检查已保存。请打开“继续验收”，完成麦克风实测。'
+        deps.persistAssistant(input.sessionId,text);emit('message_delta',{text});deps.complete(input.sessionId,input.projectId,'incomplete')
+        return
+      }
+    }
     if (!runSignal.aborted && reason.startsWith('QUALITY_INDEPENDENT_SEMANTICS_UNRESOLVED')) {
       await blockQualityGap(reason)
       return

@@ -9,6 +9,7 @@ export interface CapabilityContext {
   projectId: string; root: string; backplane: PrdBackplane; manifest: Record<string, unknown>; signal?: AbortSignal
 }
 export interface CapabilityOutcome {
+  pending_user_checks?: Array<{kind:'microphone';feature:string}>
   verifier_id?: string
   status: CoreVerificationStatus
   missing: string[]
@@ -28,17 +29,19 @@ const speechVerifier: CapabilityVerifier = { id: 'speech', async run(ctx) {
   const spec = ctx.manifest.speech as SpeechVerificationSpec | undefined
   const result = spec ? await runHostSpeechProbe({ projectId: ctx.projectId, root: ctx.root, speech: spec, signal: ctx.signal }) : undefined
   const status = result?.status ?? 'unverified', missing: string[] = []
+  const pending_user_checks: NonNullable<CapabilityOutcome['pending_user_checks']> = []
   if (!spec) missing.push('缺少 ASR 入口登记 speech，须登记产品实际使用的模型构造和转写方法')
   const features = Object.fromEntries(required.map(item => {
     let state: CoreVerificationStatus = status
     if (status !== 'passed') missing.push(`${item.id}: 宿主真实音频探针未通过，文本模拟不可替代${result?.error ? `（${result.error}）` : ''}`)
     if (spec && requirementCapabilities(item).has('microphone') && !hasCurrentMicrophoneEvidence(ctx.projectId, ctx.root, spec)) {
+      pending_user_checks.push({kind:'microphone',feature:item.id})
       missing.push(`${item.id}: 真实采集链路待授权实测`)
       state = combineVerification(state, 'unverified')
     }
     return [item.id, state]
   }))
-  return { status, missing, features, report: result ? { speech: result } : undefined }
+  return { status, missing, features, pending_user_checks, report: result ? { speech: result } : undefined }
 } }
 const fileVerifier: CapabilityVerifier = { id: 'prefix_rename', async run(ctx) {
   const required = items(ctx, 'prefix_rename')
