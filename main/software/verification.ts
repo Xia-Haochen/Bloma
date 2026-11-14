@@ -154,7 +154,7 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
     const core = result.core = await runCoreVerification({ projectId, sandboxRoot: candidate.root, signal })
     const localPending = core.local_status === 'passed' && core.distribution?.status === 'environment_blocked'
     if (core.status !== 'passed' && !localPending) { result.status = core.status; result.summary = [core.summary, ...core.missing].join('\n'); return result }
-    const independent = result.independent = await verifyIndependentDesign(projectId,candidate,signal)
+    const independent = result.independent = await verifyIndependentDesign(projectId,candidate,signal,core)
     if(independent.status!=='disabled'&&independent.status!=='passed'){
       result.status = independent.status
       result.summary = independent.semantics?.ready === false ? '独立案例的预期或覆盖仍需核对。'

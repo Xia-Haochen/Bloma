@@ -22,7 +22,7 @@ export function requirementCapabilities(item: SketchRequirement): ReadonlySet<Re
     for (const text of clauses) {
       if (/\b(?:LLM|AI)\b|大模型|真实模型|智能(?:总结|翻译|回答|对话|生成|润色)|(?:模型).*(?:调用|增强|Key|API|密钥)|(?:Key|密钥).*(?:模型|AI)/i.test(text)) result.add('llm')
       if (/(?:语音(?:输入|录入|识别|转写|转文字)|音频(?:文件)?(?:识别|转写|转文字)|(?:导入|上传).*音频.*(?:文字|转写)|麦克风|录音|\bASR\b)/i.test(text)) result.add('speech')
-      if (/(?:麦克风|录音|语音(?:输入|录入))/.test(text)) result.add('microphone')
+      if (/(?:麦克风|录音|语音(?:输入|录入)|采集(?:用户)?语音)/.test(text)) result.add('microphone')
       if (/(?:文件|文件夹|目录|文件名)/.test(text) && /前缀/.test(text) && /(?:重命名|改名)/.test(text)) {
         result.add('prefix_rename')
         if (/撤销|还原/.test(text)) result.add('rename_undo')

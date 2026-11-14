@@ -13,6 +13,7 @@ import { buildSdkEnv, decryptApiKey, getChannelByIdRaw } from '../platform/llm/c
 import { readMonetaryBudget, monetaryInputBlocked } from '../platform/llm/monetary-budget'
 import { leanBudget } from '../desktop/lean-budget'
 import { callLlmForJson, type LlmAttemptFailure } from '../kernel/llm-call'
+import { requirementCapabilities } from '../model/requirement-capabilities'
 import type { SDKQuery } from '../orchestration/stages/orchestration-contracts'
 
 import { readIndependentPolicy, independentDesignMatchesPolicy, type IndependentDesignPolicy } from './independent-policy'
@@ -110,7 +111,7 @@ export async function prepareIndependentDesign(input:{projectId:string;sessionId
       if(Math.floor(money.remaining_rmb*1e6)<reserve*batches.length)throw Error('INDEPENDENT_COMPLETE_REQUEST_RESERVE_UNAVAILABLE')
     }
     const ux=readConfirmedUxBinding(input.projectId,brief)
-    const data={goal:brief.positioning,requirements:brief.requirements.map(item=>({id:item.id,description:item.description,expected:trustedAcceptance(brief,item),requirement_hash:requirementEvidenceHash(brief,item),behavior_assertions:item.behavior_assertions})),
+    const data={goal:brief.positioning,requirements:brief.requirements.map(item=>({id:item.id,description:item.description,expected:trustedAcceptance(brief,item),requirement_hash:requirementEvidenceHash(brief,item),behavior_assertions:item.behavior_assertions,capabilities:[...requirementCapabilities(item)]})),
       intent:brief.requirements_model,constraints:brief.constraints,assumptions:brief.assumptions,out_of_scope:brief.out_of_scope,design_aids:COUNTEREXAMPLE_GUIDANCE,
       confirmed_design:ux?.html_path?readFileSync(join(project.root_path,ux.html_path),'utf8'):null,
       ...(repair ? { previous_design_feedback: {
@@ -136,7 +137,10 @@ export async function prepareIndependentDesign(input:{projectId:string;sessionId
             options.requestGuard?.(request)
           }})
       }
-      const batchPrompt=batches.length===1?prompt:JSON.stringify({...data,requirements:data.requirements.filter(r=>features.includes(r.id)),batch:{index:batchIndex+1,total:batches.length,id_prefix:`batch${batchIndex+1}_`}})
+      const batchPrompt=batches.length===1?prompt:JSON.stringify({...data,requirements:data.requirements.filter(r=>features.includes(r.id)),
+        confirmed_references:data.requirements.filter(r=>!features.includes(r.id)).map(({id,expected})=>({id,expected})),
+        batch:{index:batchIndex+1,total:batches.length,id_prefix:`batch${batchIndex+1}_`}})
+      if (Buffer.byteLength(batchPrompt) > 256 * 1024) throw Error('INDEPENDENT_INPUT_TOO_LARGE')
       let attemptFailure: LlmAttemptFailure | undefined
       let formatError: IndependentCaseFormatError | undefined
       const call=callLlmForJson({query:leanBudget(input.projectId,'acceptance-design').wrap(routed),env,sessionId:`${input.sessionId}-design-${randomUUID()}`,

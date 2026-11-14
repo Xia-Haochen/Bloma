@@ -2,12 +2,14 @@ import { deriveExpected } from './independent-oracles'
 import { createHash } from 'node:crypto'
 import type { PrdBackplane } from '../model/prd-backplane'
 import { requirementEvidenceHash, trustedAcceptance } from '../project/requirement-contract'
+import { requirementCapabilities } from '../model/requirement-capabilities'
 
 export const INDEPENDENT_CATEGORIES = ['normal', 'multi_object', 'exception', 'cancel', 'reopen'] as const
 export type IndependentCategory = typeof INDEPENDENT_CATEGORIES[number]
-export type IndependentOracle = { kind: 'derived'; version: 1; rule_id: string; steps: number[] } | { kind: 'input'; step: number } | { kind: 'literal'; quote: string } | { kind: 'unresolved'; question: string }
+export type IndependentOracle = { kind: 'derived'; version: 1; rule_id: string; steps: number[] } | { kind: 'input'; step: number } | { kind: 'literal'; quote: string; feature?: string } | { kind: 'unresolved'; question: string }
 export type IndependentStep = ({ kind: 'fill'; control: string; value: string } | { kind: 'click'; control: string; intent?: 'submit' | 'cancel' }
-  | { kind: 'expect'; control: string; equals: string; oracle?: IndependentOracle } | { kind: 'restart' }) & { subject?: string }
+  | { kind: 'expect'; control: string; equals: string; property?: 'text' | 'value'; oracle?: IndependentOracle }
+  | { kind: 'restart' } | { kind: 'speech_probe' }) & { subject?: string }
 export interface IndependentCase { id: string; feature: string; steps: IndependentStep[]
   basis?: { requirement_hash: string; expected_source: string }; related?:Array<{feature:string;requirement_hash:string;expected_source:string}>; coverage?: IndependentCategory[] }
 export interface IndependentCases { cases: IndependentCase[]; coverage_notes?: Array<{ feature: string; category: IndependentCategory; disposition: 'not_applicable' | 'unresolved'; reason: string; source: string }> }
@@ -41,11 +43,11 @@ function validateOracle(value: unknown, path: string): void {
     return fail('', '须为 JSON 对象')
   }
   const oracle = value as Record<string, unknown>
-  const fields = (required: string[]) => {
+  const fields = (required: string[], optional: string[] = []) => {
     for (const field of required) {
       if (!Object.hasOwn(oracle, field)) fail(`.${field}`, '缺少必填字段')
     }
-    if (!keys(oracle, ['kind', ...required])) fail('', `仅允许字段 kind、${required.join('、')}，请删除多余字段`)
+    if (!keys(oracle, ['kind', ...required, ...optional])) fail('', `仅允许字段 kind、${[...required, ...optional].join('、')}，请删除多余字段`)
   }
   const nonblank = (field: 'quote' | 'question') => {
     const value = oracle[field]
@@ -59,8 +61,11 @@ function validateOracle(value: unknown, path: string): void {
       if (!stepNumber(oracle.step)) fail('.step', '须为从 0 开始的整数步骤序号')
       return
     case 'literal':
-      fields(['quote'])
+      fields(['quote'], ['feature'])
       nonblank('quote')
+      if (Object.hasOwn(oracle, 'feature') && (typeof oracle.feature !== 'string' || !/^F-\d{3,}$/.test(oracle.feature))) {
+        fail('.feature', '须为确认任务单中的功能编号，如 F-001')
+      }
       return
     case 'derived': {
       fields(['version', 'rule_id', 'steps'])
@@ -101,7 +106,9 @@ export function parseIndependentCases(textValue: string, features: string[]): In
     if (!item || !keys(item, ['id', 'feature', 'steps', 'basis', 'coverage', 'related']) || !identifier(item.id) || !features.includes(item.feature)) {
       throw new IndependentCaseFormatError(`INDEPENDENT_CASE_INVALID: ${path} 的 id、feature 或字段不合法`)
     }
-    if (!Array.isArray(item.steps) || !item.steps.length || item.steps.length > 32 || !item.steps.some(s => s?.kind === 'expect') || !item.steps.some(s => s?.kind === 'click' || s?.kind === 'fill')) {
+    const speechProbe = Array.isArray(item.steps) && item.steps.length === 1 && item.steps[0]?.kind === 'speech_probe'
+    if (!Array.isArray(item.steps) || !item.steps.length || item.steps.length > 32 || !speechProbe &&
+      (!item.steps.some(s => s?.kind === 'expect') || !item.steps.some(s => s?.kind === 'click' || s?.kind === 'fill'))) {
       throw new IndependentCaseFormatError(`INDEPENDENT_CASE_INVALID: ${path}.steps 须包含操作和断言`)
     }
     if (item.basis !== undefined && (!item.basis || !keys(item.basis, ['requirement_hash', 'expected_source']) || !text(item.basis.requirement_hash, 64) || !text(item.basis.expected_source))) throw new IndependentCaseFormatError(`INDEPENDENT_BASIS_INVALID: ${path}.basis`)
@@ -110,11 +117,12 @@ export function parseIndependentCases(textValue: string, features: string[]): In
     for (const [stepIndex, step] of item.steps.entries()) {
       const stepPath = `${path}.steps[${stepIndex}]`
       if (!step) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}`)
-      const allowed = step.kind === 'fill' ? ['kind', 'control', 'value', 'subject'] : step.kind === 'expect' ? ['kind', 'control', 'equals', 'oracle', 'subject'] : step.kind === 'click' ? ['kind', 'control', 'subject', 'intent'] : step.kind === 'restart' ? ['kind'] : []
+      const allowed = step.kind === 'fill' ? ['kind', 'control', 'value', 'subject'] : step.kind === 'expect' ? ['kind', 'control', 'equals', 'oracle', 'property', 'subject'] : step.kind === 'click' ? ['kind', 'control', 'subject', 'intent'] : step.kind === 'restart' || speechProbe && step.kind === 'speech_probe' ? ['kind'] : []
       if (!allowed.length || !keys(step, allowed)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}`)
-      if (step.kind !== 'restart' && !identifier(step.control)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.control`)
+      if ('control' in step ? !identifier(step.control) : step.kind !== 'restart' && step.kind !== 'speech_probe') throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.control`)
       if (step.kind === 'fill' && !text(step.value, 2000)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.value`)
       if (step.kind === 'expect' && !text(step.equals)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.equals`)
+      if (step.kind === 'expect' && step.property !== undefined && !['text', 'value'].includes(step.property)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.property`)
       if (step.subject !== undefined && !identifier(step.subject)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.subject`)
       if (step.kind === 'click' && step.intent !== undefined && !['submit', 'cancel'].includes(step.intent)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.intent`)
       if (step.kind === 'expect' && step.oracle !== undefined) {
@@ -133,13 +141,20 @@ export function assessIndependentCases(brief: PrdBackplane, contract: Independen
     if (!requirement || !expected || item.basis?.expected_source !== expected || item.basis.requirement_hash !== requirementEvidenceHash(brief, requirement)) issues.push('预期来源缺失或与当前确认需求不匹配')
     for(const related of item.related??[]){const linked=brief.requirements.find(r=>r.id===related.feature);if(!linked||trustedAcceptance(brief,linked)!==related.expected_source||requirementEvidenceHash(brief,linked)!==related.requirement_hash)issues.push('关联需求来源缺失或已变化')}
     if (!item.coverage?.length) issues.push('未声明本案例检查的业务错误面')
+    if (item.steps.some(step => step.kind === 'speech_probe') &&
+      (!requirement || !requirementCapabilities(requirement).has('speech') || item.coverage?.length !== 1 || item.coverage[0] !== 'normal')) {
+      issues.push('宿主音频探针仅用于已确认语音识别需求的正常转写案例')
+    }
     item.steps.forEach((step, index) => {
       if (step.kind === 'restart' && !item.steps.slice(index + 1).some(s => s.kind === 'expect')) issues.push('重开后缺少实际断言')
       if (step.kind !== 'expect') return
       const oracle = step.oracle
       if (!oracle || oracle.kind === 'unresolved') { issues.push(oracle?.kind === 'unresolved' ? `待澄清：${oracle.question}` : '断言未说明预期依据'); return }
       if (oracle.kind === 'literal') {
-        if (![expected,...(item.related??[]).map(r=>r.expected_source)].some(source=>source?.includes(oracle.quote)) || step.equals !== oracle.quote) issues.push('固定预期不是确认资料中逐字引用的业务值')
+        const cited = oracle.feature && brief.requirements.find(row => row.id === oracle.feature)
+        const sources = oracle.feature ? [cited ? trustedAcceptance(brief, cited) : undefined]
+          : [expected, ...(item.related ?? []).map(row => row.expected_source)]
+        if (!sources.some(source => source?.includes(oracle.quote)) || step.equals !== oracle.quote) issues.push('固定预期不是确认资料中逐字引用的业务值')
       } else if (oracle.kind === 'derived') {
         const rule = brief.requirements_model?.rules.find(r => r.id === oracle.rule_id)
         const inputs = oracle.steps.map(n => item.steps[n])
@@ -168,7 +183,9 @@ export function assessIndependentCases(brief: PrdBackplane, contract: Independen
     const notes = contract.coverage_notes?.filter(n => n.feature === requirement.id && n.category === category) ?? []
     const valid = notes.length === 1 && notes[0].source === trustedAcceptance(brief, requirement)
     const requested = independentCategoryRequested(brief, requirement.id, category)
-    const status = ids.length && !notes.length ? 'declared_cases' as const : category !== 'normal' && !requested && !ids.length && valid && notes[0].disposition === 'not_applicable' ? 'declared_not_applicable' as const
+    const hasCase = contract.cases.some(item => item.feature === requirement.id && item.coverage?.includes(category))
+    const outsideConfirmedScope = !requested && !hasCase && (!notes.length || valid)
+    const status = ids.length && !notes.length ? 'declared_cases' as const : outsideConfirmedScope ? 'declared_not_applicable' as const
       : notes.length ? 'unresolved' as const : 'missing' as const
     return { feature: requirement.id, category, status, cases: ids, reason: requested&&notes[0]?.disposition==='not_applicable'?'确认资料明确提及该类行为，不能仅凭B的不适用声明跳过':notes[0]?.reason }
   }))
@@ -183,11 +200,13 @@ export const INDEPENDENT_SEMANTICS_INSTRUCTIONS = [
   'input 引用同对象之前的 fill。step 是从 0 开始的整数步骤序号，equals 等于该输入原值。',
   '{"kind":"expect","control":"result","equals":"已保存","oracle":{"kind":"literal","quote":"已保存"}}',
   'literal 逐字引用当前或关联需求已确认 expected 中的业务值，equals 必须等于 quote。',
+  '跨功能复用已确认结果时，在 literal 中直接加来源 feature。例：{"kind":"expect","control":"target_input","property":"value","equals":"已确认的整理结果","oracle":{"kind":"literal","feature":"F-002","quote":"已确认的整理结果"}}。写入结果沿用清理样例，勿再次提问。普通文本用 property=text，输入框用 property=value。',
+  '若需求的 capabilities 含 speech，正常语音转写案例用唯一一步 {"kind":"speech_probe"}，coverage 只填 ["normal"]。平台以固定音频验证产品实际识别入口，无需用户提供逐字转写。此证据仅覆盖转写算法，不能用来代替录音界面、清理或文本写入测试。',
   '整段需求描述不能为自选的输出值背书。不要把自选状态文案、生成式文本样例或界面草图上的文案当作已确认的精确预期。',
   '{"kind":"expect","control":"result","equals":"5","oracle":{"kind":"derived","version":1,"rule_id":"BR-001","steps":[0,1]}}',
   'derived 仅引用确认资料中带 verification.operation 的规则。version 为数字 1，rule_id 为确认的规则编号，steps 是之前同对象 fill 的从 0 开始且互不重复的整数序号。equals 须等于按该规则对这些输入的确定性计算结果。',
   '{"kind":"expect","control":"result","equals":"","oracle":{"kind":"unresolved","question":"输入“嗯，我下午三点到”时，清理后的完整文本应是什么？"}}',
   '缺少可确认的预期值或规则时，用 unresolved。equals 填空字符串，question 给出一个具体输入并询问应观察到的结果。该步骤供用户澄清，不能作为通过依据。示例内容不属于当前任务，不能直接照搬。',
-  '每需求有 normal。其余四种错误面用案例 coverage 或 coverage_notes 说明不适用或待澄清及确认来源。source 逐字复制该需求的 expected。不适用声明不是覆盖证明。未要求持久化、取消或多对象时，不要添加该能力或追问其表现，用 not_applicable 说明原因。多对象须不同 subject 及不同值并各自断言。取消操作标 intent:cancel 且其后断言，重开后必须断言。',
+  '每需求有 normal。多对象、异常、取消和重开仅在该需求明确要求时才设计对应案例，不必为未要求的行为补问题或固定文案。coverage_notes 如需填写，source 逐字复制该需求的 expected。多对象须不同 subject 及不同值并各自断言。取消操作标 intent:cancel 且其后断言，重开后必须断言。',
   'related 可引用本批其他需求的 {feature,requirement_hash,expected_source} 作为跨模块规则依据，引用必须逐字对应确认资料。关联引用本身不计入该需求覆盖，仍须其自己的正常案例。最多 12 案例，每案例 32 步，不得返回 PASS 或修改目标。',
 ].join('\n')

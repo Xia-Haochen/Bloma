@@ -12,6 +12,7 @@ import { assessIndependentCases, independentCategoryRequested, type IndependentC
 import { findProject } from '../project/project-service'
 import { independentDesignMatchesPolicy } from './independent-policy'
 import { readSoftwareRunState } from './run-state'
+import { requirementCapabilities } from '../model/requirement-capabilities'
 
 export interface IndependentClarification {
   questions: string[]
@@ -26,6 +27,10 @@ export function independentClarification(projectId: string, contract: Independen
   for (const item of contract.cases) {
     if (!assessment.cases.some(row => row.id === item.id && row.status === 'disputed')) continue
     if (!item.coverage?.some(category => independentCategoryRequested(brief, item.feature, category))) continue
+    const requirement = brief.requirements.find(row => row.id === item.feature)
+    // Speech recognition has a platform test fixture, so a missing transcript
+    // for a model-invented recording is a design issue, not a user decision.
+    if (requirement && item.coverage?.length === 1 && item.coverage[0] === 'normal' && requirementCapabilities(requirement).has('speech')) continue
     for (const step of item.steps) {
       if (step.kind !== 'expect' || step.oracle?.kind !== 'unresolved') continue
       const question = redactSoftwareOutput(step.oracle.question).replace(/\s+/g, ' ').trim().slice(0, 280)

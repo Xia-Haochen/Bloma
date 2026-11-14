@@ -15,6 +15,8 @@ import type { GuiAcceptanceSuite } from '../desktop/gui-acceptance'
 import type { IndependentSemantics } from './independent-semantics'
 import { currentIndependentSemantics, independentChallengeVersion } from './independent-quality'
 import { qualityHash } from './quality-ledger'
+import { runHostSpeechProbe, type SpeechVerificationSpec } from '../desktop/speech-verification'
+import { CORE_MANIFEST_REL, type CoreVerificationResult } from '../desktop/core-verification'
 
 export interface IndependentCaseResult { id: string; feature: string; status: 'passed' | 'failed' | 'unverified' | 'not_run'; kind: 'product_assertion' | 'product_runtime' | 'semantic' | 'adapter' | 'environment' | 'none'; expected_source?: string; issues?: string[]; steps: Array<{ id: string; passed: boolean; actual?: unknown }>; error?: string; evidence_warnings?:string[] }
 export interface IndependentVerification { status: 'disabled' | 'passed' | 'failed' | 'unverified'; semantics?: IndependentSemantics; case_results?: IndependentCaseResult[]; design_version?: string; design_digest?: string
@@ -35,6 +37,7 @@ export function independentSuite(projectId:string,root:string,caseIds?:string[])
   const semantics=currentIndependentSemantics(projectId,record.contract)
   const selected=caseIds?record.contract.cases.filter(c=>caseIds.includes(c.id)):record.contract.cases
   if(!selected.length||caseIds&&selected.length!==caseIds.length||selected.some(c=>semantics.cases.find(s=>s.id===c.id)?.status!=='grounded')||!caseIds&&!semantics.ready)throw Error('INDEPENDENT_SEMANTICS_UNRESOLVED: 不得执行无依据预期或把争议写成产品缺陷')
+  if (selected.some(item => item.steps.some(step => step.kind === 'speech_probe'))) throw Error('INDEPENDENT_SPEECH_REQUIRES_HOST_PROBE')
   const file=join(root,'INDEPENDENT_ADAPTER.json')
   if(!existsSync(file))throw Error('INDEPENDENT_ADAPTER_REQUIRED: 提供版本1的controls逻辑控件名到静态CSS选择器映射，不含输入或断言')
   const text=readFileSync(file,'utf8');if(Buffer.byteLength(text)>32*1024)throw Error('INDEPENDENT_ADAPTER_TOO_LARGE')
@@ -47,13 +50,15 @@ export function independentSuite(projectId:string,root:string,caseIds?:string[])
   return {version:1,scope_hash:record.scope,design_hash:record.design_hash,covers:[...new Set(selected.map(item=>item.feature))],steps:selected.flatMap(item=>item.steps.map((step,index)=>{
     const id=`${item.id}-${index}`
     if(step.kind==='restart')return{id,kind:'restart' as const}
+    if(step.kind==='speech_probe')throw Error('INDEPENDENT_SPEECH_REQUIRES_HOST_PROBE')
     const selector=adapter.controls[step.control]
     if(step.kind==='fill')return{id,kind:'fill' as const,selector,value:step.value}
     if(step.kind==='click')return{id,kind:'click' as const,selector}
-    return{id,kind:'expect' as const,selector,equals:step.equals}
+    return{id,kind:'expect' as const,selector,equals:step.equals,property:step.property}
   }))}
 }
-export async function verifyIndependentDesign(projectId:string,candidate:SoftwareRelease,signal?:AbortSignal):Promise<IndependentVerification>{
+export async function verifyIndependentDesign(projectId:string,candidate:SoftwareRelease,signal?:AbortSignal,
+  core?: Pick<CoreVerificationResult, 'speech'>):Promise<IndependentVerification>{
   const policy=readIndependentPolicy(projectId)
   if(!policy&&readIndependentDesign(projectId))throw Error('INDEPENDENT_POLICY_MISSING')
   if(!policy?.enabled)return{status:'disabled' as const}
@@ -70,11 +75,27 @@ export async function verifyIndependentDesign(projectId:string,candidate:Softwar
   const progress=()=>writeTextFileAtomic(join(directory,'in-progress.json'),JSON.stringify({state:'incomplete',candidate_id:candidate.id,design:record.digest,semantics,cases,at:new Date().toISOString()}))
   progress()
   let diagnostic:IndependentVerification['diagnostic']
+  // The caller can reuse the probe it just ran against the same frozen candidate.
+  let speech = core?.speech
   for(const item of record.contract.cases){
     signal?.throwIfAborted()
     const semantic=semantics.cases.find(c=>c.id===item.id)!,requirement=brief.requirements.find(r=>r.id===item.feature)!
     if(semantic.status!=='grounded'){cases.push({id:item.id,feature:item.feature,status:'not_run',kind:'semantic',issues:semantic.issues,steps:[],expected_source:requirement&&trustedAcceptance(brief,requirement)});progress();continue}
     try{
+      if (item.steps[0]?.kind === 'speech_probe') {
+        const manifest = join(candidate.root, CORE_MANIFEST_REL)
+        const spec: SpeechVerificationSpec | undefined = existsSync(manifest) ? JSON.parse(readFileSync(manifest, 'utf8')).speech : undefined
+        if (spec) speech ??= await runHostSpeechProbe({ projectId, root: candidate.root, speech: spec, signal })
+        else speech = undefined
+        const status = speech?.status === 'passed' ? 'passed' : speech?.status === 'failed' ? 'failed' : 'unverified'
+        cases.push({ id:item.id, feature:item.feature, status,
+          kind:status === 'passed' ? 'none' : status === 'failed' ? 'product_assertion' : spec ? 'environment' : 'adapter',
+          steps: speech?.tests?.map(test => ({ id:`${item.id}-${test.name}`, passed:test.passed, actual:test })) ?? [],
+          error: status === 'passed' ? undefined : speech?.error ?? (spec ? '固定音频转写检查未通过' : '缺少产品实际转写入口登记'),
+          expected_source:requirement && trustedAcceptance(brief, requirement) })
+        progress()
+        continue
+      }
       const suite=independentSuite(projectId,candidate.root,[item.id]),base=join(directory,String(cases.length)),temporary=mkdtempSync(join(tmpdir(),'bloma-b-'))
       // Each case gets fresh data; restart segments within the case retain it.
       let observed:Awaited<ReturnType<typeof observeSoftwareGui>>
