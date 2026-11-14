@@ -46,7 +46,7 @@ function save(projectId:string,value:IndependentDesignRecord){
 }
 /** Runs before implementation, with no tools or implementation files. Production
  * routing must resolve exactly B; there is no fallback to A or a text PASS. */
-export async function prepareIndependentDesign(input:{projectId:string;sessionId:string;query:SDKQuery;primaryEnv:Record<string,string>;signal:AbortSignal;
+export async function prepareIndependentDesign(input:{projectId:string;sessionId:string;requestId?:string;query:SDKQuery;primaryEnv:Record<string,string>;signal:AbortSignal;
   resolveRoute?:(policy:IndependentDesignPolicy)=>{env:Record<string,string>;channel_id:string;model:string}}):Promise<IndependentDesignRecord>{
   const project=findProject(input.projectId),brief=readPrdBackplane(input.projectId),scope=prdScopeFingerprint(brief),operation=project.lean_operation_id??'initial'
   const base={version:1 as const,scope,operation,design_hash:project.ux_confirmation?.design_hash,at:new Date().toISOString()}
@@ -94,7 +94,7 @@ export async function prepareIndependentDesign(input:{projectId:string;sessionId
     let physical=0
     const routed:SDKQuery=async function*(prompt,options){
       yield* input.query(prompt,{...options,env,monetaryPolicyPath:policy.monetary_policy_path,
-        accounting:{projectId:input.projectId,parentSessionId:input.sessionId,role:'acceptance_designer',scope},
+        accounting:{projectId:input.projectId,parentSessionId:input.sessionId,turnId:input.requestId,role:'acceptance_designer',scope,phase:'verification'},
         requestGuard:request=>{
           if(++physical>1)throw Error('INDEPENDENT_REQUEST_LIMIT')
           const body=JSON.parse(request.body)

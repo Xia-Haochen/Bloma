@@ -187,7 +187,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     }
   }
   if ((!initialBudgetStop)) {
-    const design = await prepareIndependentDesign({projectId:input.projectId,sessionId:input.sessionId,query:input.query,primaryEnv:input.env,signal})
+    const design = await prepareIndependentDesign({projectId:input.projectId,sessionId:input.sessionId,requestId:input.requestId,query:input.query,primaryEnv:input.env,signal})
     if(design.status==='blocked'){blocked(`独立验收设计尚未就绪：${design.reason}`);return}
     if(design.status==='frozen'&&design.contract){
       const semantics=currentIndependentSemantics(input.projectId,design.contract)
@@ -231,6 +231,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   // stop boundary; another 96-turn limit only interrupts useful work early.
   const maxTurns = Number.MAX_SAFE_INTEGER
   registerParentLoopContext(input.sessionId, { query, env: input.env, maxTokens: Math.min(input.maxTokens, 16384), maxTurns,
+    accountingTurnId: input.requestId,
     delegationMaxTurns: 24, permissionMode: 'allow-all', temperature: .1, system, editFormat: 'diff', runtimeScope: 'lean-build',
     executionScope: budget.executionScope, materials: sessionMaterials(input.projectId, input.sessionId), publish: emit,
     childMaterialsBuilder: child => quality.isQualityChild(child) ? undefined : sessionMaterials(input.projectId, input.sessionId),

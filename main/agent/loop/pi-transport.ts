@@ -43,7 +43,9 @@ export function createPiTransport(input: AgentLoopInput, lifecycle: {
           temperature: input.temperature, providerType: input.providerType,
           thinkingLevel: input.thinkingLevel ?? (input.env.BLOMA_LOOP_THINKING === 'off' ? 'off' : 'low'),
           accounting: { projectId: input.projectId, runId: input.requestId, parentSessionId: input.parentSessionId,
-            role: input.accountingRole ?? 'orchestrator', scope: auxiliary ? 'handoff' : 'loop' },
+            turnId: input.accountingTurnId,
+            role: input.accountingRole ?? 'orchestrator', scope: auxiliary ? 'handoff' : 'loop',
+            phase: input.accountingRole === 'review' ? 'verification' : input.executionScope ? 'production' : undefined },
         }), signal)) {
           signal.throwIfAborted()
           if (sdk.type === 'assistant') {

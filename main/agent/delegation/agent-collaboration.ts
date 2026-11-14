@@ -337,6 +337,7 @@ async function runChildLoop(opts: {
     sessionId: record.childSessionId,
     parentSessionId: parent.sessionId,
     accountingRole: role,
+    accountingTurnId: parentCtx.accountingTurnId,
     projectId: parent.projectId,
     requestId: childRequestId,
     maxTokens: record.channelOverride?.maxTokens ?? parentCtx.maxTokens,
