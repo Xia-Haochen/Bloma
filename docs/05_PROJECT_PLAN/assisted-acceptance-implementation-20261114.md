@@ -50,7 +50,7 @@
 
 本适配器的实际观察范围为声卡设备采集和候选声明的 Python ASR callable；它不代表成品 MediaRecorder 按住/松开链路、语音播放听感或模型回复质量已经实测。已有 GUI 通过记录仍按其受控采集范围解释，不能拼接成“成品全链路实体语音通过”。成品窗口物理采集观察、播放与外部服务适配器属于后续实现。
 
-当前 B 的 F-002/F-003/F-004 缺 `INDEPENDENT_ADAPTER.json` 控件映射（`INDEPENDENT_ADAPTER_REQUIRED`）；F-001 已产生独立能力检查结果。补全映射并复验属于工程验收工作，不能要求用户代写冻结预期。平台仍保留原 C/V 与缺陷关闭检查。
+首批结束时 B 的 F-002/F-003/F-004 缺 `INDEPENDENT_ADAPTER.json` 控件映射（`INDEPENDENT_ADAPTER_REQUIRED`）；F-001 已产生独立能力检查结果。随后已补齐映射并实际复验，新的环境前置条件和结果见 [B 控件映射复验](independent-control-mapping-20261114.md)。平台仍保留原 C/V 与缺陷关闭检查。
 
 补充复验发现正常启动检查原先被 B 提前返回遮蔽：成品把静态标题“语伴 · 与角色语音对话”改为“语伴 · 与林知夏语音对话”，按固定标题查找产生了假阴性。平台探针现优先使用标题提示；不匹配时只允许本次启动进程树中唯一可见、非错误对话框窗口作为候选，继续执行响应、稳定和优雅关闭检查，并保存实际标题与是否匹配提示。不会从其他进程借用窗口。旧失败日志保留在 `run-artifacts/assisted-live/pinned-final-verification.log`，修复后的同候选复验见 `pinned-fixed-verification.log`。
 

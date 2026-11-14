@@ -91,11 +91,13 @@ function startOwned(attempt:Attempt,work:(signal:AbortSignal)=>Promise<void>) {
     }
   })().catch(error=>console.error('[assisted-acceptance] result persistence failed',String(error)))
 }
+function offersUserCheck(report:SoftwareVerification|undefined):boolean {
+  return !!report?.candidate && awaitingUserChecks(report.core) && report.security?.passed===true
+    && report.independent?.status!=='failed' && !report.independent?.case_results?.some(row=>row.status==='failed')
+}
 export async function pendingAssistedCandidate(id:string, requestId?:string) {
   const report=receipt(id)
-  if (!report?.candidate || requestId && report.input_identity?.request_id!==requestId
-    || !awaitingUserChecks(report.core) || !report.security?.passed
-    || report.independent?.status==='failed' || report.independent?.case_results?.some(row=>row.status==='failed')) return
+  if (!report?.candidate || !offersUserCheck(report) || requestId && report.input_identity?.request_id!==requestId) return
   try {await verifyReleaseSource(report.candidate)} catch {return} // stale receipts resume the normal repair/verification route
   if(report.input_identity?.scope!==prdScopeFingerprint(readPrdBackplane(id)))return
   return report.candidate
@@ -106,10 +108,10 @@ export function assistedAcceptanceView(id:string):AssistedAcceptanceView | null 
     const project=findProject(id)
     const stale=attempt.operation_id!==project.lean_operation_id || attempt.scope!==prdScopeFingerprint(readPrdBackplane(id))
       || !!report?.candidate && report.candidate.id!==attempt.candidate_id
-    if(stale)return report?.candidate&&awaitingUserChecks(report.core)
+    if(stale)return report?.candidate&&offersUserCheck(report)
       ? {candidate_id:report.candidate.id,phase:'available',detail:'候选版本已变化，请测试当前版本。'}
       : {...attempt,phase:'stale',detail:'候选版本已变化，请先完成当前版本自动检查。'}
-    if(attempt.phase==='passed'&&report?.candidate&&awaitingUserChecks(report.core))return {candidate_id:report.candidate.id,phase:'available',detail:'当前实测凭据已失效，请重新测试。'}
+    if(attempt.phase==='passed'&&report?.candidate&&offersUserCheck(report))return {candidate_id:report.candidate.id,phase:'available',detail:'当前实测凭据已失效，请重新测试。'}
     if(active.has(attempt.phase) && !live.has(id)) return {...attempt,phase:'interrupted',detail:'上次实测中断，可重新开始。'}
     if(live.has(id)&&attempt.phase==='preparing') {
       const progress=join(directory(id),attempt.attempt_id!,'progress.json')
@@ -120,7 +122,7 @@ export function assistedAcceptanceView(id:string):AssistedAcceptanceView | null 
     }
     return attempt
   }
-  if(report?.candidate && awaitingUserChecks(report.core))return {candidate_id:report.candidate.id,phase:'available',detail:'需要一次实体麦克风实测。'}
+  if(report?.candidate && offersUserCheck(report))return {candidate_id:report.candidate.id,phase:'available',detail:'需要一次实体麦克风实测。'}
   return null
 }
 export async function assistedAcceptanceAction(input:AssistedAcceptanceInput, busy=false):Promise<AssistedAcceptanceView | null> {

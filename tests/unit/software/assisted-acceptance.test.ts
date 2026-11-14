@@ -10,7 +10,7 @@ import * as quality from '../../../main/software/delivery-qualification'
 import {createProject,updateProject,findProject} from '../../../main/project/project-service'
 import {prdScopeFingerprint} from '../../../main/project/requirement-contract'
 import {readPrdBackplane} from '../../../main/project/prd-store'
-import {assistedAcceptanceAction,assistedAcceptanceView} from '../../../main/software/assisted-acceptance'
+import {assistedAcceptanceAction,assistedAcceptanceView,pendingAssistedCandidate} from '../../../main/software/assisted-acceptance'
 import {hasRunForProject} from '../../../main/orchestration/stages/run-registry'
 import {readSoftwareRunState} from '../../../main/software/run-state'
 import {runLeanProduction} from '../../../main/desktop/lean-production'
@@ -59,6 +59,16 @@ afterEach(async()=>{
 })
 const start=()=>assistedAcceptanceAction({request_id:'start',project_id:id,action:'start',candidate_id:candidate.id})
 const pass={status:'passed',microphone:{status:'passed',rms:.1},real_decode_calls:4}
+it('does not offer user recording when independent acceptance has a failed business observation',async()=>{
+  const file=join(home,'software-verification',id+'.json'),saved=JSON.parse(readFileSync(file,'utf8'))
+  saved.result.independent={status:'failed',case_results:[{status:'failed'}]}
+  saved.result_hash=createHash('sha256').update(JSON.stringify(saved.result)).digest('hex')
+  writeFileSync(file,JSON.stringify(saved))
+  expect(assistedAcceptanceView(id)).toBeNull()
+  expect(await pendingAssistedCandidate(id)).toBeUndefined()
+  await expect(start()).rejects.toThrow('CURRENT_CANDIDATE_REQUIRED')
+  expect(speech.runHostSpeechProbe).not.toHaveBeenCalled()
+})
 it('resuming a microphone-dependent candidate waits for the entry without a maker model call',async()=>{
   const query=vi.fn(async function*(){throw Error('must not call model')})
   const persist=vi.fn(),completeRun=vi.fn()
