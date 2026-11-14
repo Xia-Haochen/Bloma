@@ -12,7 +12,7 @@ from usage import PHASES, collect
 
 WEB = Path(__file__).with_name("web")
 STATIC = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "text/javascript"),
-          "/styles.css": ("styles.css", "text/css")}
+          "/standalone.js": ("standalone.js", "text/javascript"), "/styles.css": ("styles.css", "text/css")}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -47,6 +47,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.json_response(self.catalog.snapshot())
         if route in STATIC:
             file, mime = STATIC[route]
+            if route == "/":
+                page = (WEB / file).read_text(encoding="utf-8")
+                panel = (WEB / "panel.html").read_text(encoding="utf-8")
+                return self.respond(200, page.replace("<!-- token-monitor-panel -->", panel).encode(), mime)
             return self.respond(200, (WEB / file).read_bytes(), mime)
         self.json_response({"error": "页面不存在"}, 404)
 

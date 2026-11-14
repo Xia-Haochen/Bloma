@@ -1,6 +1,10 @@
 # Bloma Token 用量监测
 
-在 Bloma 仓库根目录运行，使用 Python 3.10 或更高版本，无需安装 Python 依赖。
+在 Bloma 桌面应用中打开「设置 → Token 用量」。内置面板由 Electron 主进程提供用量和价格数据，随应用构建，无需 Python。首次进入面板时尝试同步官网价格。
+
+## 独立浏览器版
+
+也可在 Bloma 仓库根目录启动独立版，使用 Python 3.10 或更高版本，无需安装 Python 依赖。
 
 ```powershell
 python ".\token monitor\server.py"

@@ -36,6 +36,9 @@ export const IPC_CHANNELS = {
   /** 会话 fork（P0-2，2026-09-08）：从任意 user 消息重开，复制前缀到新会话 */
   AGENT_FORK_SESSION: 'agent:fork-session',
   CLIPBOARD_WRITE_TEXT: 'clipboard:write-text',
+  TOKEN_MONITOR_READ: 'token-monitor:read',
+  TOKEN_MONITOR_REFRESH: 'token-monitor:refresh',
+  TOKEN_MONITOR_OPEN_SOURCE: 'token-monitor:open-source',
   PASTED_IMAGE_SAVE: 'pasted-image:save',
   AGENT_STOP: 'agent:stop',
   AGENT_LIST_SESSIONS: 'agent:list-sessions',
@@ -1811,6 +1814,11 @@ export interface AnalyticsTrackResult {
 export type { AttachmentRef, AttachmentInfo, ComposerDraft, DraftScope, SendReceipt, ChatSubmitInput } from './attachment-types'
 
 export type ElectronAPI = {
+  tokenMonitor: {
+    read(): Promise<ApiResult<import('./token-monitor').UsageSnapshot>>
+    refreshPrices(): Promise<ApiResult<import('./token-monitor').MonitorPrices>>
+    openSource(provider: string): Promise<ApiResult<void>>
+  }
   clipboard: {
     writeText(input: RequestEnvelope & { text: string }): Promise<ApiResult<{ copied: true }>>
   }

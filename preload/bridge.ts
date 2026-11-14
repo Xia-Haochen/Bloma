@@ -80,6 +80,11 @@ import type {
 } from '../shared/types'
 
 const electronAPI: ElectronAPI = {
+  tokenMonitor: {
+    read: () => ipcRenderer.invoke(IPC_CHANNELS.TOKEN_MONITOR_READ),
+    refreshPrices: () => ipcRenderer.invoke(IPC_CHANNELS.TOKEN_MONITOR_REFRESH),
+    openSource: provider => ipcRenderer.invoke(IPC_CHANNELS.TOKEN_MONITOR_OPEN_SOURCE, provider),
+  },
   clipboard: {
     writeText: (input) => ipcRenderer.invoke(IPC_CHANNELS.CLIPBOARD_WRITE_TEXT, input),
   },
