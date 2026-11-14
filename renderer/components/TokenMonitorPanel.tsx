@@ -32,7 +32,9 @@ export function TokenMonitorPanel() {
       refreshPrices: () => unwrap(monitor.refreshPrices()),
       openSource: provider => unwrap(monitor.openSource(provider)),
       auditModels: () => unwrap(monitor.auditModels()),
-      auditBatch: filter => unwrap(monitor.auditBatch(filter)),
+      auditStart: filter => unwrap(monitor.auditStart(filter)),
+      auditStatus: () => unwrap(monitor.auditStatus()),
+      auditStop: () => unwrap(monitor.auditStop()),
     })
     return () => {
       stop()

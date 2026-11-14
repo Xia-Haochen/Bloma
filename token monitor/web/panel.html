@@ -50,10 +50,12 @@
       <div class="section-heading"><div><h2 id="audit-title">请求审查</h2><p id="audit-summary">查看已上报的失败用量和未计量的传输尝试。</p></div></div>
       <div class="price-toolbar">
         <label>本地模型 <select id="audit-model"><option value="">自动选择</option></select></label>
+        <label>审查范围 <select id="audit-mode"><option value="pending">仅审查待判定</option><option value="all">全部未审查请求</option></select></label>
         <button id="audit-models" type="button" class="button secondary">检测 Ollama</button>
         <button id="audit-run" type="button" class="button primary">审查当前筛选</button>
         <button id="audit-stop" type="button" class="button secondary" hidden>处理完本批后停止</button>
         <span id="audit-status" role="status"></span>
+        <span id="audit-model-status" role="status"></span>
       </div>
       <div class="wide-table" id="audit-breakdown"></div>
       <details id="failure-details"><summary id="failure-title">失败与未计量尝试</summary><div id="failure-list"></div></details>

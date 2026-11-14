@@ -14,6 +14,7 @@ from audit import Exchange, LocalAudit, add_findings
 WEB = Path(__file__).with_name("web")
 STATIC = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "text/javascript"),
           "/review.js": ("review.js", "text/javascript"),
+          "/audit-config.json": ("../audit-config.json", "application/json"),
           "/standalone.js": ("standalone.js", "text/javascript"), "/styles.css": ("styles.css", "text/css")}
 
 
@@ -54,6 +55,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json_response(self.audit.models())
             except (OSError, ValueError) as error:
                 return self.json_response({"error": str(error)}, 503)
+        if route == "/api/audit/status":
+            return self.json_response(self.audit.status())
         if route == "/api/pricing":
             return self.json_response(self.catalog.snapshot())
         if route in STATIC:
@@ -73,12 +76,14 @@ class Handler(BaseHTTPRequestHandler):
             self.catalog.refresh()
             self.exchange.refresh()
             return self.json_response(self.catalog.snapshot())
-        if self.path == "/api/audit/batch":
+        if self.path == "/api/audit/stop":
+            return self.json_response(self.audit.stop())
+        if self.path == "/api/audit/start":
             try:
                 size = int(self.headers.get("Content-Length", "0"))
                 if not 0 < size <= 4096:
                     raise ValueError("无效的审查参数")
-                return self.json_response(self.audit.batch(json.loads(self.rfile.read(size))))
+                return self.json_response(self.audit.start(json.loads(self.rfile.read(size))), 202)
             except (OSError, ValueError, TypeError, AttributeError) as error:
                 return self.json_response({"error": str(error)}, 400)
         return self.json_response({"error": "页面不存在"}, 404)

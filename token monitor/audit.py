@@ -4,13 +4,31 @@ import math
 import re
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from threading import Lock
+from threading import Lock, Thread
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener, urlopen
 
 from usage import collect
 
 CONFIG = json.loads(Path(__file__).with_name("audit-config.json").read_text(encoding="utf-8-sig"))
 OLLAMA = "http://127.0.0.1:11434"
+
+
+RULES = [(category, *(re.compile(pattern, re.ASCII) if pattern else None for pattern in patterns))
+         for category, patterns in CONFIG["rules"].items()]
+
+
+def needs_audit(row):
+    evidence = row["evidence"]
+    groups = set()
+    for tool in evidence["tools"]:
+        category = next((category for category, name, target in RULES
+                         if (name and name.search(tool["name"].lower()))
+                         or (target and target.search(tool["target"].lower()))), None)
+        if category:
+            groups.add(category)
+    classified = bool(groups) or row["phase"] in CONFIG["phaseCategories"]
+    resolved = bool(evidence["failure"]) or any(tool["state"] in ("ok", "failed") for tool in evidence["tools"])
+    return not classified or not resolved
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -67,35 +85,76 @@ class LocalAudit:
     def __init__(self, home):
         self.home = home
         self.lock = Lock()
+        self.job = None
 
     def models(self):
         names = [m["name"] for m in local_json("/api/tags").get("models", [])
                  if m.get("name") and not m.get("remote_host") and "cloud" not in m["name"].lower()]
         return list(dict.fromkeys([m for m in CONFIG["preferredModels"] if m in names] + names))
 
-    def batch(self, filters):
-        if not self.lock.acquire(blocking=False):
-            raise ValueError("本机审查正在运行")
-        try:
-            return self.run_batch(filters)
-        finally:
-            self.lock.release()
+    def status(self):
+        with self.lock:
+            return dict(self.job) if self.job else None
 
-    def run_batch(self, filters):
-        models = self.models()
-        model = filters.get("model") or next(iter(models), None)
-        if not model or model not in models:
-            raise ValueError("Ollama 未安装所选本地模型")
-        data = collect(self.home)
-        add_findings(self.home, data["rows"])
-        start, end, project = filters.get("start"), filters.get("end"), filters.get("project")
-        rows = [r for r in data["rows"] if r["status"] != "running" and r.get("finding", {}).get("model") != model
-                and (not project or r["project"] == project) and (start is None or r["at"] >= start)
-                and (end is None or r["at"] < end)]
-        selected = rows[:8]
-        if not selected:
-            return {"model": model, "processed": 0, "remaining": 0}
-        subjects = {(t["project"], t["session"], t["id"]): t["request"] for t in data["turns"]}
+    def start(self, filters):
+        if (not isinstance(filters, dict) or filters.get("mode", "pending") not in ("pending", "all")
+                or any(key in filters and (type(filters[key]) not in (int, float) or not math.isfinite(filters[key]))
+                       for key in ("start", "end"))):
+            raise ValueError("无效的审查参数")
+        with self.lock:
+            if self.job and self.job["state"] in ("running", "stopping"):
+                raise ValueError("本机审查正在运行")
+            self.job = {"state": "running", "model": filters.get("model") or "", "processed": 0, "remaining": 0}
+            initial = dict(self.job)
+        Thread(target=self.run, args=(filters,), daemon=True).start()
+        return initial
+
+    def stop(self):
+        with self.lock:
+            if self.job and self.job["state"] == "running":
+                self.job["state"] = "stopping"
+            return dict(self.job) if self.job else None
+
+    def run(self, filters):
+        try:
+            data = collect(self.home)
+            add_findings(self.home, data["rows"])
+            start, end, project = filters.get("start"), filters.get("end"), filters.get("project")
+            pending = [r for r in data["rows"] if r["status"] != "running" and not r.get("finding")
+                       and (filters.get("mode") == "all" or needs_audit(r))
+                       and (not project or r["project"] == project) and (start is None or r["at"] >= start)
+                       and (end is None or r["at"] < end)]
+            with self.lock:
+                self.job["remaining"] = len(pending)
+                running = self.job["state"] == "running"
+            if pending and running:
+                models = self.models()
+                model = filters.get("model") or next(iter(models), None)
+                if not model or model not in models:
+                    raise ValueError("Ollama 未安装所选本地模型")
+                with self.lock:
+                    self.job["model"] = model
+                subjects = {(t["project"], t["session"], t["id"]): t["request"] for t in data["turns"]}
+                while pending and self.status()["state"] == "running":
+                    selected, pending = pending[:8], pending[8:]
+                    add_findings(self.home, selected)
+                    eligible = [row for row in selected if not row.get("finding")]
+                    with self.lock:
+                        self.job["remaining"] -= len(selected) - len(eligible)
+                    if not eligible:
+                        continue
+                    deferred = self.classify(eligible, model, subjects)
+                    with self.lock:
+                        self.job["processed"] += len(eligible) - len(deferred)
+                        self.job["remaining"] -= len(eligible) - len(deferred)
+                    pending.extend(deferred)
+            with self.lock:
+                self.job["state"] = "stopped" if self.job["remaining"] else "completed"
+        except Exception as error:
+            with self.lock:
+                self.job.update(state="error", error=str(error))
+
+    def classify(self, selected, model, subjects):
         requests = []
         for i, row in enumerate(selected, 1):
             ev = row["evidence"]
@@ -111,20 +170,23 @@ class LocalAudit:
         parsed = json.loads(result.get("message", {}).get("content") or "{}")
         items = parsed.get("items", [])
         by_id = {str(item.get("id")): item for item in items if isinstance(item, dict)} if isinstance(items, list) else {}
-        processed = 0
+        deferred = []
         for i, row in enumerate(selected, 1):
             item = by_id.get(str(i), {})
             if item.get("category") not in CONFIG["categories"] or item.get("outcome") not in CONFIG["outcomes"]:
+                deferred.append(row)
+                continue
+            add_findings(self.home, [row])
+            if row.get("finding"):
                 continue
             write_json(cache_path(self.home, row), {
                 "category": item["category"], "outcome": item["outcome"], "model": model,
                 "purpose": str(item.get("purpose") or "")[:180], "result": str(item.get("result") or "")[:180],
                 "fingerprint": fingerprint(row),
             })
-            processed += 1
-        if not processed:
+        if len(deferred) == len(selected):
             raise ValueError("本地模型没有返回有效分类，可重试或切换模型")
-        return {"model": model, "processed": processed, "remaining": len(rows) - processed}
+        return deferred
 
 
 class Exchange:

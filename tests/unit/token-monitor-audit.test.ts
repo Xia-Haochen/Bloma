@@ -38,17 +38,22 @@ describe('token request audit', () => {
       })
       const request = vi.fn(async (url: string, options?: RequestInit) => {
         expect(new URL(url).origin).toBe('http://127.0.0.1:11434')
-        if (url.endsWith('/api/tags')) return Response.json({ models: [{ name: 'qwen3.5:9b' }, { name: 'qwen3.5:cloud' }] })
+        if (url.endsWith('/api/tags')) return Response.json({ models: [{ name: 'qwen3.5:9b' }, { name: 'qwen3:4b' }, { name: 'qwen3.5:cloud' }] })
         expect(options?.redirect).toBe('error')
         return Response.json({ message: { content: JSON.stringify({ items: [
           { id: 1, category: 'frontend', outcome: 'failed', purpose: '修复页面', result: '目标片段不存在' },
         ] }) } })
       })
       const audit = new LocalAudit(home, request)
-      expect(await audit.batch({ project: 'p1' })).toEqual({ model: 'qwen3.5:9b', processed: 1, remaining: 0 })
+      audit.start({ project: 'p1' })
+      await vi.waitFor(() => expect(audit.status()).toMatchObject({ state: 'completed', processed: 0 }))
+      expect(request).not.toHaveBeenCalled()
+      audit.start({ project: 'p1', mode: 'all' })
+      await vi.waitFor(() => expect(audit.status()).toEqual({ state: 'completed', model: 'qwen3.5:9b', processed: 1, remaining: 0 }))
       addFindings(home, data.rows)
       expect(data.rows[0].finding).toMatchObject({ category: 'frontend', outcome: 'failed' })
-      expect((await audit.batch({ project: 'p1' })).processed).toBe(0)
+      audit.start({ project: 'p1', model: 'qwen3:4b', mode: 'all' })
+      await vi.waitFor(() => expect(audit.status()).toMatchObject({ state: 'completed', processed: 0 }))
       expect(request.mock.calls.filter(([url]) => url.endsWith('/api/chat'))).toHaveLength(1)
     } finally {
       await rm(home, { recursive: true, force: true })

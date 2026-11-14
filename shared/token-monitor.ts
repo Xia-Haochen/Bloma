@@ -82,5 +82,11 @@ export interface AuditFinding {
   fingerprint: string
 }
 export interface ExchangeRate { rate: number; date: string }
-export interface AuditProgress { model: string; processed: number; remaining: number }
-export interface AuditFilter { project?: string; start?: number; end?: number; model?: string }
+export interface AuditProgress {
+  state: 'running' | 'stopping' | 'stopped' | 'completed' | 'error'
+  model: string
+  processed: number
+  remaining: number
+  error?: string
+}
+export interface AuditFilter { project?: string; start?: number; end?: number; model?: string; mode?: 'pending' | 'all' }

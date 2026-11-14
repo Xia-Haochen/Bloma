@@ -41,6 +41,8 @@ export const IPC_CHANNELS = {
   TOKEN_MONITOR_OPEN_SOURCE: 'token-monitor:open-source',
   TOKEN_MONITOR_MODELS: 'token-monitor:models',
   TOKEN_MONITOR_AUDIT: 'token-monitor:audit',
+  TOKEN_MONITOR_AUDIT_STATUS: 'token-monitor:audit-status',
+  TOKEN_MONITOR_AUDIT_STOP: 'token-monitor:audit-stop',
   PASTED_IMAGE_SAVE: 'pasted-image:save',
   AGENT_STOP: 'agent:stop',
   AGENT_LIST_SESSIONS: 'agent:list-sessions',
@@ -1821,7 +1823,9 @@ export type ElectronAPI = {
     refreshPrices(): Promise<ApiResult<import('./token-monitor').MonitorPrices>>
     openSource(provider: string): Promise<ApiResult<void>>
     auditModels(): Promise<ApiResult<string[]>>
-    auditBatch(filter: import('./token-monitor').AuditFilter): Promise<ApiResult<import('./token-monitor').AuditProgress>>
+    auditStart(filter: import('./token-monitor').AuditFilter): Promise<ApiResult<import('./token-monitor').AuditProgress>>
+    auditStatus(): Promise<ApiResult<import('./token-monitor').AuditProgress | null>>
+    auditStop(): Promise<ApiResult<import('./token-monitor').AuditProgress | null>>
   }
   clipboard: {
     writeText(input: RequestEnvelope & { text: string }): Promise<ApiResult<{ copied: true }>>

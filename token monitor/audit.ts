@@ -4,6 +4,7 @@ import { readJsonFile, writeJsonFile } from '../storage/json-store'
 import { collectUsage } from './usage'
 import type { AuditFilter, AuditFinding, AuditProgress, ExchangeRate, UsageRow, UsageSnapshot } from '../shared/token-monitor'
 import config from './audit-config.json'
+import { needsAudit } from './web/review.js'
 
 type Transport = (url: string, options?: RequestInit) => Promise<Response>
 const ollama = 'http://127.0.0.1:11434'
@@ -34,57 +35,93 @@ export async function installedModels(request: Transport): Promise<string[]> {
 }
 
 export class LocalAudit {
-  private busy = false
+  private job: AuditProgress | null = null
   constructor(private readonly home: string, private readonly request: Transport) {}
   models() { return installedModels(this.request) }
 
-  async batch(filter: AuditFilter): Promise<AuditProgress> {
-    if (this.busy) throw new Error('本机审查正在运行')
+  status(): AuditProgress | null { return this.job && { ...this.job } }
+
+  start(filter: AuditFilter): AuditProgress {
+    if (this.job?.state === 'running' || this.job?.state === 'stopping') throw new Error('本机审查正在运行')
     if (!filter || typeof filter !== 'object' || Array.isArray(filter) ||
-      [filter.start, filter.end].some(value => value !== undefined && !Number.isFinite(value))) throw new Error('无效的审查参数')
-    this.busy = true
+      [filter.start, filter.end].some(value => value !== undefined && !Number.isFinite(value)) ||
+      (filter.mode !== undefined && filter.mode !== 'pending' && filter.mode !== 'all')) throw new Error('无效的审查参数')
+    const job: AuditProgress = { state: 'running', model: filter.model || '', processed: 0, remaining: 0 }
+    this.job = job
+    void this.run(filter, job)
+    return { ...job }
+  }
+
+  stop(): AuditProgress | null {
+    if (this.job?.state === 'running') this.job.state = 'stopping'
+    return this.status()
+  }
+
+  private async run(filter: AuditFilter, job: AuditProgress): Promise<void> {
     try {
-      const models = await this.models()
-      const model = filter.model || models[0]
-      if (!model || !models.includes(model)) throw new Error('Ollama 未安装所选本地模型')
       const { rows, turns } = await collectUsage(this.home)
       addFindings(this.home, rows)
-      const eligible = rows.filter(row => row.status !== 'running' && row.finding?.model !== model
+      const pending = rows.filter(row => row.status !== 'running' && !row.finding
+        && (filter.mode === 'all' || needsAudit(row))
         && (!filter.project || filter.project === row.project)
         && (filter.start === undefined || row.at >= filter.start) && (filter.end === undefined || row.at < filter.end))
-      const selected = eligible.slice(0, 8)
-      if (!selected.length) return { model, processed: 0, remaining: 0 }
-      const subjects = new Map(turns.map(turn => [JSON.stringify([turn.project, turn.session, turn.id]), turn.request]))
-      const input = selected.map((row, index) => ({
-        id: index + 1, phase: row.phase, subject: subjects.get(JSON.stringify(row.turn)),
-        observed: { text: row.evidence.text, failure: row.evidence.failure,
-          tools: row.evidence.tools.slice(0, 4).map(tool => ({ ...tool, result: tool.result.slice(0, 125) })) },
-      }))
-      const response = await this.request(ollama + '/api/chat', {
-        method: 'POST', redirect: 'error', signal: AbortSignal.timeout(180_000),
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, stream: false, think: false, format: 'json',
-          options: { temperature: 0, num_ctx: 8192, num_predict: 2200 },
-          messages: [{ role: 'system', content: config.system },
-            { role: 'user', content: JSON.stringify({ categories: config.categories, outcomes: config.outcomes, requests: input }) }] }),
-      })
-      if (!response.ok) throw new Error('Ollama HTTP ' + response.status)
-      const responseData = await response.json() as { message?: { content?: string } }
-      const parsed: { items?: Record<string, unknown>[] } = JSON.parse(responseData.message?.content ?? '{}')
-      const byId = new Map((Array.isArray(parsed.items) ? parsed.items : []).filter(item => item && typeof item === 'object')
-        .map(item => [Number(item.id), item]))
-      let processed = 0
-      for (const [index, row] of selected.entries()) {
-        const item = byId.get(index + 1)
-        if (!item || !category(item.category) || !outcome(item.outcome)) continue
-        const trim = (value: unknown) => typeof value === 'string' ? value.slice(0, 180) : ''
-        writeJsonFile(cachePath(this.home, row), { category: item.category, outcome: item.outcome,
-          purpose: trim(item.purpose), result: trim(item.result), model, fingerprint: fingerprint(row) })
-        processed++
+      job.remaining = pending.length
+      if (pending.length && job.state === 'running') {
+        const models = await this.models()
+        const model = filter.model || models[0]
+        if (!model || !models.includes(model)) throw new Error('Ollama 未安装所选本地模型')
+        job.model = model
+        const subjects = new Map(turns.map(turn => [JSON.stringify([turn.project, turn.session, turn.id]), turn.request]))
+        while (pending.length && job.state === 'running') {
+          const selected = pending.splice(0, 8)
+          // The standalone monitor shares this cache and may have written a result.
+          addFindings(this.home, selected)
+          const eligible = selected.filter(row => !row.finding)
+          job.remaining -= selected.length - eligible.length
+          if (!eligible.length) continue
+          const deferred = await this.classify(eligible, model, subjects)
+          job.processed += eligible.length - deferred.length
+          job.remaining -= eligible.length - deferred.length
+          pending.push(...deferred)
+        }
       }
-      if (!processed) throw new Error('本地模型没有返回有效分类，可重试或切换模型')
-      return { model, processed, remaining: eligible.length - processed }
-    } finally { this.busy = false }
+      job.state = job.remaining ? 'stopped' : 'completed'
+    } catch (error) {
+      job.state = 'error'
+      job.error = error instanceof Error ? error.message : String(error)
+    }
+  }
+
+  private async classify(selected: UsageRow[], model: string, subjects: Map<string, string>): Promise<UsageRow[]> {
+    const input = selected.map((row, index) => ({
+      id: index + 1, phase: row.phase, subject: subjects.get(JSON.stringify(row.turn)),
+      observed: { text: row.evidence.text, failure: row.evidence.failure,
+        tools: row.evidence.tools.slice(0, 4).map(tool => ({ ...tool, result: tool.result.slice(0, 125) })) },
+    }))
+    const response = await this.request(ollama + '/api/chat', {
+      method: 'POST', redirect: 'error', signal: AbortSignal.timeout(180_000),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, stream: false, think: false, format: 'json',
+        options: { temperature: 0, num_ctx: 8192, num_predict: 2200 },
+        messages: [{ role: 'system', content: config.system },
+          { role: 'user', content: JSON.stringify({ categories: config.categories, outcomes: config.outcomes, requests: input }) }] }),
+    })
+    if (!response.ok) throw new Error('Ollama HTTP ' + response.status)
+    const responseData = await response.json() as { message?: { content?: string } }
+    const parsed: { items?: Record<string, unknown>[] } = JSON.parse(responseData.message?.content ?? '{}')
+    const byId = new Map((Array.isArray(parsed.items) ? parsed.items : []).filter(item => item && typeof item === 'object')
+      .map(item => [Number(item.id), item]))
+    const deferred: UsageRow[] = []
+    for (const [index, row] of selected.entries()) {
+      const item = byId.get(index + 1)
+      if (!item || !category(item.category) || !outcome(item.outcome)) { deferred.push(row); continue }
+      const trim = (value: unknown) => typeof value === 'string' ? value.slice(0, 180) : ''
+      addFindings(this.home, [row])
+      if (!row.finding) writeJsonFile(cachePath(this.home, row), { category: item.category, outcome: item.outcome,
+        purpose: trim(item.purpose), result: trim(item.result), model, fingerprint: fingerprint(row) })
+    }
+    if (deferred.length === selected.length) throw new Error('本地模型没有返回有效分类，可重试或切换模型')
+    return deferred
   }
 }
 

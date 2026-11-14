@@ -11,6 +11,8 @@ mountTokenMonitor(document.body, {
   read: () => json('/api/usage'),
   refreshPrices: () => json('/api/pricing/refresh', {method: 'POST'}),
   auditModels: () => json('/api/audit/models'),
-  auditBatch: filter => json('/api/audit/batch', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(filter)}),
+  auditStart: filter => json('/api/audit/start', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(filter)}),
+  auditStatus: () => json('/api/audit/status'),
+  auditStop: () => json('/api/audit/stop', {method: 'POST'}),
   openSource: (_provider, url) => window.open(url, '_blank', 'noopener,noreferrer'),
 });

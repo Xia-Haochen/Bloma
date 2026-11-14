@@ -10,7 +10,7 @@ export function registerTokenMonitorIpc(ipc: IpcMain, window: BrowserWindow): vo
   const home = getPromaHome()
   let catalog: PricingCatalog | undefined
   const request = (url: string, options?: RequestInit) => session.fromPartition('token-monitor-pricing').fetch(url, options)
-  const audit = new LocalAudit(home, fetch)
+  const audit = new LocalAudit(home, (url, options) => fetch(url, options))
   const exchange = new Exchange(home, request)
   let exchangeStarted = false
   const prices = () => catalog ??= new PricingCatalog(home, request)
@@ -39,7 +39,15 @@ export function registerTokenMonitorIpc(ipc: IpcMain, window: BrowserWindow): vo
   }))
   ipc.handle(IPC_CHANNELS.TOKEN_MONITOR_AUDIT, (event, input: import('../../shared/token-monitor').AuditFilter) => safeInvoke('token-monitor-audit', () => {
     access(event)
-    return audit.batch(input)
+    return audit.start(input)
+  }))
+  ipc.handle(IPC_CHANNELS.TOKEN_MONITOR_AUDIT_STATUS, event => safeInvoke('token-monitor-audit-status', () => {
+    access(event)
+    return audit.status()
+  }))
+  ipc.handle(IPC_CHANNELS.TOKEN_MONITOR_AUDIT_STOP, event => safeInvoke('token-monitor-audit-stop', () => {
+    access(event)
+    return audit.stop()
   }))
   ipc.handle(IPC_CHANNELS.TOKEN_MONITOR_OPEN_SOURCE, (event, provider: unknown) => safeInvoke('token-monitor-source', async () => {
     access(event)

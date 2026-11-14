@@ -5,5 +5,7 @@ export function mountTokenMonitor(root: ShadowRoot | HTMLElement, transport: {
   refreshPrices(): Promise<MonitorPrices>
   openSource(provider: string, url?: string): unknown
   auditModels(): Promise<string[]>
-  auditBatch(filter: AuditFilter): Promise<AuditProgress>
+  auditStart(filter: AuditFilter): Promise<AuditProgress>
+  auditStatus(): Promise<AuditProgress | null>
+  auditStop(): Promise<AuditProgress | null>
 }): () => void
