@@ -24,8 +24,88 @@ import { handleLeanGuide } from '../../../main/guide/lean-guide'
 import { readPendingDecision } from '../../../main/guide/pending-decision'
 import { assistantDisplayText } from '../../../shared/message-presentation'
 import type { AgentEvent, AgentSendMessageInput } from '../../../shared/types'
+import { assessIndependentCases, type IndependentCases } from '../../../main/software/independent-semantics'
+import { challengeIndependentCase, currentIndependentSemantics } from '../../../main/software/independent-quality'
+import { readQualityLedger, saveQualityLedger } from '../../../main/software/quality-ledger'
 
 let home:string,old:string|undefined,project:ReturnType<typeof createProject>,policy:IndependentDesignPolicy,calls:number
+
+it.each([true,false])('recovers the recorded voice disputes only after independent correction approval (%s)',async approve=>{
+  const fixture=JSON.parse(readFileSync(new URL('./fixtures/voice-independent-failure-20261115.json',import.meta.url),'utf8'))
+  expect(assessIndependentCases(fixture.brief,fixture.contract).ready).toBe(true)
+  const brief={...fixture.brief,project_id:project.project_id,lean_brief:{...fixture.brief.lean_brief,preview:'skip'}}
+  syncDocuments({request_id:'recorded',project_id:project.project_id,session_id:'s',checkpoint:'requirement_confirmed'},brief)
+  const confirmed=markPrdUserConfirmed(project.project_id)!,scope=prdScopeFingerprint(confirmed)
+  updateProject(project.project_id,{ux_confirmation:{prd_fingerprint:scope,design_hash:scope,html_hash:null}})
+  const original:IndependentCases=structuredClone(fixture.contract)
+  for(const item of original.cases)item.basis!.requirement_hash=requirementEvidenceHash(confirmed,confirmed.requirements.find(row=>row.id===item.feature)!)
+  const options=sharedInput(()=>JSON.stringify(original))
+  const frozen=await prepareIndependentDesign(options)
+  for(const claim of fixture.challenges)await challengeIndependentCase(project.project_id,{case_id:claim.case_id,reason:claim.reason,evidence:claim.evidence})
+  const ledger=readQualityLedger(project.project_id)
+  for(const finding of ledger.findings.filter(row=>row.challenge)){
+    finding.checks=fixture.challenges.find((row:any)=>row.case_id===finding.independent!.case_id).checks
+    expect(finding.checks.some(row=>row.outcome==='failed')).toBe(true)
+    finding.disposition='confirmed'
+  }
+  saveQualityLedger(project.project_id,ledger)
+  expect(currentIndependentSemantics(project.project_id,original).ready).toBe(false)
+  const revised=structuredClone(original)
+  for(const item of revised.cases.filter(row=>['F-004','F-005'].includes(row.feature))){
+    item.steps[0]={kind:'speech_input',control:'音频文件输入'}
+    if(item.feature==='F-005') {
+      item.steps=[{kind:'expect',control:'角色语音风格标识',equals:'',oracle:{kind:'nonempty',quote:'声音特征'}},
+        ...item.steps.slice(0,2),{kind:'speech_input',control:'音频文件输入'},item.steps[3],
+        {kind:'expect',control:'角色语音风格标识',equals:'',oracle:{kind:'observed',step:0}}]
+    }
+  }
+  let proposals=0,reviews=0,maker=0
+  const controller=new AbortController()
+  const query:SDKQuery=async function*(prompt,settings){
+    if(settings.accounting?.role!=='acceptance_designer'){maker++;controller.abort();return}
+    const packet=JSON.parse(prompt)
+    if(packet.cases_to_assess){
+      reviews++
+      expect(packet.findings.filter((row:any)=>row.claim)).toHaveLength(2)
+      expect(packet.findings.filter((row:any)=>row.claim).every((row:any)=>row.checks.some((check:any)=>check.outcome==='failed'))).toBe(true)
+      yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify({approve,decisions:packet.cases_to_assess.map((case_id:string)=>({case_id,action:'correct',reason:'原用例缺少音频输入或比较了不同业务量，修订保留原需求。'}))})}]}}
+    }else{
+      proposals++
+      expect(packet.previous_design_feedback.contract).toEqual(original)
+      expect(packet.previous_design_feedback.cases.map((row:any)=>row.id)).toEqual(expect.arrayContaining(fixture.challenges.map((row:any)=>row.case_id)))
+      yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify(revised)}]}}
+    }
+  }
+  await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'recover-real-record',content:'继续',maxTokens:8192,signal:controller.signal},
+    query,options.primaryEnv,{publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
+  expect(proposals).toBe(1);expect(reviews).toBe(1);expect(maker).toBe(approve?1:0)
+  const current=readIndependentDesign(project.project_id)!
+  expect(current.contract).toEqual(approve?revised:original)
+  expect(JSON.parse(readFileSync(join(home,'software-independent-design',project.project_id,frozen.digest+'.json'),'utf8')).contract).toEqual(original)
+  expect(currentIndependentSemantics(project.project_id,current.contract!).ready).toBe(approve)
+  const findings=readQualityLedger(project.project_id).findings.filter(row=>row.challenge)
+  expect(findings.every(row=>row.disposition==='superseded')).toBe(approve)
+  if(approve){
+    await challengeIndependentCase(project.project_id,{case_id:revised.cases[3].id,reason:'新的执行证据',evidence:'本次与上次核对的主张不同'})
+    expect(currentIndependentSemantics(project.project_id,revised).ready).toBe(false)
+  }
+},60000)
+
+it('independently rejects an unsupported challenge and reopens a later distinct challenge',async()=>{
+  await prepareIndependentDesign(sharedInput())
+  await challengeIndependentCase(project.project_id,{case_id:'save',reason:'不希望检查保存结果',evidence:'只有制作方主张'})
+  const query=sharedInput(prompt=>{
+    const packet=JSON.parse(prompt)
+    return packet.cases_to_assess ? JSON.stringify({approve:true,decisions:[{case_id:'save',action:'retain',reason:'确认要求明确要求保存结果，原断言有效。'}]}) : JSON.stringify(contract)
+  })
+  const result=await prepareIndependentDesign({...query,redesign:true})
+  expect(result.status,result.reason).toBe('frozen')
+  expect(result.contract).toEqual(contract)
+  expect(currentIndependentSemantics(project.project_id,contract).ready).toBe(true)
+  expect(readQualityLedger(project.project_id).findings.find(row=>row.challenge)?.disposition).not.toBe('superseded')
+  await challengeIndependentCase(project.project_id,{case_id:'save',reason:'另一条新的执行问题',evidence:'新的执行记录'})
+  expect(currentIndependentSemantics(project.project_id,contract).ready).toBe(false)
+})
 const contract: import('../../../main/software/independent-semantics').IndependentCases={cases:[{id:'save',feature:'F-001',coverage:['normal'],steps:[{kind:'fill',control:'name',value:'Alice'},{kind:'click',control:'save'},{kind:'expect',control:'result',equals:'Alice',oracle:{kind:'input',step:0}}]}]}
 const route=()=>({channel_id:'b',model:'model-b',env:{ANTHROPIC_BASE_URL:'https://b.invalid',ANTHROPIC_MODEL:'model-b'}})
 const query:SDKQuery=async function*(prompt,options){calls++;expect(prompt).not.toContain('IMPLEMENTATION_SENTINEL');expect(options.env.ANTHROPIC_MODEL).toBe('model-b');expect(options.tools).toBeUndefined()
@@ -393,6 +473,30 @@ it('executes Chinese control names across restart and detects corrupted persiste
   const bad = await verifyIndependentDesign(project.project_id,await prepareSoftwareRelease(project.project_id,root),AbortSignal.timeout(35000))
   expect(bad.status).toBe('failed')
 },90000)
+
+it('supplies host-frozen speech through the real file input and fails when the input is ignored',async()=>{
+  const proposal=structuredClone(contract),item=proposal.cases[0]
+  item.steps=[{kind:'speech_input',control:'音频输入'},
+    {kind:'expect',control:'result',equals:'',oracle:{kind:'nonempty',quote:item.basis!.expected_source}}]
+  const design=await prepareIndependentDesign(sharedInput(()=>JSON.stringify(proposal)))
+  expect(design.status,design.reason).toBe('frozen')
+  const server=createServer()
+  await new Promise<void>(done=>server.listen(0,'127.0.0.1',done))
+  const address=server.address();if(!address||typeof address==='string')throw Error('port')
+  await new Promise<void>(done=>server.close(()=>done()))
+  const root=project.root_path
+  writeFileSync(join(root,'server.cjs'),`require('http').createServer((q,s)=>{s.setHeader('Content-Type','text/html');s.end(require('fs').readFileSync('index.html'))}).listen(${address.port},'127.0.0.1')`)
+  const html=`<input id="audio" type="file"><output id="result"></output><script>document.querySelector('#audio').onchange=async e=>{const f=e.target.files[0];const bytes=new Uint8Array(await f.arrayBuffer());document.querySelector('#result').textContent=f.name+':'+String.fromCharCode(...bytes.slice(0,4))}</script>`
+  writeFileSync(join(root,'index.html'),html)
+  writeFileSync(join(root,'LAUNCH.json'),JSON.stringify({schema_version:2,ui:'browser',command:['node','server.cjs'],url:`http://127.0.0.1:${address.port}`}))
+  writeFileSync(join(root,'INDEPENDENT_ADAPTER.json'),JSON.stringify({version:1,design_digest:design.digest,controls:{'音频输入':'#audio',result:'#result'}}))
+  const checked=await verifyIndependentDesign(project.project_id,await prepareSoftwareRelease(project.project_id,root),AbortSignal.timeout(30000))
+  expect(checked.status,JSON.stringify(checked)).toBe('passed')
+  expect(checked.case_results![0].steps[1].actual).toBe('voice-golden.wav:RIFF')
+  writeFileSync(join(root,'index.html'),'<input id="audio" type="file"><output id="result"></output>')
+  const broken=await verifyIndependentDesign(project.project_id,await prepareSoftwareRelease(project.project_id,root),AbortSignal.timeout(30000))
+  expect(broken.status,JSON.stringify(broken)).toBe('failed')
+},60000)
 it('leaves command-only projects on their supported CLI verification path',async()=>{
  const parsed=parseLeanBrief(JSON.stringify({action:'brief',goal:'输出文本',ui:'none',delivery:'command',requirements:[{description:'输出文本',expected:'输出hello'}]}),{projectId:project.project_id,sessionId:'s',source:'输出hello',previous:readPrdBackplane(project.project_id),software:true})!
  if(parsed.action!=='brief')throw Error('fixture')

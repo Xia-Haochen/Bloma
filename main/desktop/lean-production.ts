@@ -257,6 +257,25 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     const text = independentClarificationText(clarification)
     blocked(heading ? `${heading}\n\n${text}` : text, clarification.questions.length > 0)
   }
+  const attemptedIndependentRepairs = new Set<string>()
+  const recoverIndependentDesign = async () => {
+    const design = readIndependentDesign(input.projectId), policy = readIndependentPolicy(input.projectId)
+    if (!design?.contract || !policy?.enabled || !('funding' in policy)) return false
+    const assessment = currentIndependentSemantics(input.projectId, design.contract)
+    if (assessment.ready) return true
+    if (independentClarification(input.projectId, design.contract, assessment).questions.length) return false
+    const key = assessment.digest
+    if (attemptedIndependentRepairs.has(key)) return false
+    attemptedIndependentRepairs.add(key)
+    emit('message_delta',{text:'验收用例出现争议，正在依据原要求和执行记录独立核对、更正，再继续复验。'})
+    const repaired = await prepareIndependentDesign({projectId:input.projectId,sessionId:input.sessionId,
+      query:input.query,primaryEnv:input.env,maxTokens:input.maxTokens,signal,redesign:true})
+    if(repaired.status!=='frozen'||!repaired.contract) {
+      emit('message_delta',{text:repaired.reason??'独立用例更正尚未完成。'})
+      return false
+    }
+    return currentIndependentSemantics(input.projectId,repaired.contract).ready
+  }
   const blockQualityGap = async (reason: string) => {
     if (reason.startsWith('QUALITY_INDEPENDENT_SEMANTICS_UNRESOLVED')) {
       const design = readIndependentDesign(input.projectId)
@@ -554,6 +573,9 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
           // Only an actual full verification for the exact current inputs
           // starts closeout. Partial stage checks and self-reported success do not.
           if(scopePending)return
+          if(calls.some(call=>call.name==='challenge_independent_case'&&call.status==='ok')) {
+            if(await recoverIndependentDesign())return {feedback:'独立验收争议已核对。读取当前 independent-design 核对冻结案例及控件映射，然后 verify_app 重新验收。'}
+          }
           if(calls.some(c=>c.name==='propose_test_correction'&&c.status==='ok')){
             await settleCorrections(ctx.signal)
             const rejected=testCorrectionRejectionFeedback(input.projectId)
@@ -606,7 +628,11 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
           deps.persistAssistant(input.sessionId,text);emit('message_delta',{text});deps.complete(input.sessionId,input.projectId,'incomplete')
           return
         }
-        if (checked.status === 'unverified' && checked.independent?.semantics?.ready === false) {
+        if (checked.independent?.semantics?.ready === false) {
+          if(await recoverIndependentDesign()) {
+            task='独立验收争议已核对。读取当前冻结独立案例，更新必要控件映射并重新verify_app。'
+            continue
+          }
           await waitForIndependentDesign(checked.independent.semantics)
           return
         }

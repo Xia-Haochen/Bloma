@@ -11,7 +11,7 @@ export type IndependentOracle = { kind: 'derived'; version: 1; rule_id: string; 
   | { kind: 'unresolved'; question: string; decision?: { source: string; options: string[] } }
 export type IndependentStep = ({ kind: 'fill'; control: string; value: string } | { kind: 'click'; control: string; intent?: 'submit' | 'cancel' }
   | { kind: 'expect'; control: string; equals: string; property?: 'text' | 'value'; oracle?: IndependentOracle }
-  | { kind: 'restart' } | { kind: 'speech_probe' }) & { subject?: string }
+  | { kind: 'restart' } | { kind: 'speech_probe' } | { kind: 'speech_input'; control: string }) & { subject?: string }
 export interface IndependentCase { id: string; feature: string; steps: IndependentStep[]
   basis?: { requirement_hash: string; expected_source: string }; related?:Array<{feature:string;requirement_hash:string;expected_source:string}>; coverage?: IndependentCategory[] }
 export interface IndependentCases { cases: IndependentCase[]; coverage_notes?: Array<{ feature: string; category: IndependentCategory; disposition: 'not_applicable' | 'unresolved'; reason: string; source: string }> }
@@ -134,7 +134,7 @@ export function parseIndependentCases(textValue: string, features: string[]): In
     for (const [stepIndex, step] of item.steps.entries()) {
       const stepPath = `${path}.steps[${stepIndex}]`
       if (!step) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}`)
-      const allowed = step.kind === 'fill' ? ['kind', 'control', 'value', 'subject'] : step.kind === 'expect' ? ['kind', 'control', 'equals', 'oracle', 'property', 'subject'] : step.kind === 'click' ? ['kind', 'control', 'subject', 'intent'] : step.kind === 'restart' || speechProbe && step.kind === 'speech_probe' ? ['kind'] : []
+      const allowed = step.kind === 'fill' ? ['kind', 'control', 'value', 'subject'] : step.kind === 'expect' ? ['kind', 'control', 'equals', 'oracle', 'property', 'subject'] : step.kind === 'click' ? ['kind', 'control', 'subject', 'intent'] : step.kind === 'speech_input' ? ['kind', 'control', 'subject'] : step.kind === 'restart' || speechProbe && step.kind === 'speech_probe' ? ['kind'] : []
       if (!allowed.length || !keys(step, allowed)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}`)
       if ('control' in step ? !logicalName(step.control) : step.kind !== 'restart' && step.kind !== 'speech_probe') throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.control 须为非空逻辑控件名，最多128字符，可用中文或空格，不含换行等控制字符`)
       if (step.kind === 'fill' && !text(step.value, 2000)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.value`)
@@ -147,7 +147,7 @@ export function parseIndependentCases(textValue: string, features: string[]): In
       }
     }
     if (!speechProbe) {
-      if (!item.steps.some(step => step.kind === 'click' || step.kind === 'fill')) {
+      if (!item.steps.some(step => step.kind === 'click' || step.kind === 'fill' || step.kind === 'speech_input')) {
         throw new IndependentCaseFormatError(`INDEPENDENT_CASE_INVALID: ${path}.steps 缺少操作，至少提供一个 kind 为 click 或 fill 的步骤`)
       }
       if (!item.steps.some(step => step.kind === 'expect')) {
@@ -160,9 +160,11 @@ export function parseIndependentCases(textValue: string, features: string[]): In
     || !['not_applicable', 'unresolved'].includes(note.disposition) || !text(note.reason, 1200) || !note.reason.trim() || !text(note.source)))) throw new IndependentCaseFormatError('INDEPENDENT_COVERAGE_NOTES_INVALID: coverage_notes')
   return value
 }
-export function assessIndependentCases(brief: PrdBackplane, contract: IndependentCases): IndependentSemantics {
+export function assessIndependentCases(brief: PrdBackplane, contract: IndependentCases,
+  challenges: Array<{case_id:string;reason:string;evidence:string}> = []): IndependentSemantics {
   const cases = contract.cases.map(item => {
     const requirement = brief.requirements.find(r => r.id === item.feature), expected = requirement && trustedAcceptance(brief, requirement), issues: string[] = []
+    for(const challenge of challenges.filter(row=>row.case_id===item.id))issues.push(`实现者争议尚待核对：${challenge.reason}；证据：${challenge.evidence}`)
     if (!requirement || !expected || item.basis?.expected_source !== expected || item.basis.requirement_hash !== requirementEvidenceHash(brief, requirement)) issues.push('预期来源缺失或与当前确认需求不匹配')
     for(const related of item.related??[]){const linked=brief.requirements.find(r=>r.id===related.feature);if(!linked||trustedAcceptance(brief,linked)!==related.expected_source||requirementEvidenceHash(brief,linked)!==related.requirement_hash)issues.push('关联需求来源缺失或已变化')}
     if (!item.coverage?.length) issues.push('未声明本案例检查的业务错误面')
@@ -186,7 +188,7 @@ export function assessIndependentCases(brief: PrdBackplane, contract: Independen
         const source = item.steps[oracle.step]
         if (oracle.step >= index || source?.kind !== 'expect' || !source.oracle
           || ['unresolved','observed'].includes(source.oracle.kind)
-          || source.control === step.control && !item.steps.slice(oracle.step + 1, index).some(s => ['restart','click','fill'].includes(s.kind))) {
+          || source.control === step.control && !item.steps.slice(oracle.step + 1, index).some(s => ['restart','click','fill','speech_input'].includes(s.kind))) {
           issues.push('结果一致性须引用之前已检查的实际输出，并跨操作或不同控件比较')
         }
       } else if (oracle.kind === 'derived') {
@@ -228,7 +230,7 @@ export function assessIndependentCases(brief: PrdBackplane, contract: Independen
 }
 export const INDEPENDENT_SEMANTICS_INSTRUCTIONS = [
   '返回严格 JSON {cases:[{id,feature,basis:{requirement_hash,expected_source},coverage:[normal|multi_object|exception|cancel|reopen],steps}],coverage_notes:[{feature,category,disposition:not_applicable|unresolved,reason,source}]}。basis 逐字引用确认 expected 与 requirement_hash。',
-  '普通 GUI 案例的 steps 必须同时有 click 或 fill 操作，以及 expect 断言。即使预期需要澄清，也请保留触发该行为的操作，并在 expect 中用 unresolved。步骤用 kind 指定类型，control 是逻辑控件名。fill 携带 value，click 可带 intent: submit 或 cancel，expect 携带 equals 和 oracle，可用 restart 测试重新打开后的结果。',
+  '普通 GUI 案例的 steps 必须同时有 click、fill 或 speech_input 操作，以及 expect 断言。即使预期需要澄清，也请保留触发该行为的操作，并在 expect 中用 unresolved。步骤用 kind 指定类型，control 是逻辑控件名。fill 携带 value，click 可带 intent: submit 或 cancel，expect 携带 equals 和 oracle，可用 restart 测试重新打开后的结果。',
   '完整的普通步骤数组示例：[{"kind":"fill","control":"name","value":"Alice"},{"kind":"click","control":"save"},{"kind":"expect","control":"result","equals":"Alice","oracle":{"kind":"input","step":0}}]。',
   '每个 expect 的 oracle 是一个 JSON 对象，必须含 kind。以下每行是完整步骤示例。只使用对应 oracle 示例中的字段，值须根据当前确认资料填写。',
   'B 负责设计测试输入、夹具、观察和断言。用户只决定产品目标与真正冲突的业务规则。提示文案、掩码、动态模型回复和历史内容不要求用户逐字提供；按已授权的工程默认值和实际数据关系验证。',
@@ -241,6 +243,7 @@ export const INDEPENDENT_SEMANTICS_INSTRUCTIONS = [
   'literal 逐字引用当前或关联需求已确认 expected 中的业务值，equals 必须等于 quote。',
   '跨功能复用已确认结果时，在 literal 中直接加来源 feature。例：{"kind":"expect","control":"target_input","property":"value","equals":"已确认的整理结果","oracle":{"kind":"literal","feature":"F-002","quote":"已确认的整理结果"}}。写入结果沿用清理样例，勿再次提问。普通文本用 property=text，输入框用 property=value。',
   '若需求的 capabilities 含 speech，正常语音转写案例用唯一一步 {"kind":"speech_probe"}，coverage 只填 ["normal"]。平台以固定音频验证产品实际识别入口，无需用户提供逐字转写。此证据仅覆盖转写算法，不能用来代替录音界面、清理或文本写入测试。',
+  '语音触发后的回复、历史和多轮对话须实际提供输入：使用 {"kind":"speech_input","control":"音频文件输入"}，宿主从受保护资源把固定语音文件交给产品正常文件输入控件，之后等待新的用户发言与服务回复。该步骤证明文件语音业务链；实体麦克风仍由用户参与实测核对。点击麦克风不等于已经提供声音。observed 必须比较同一业务量，风格标识只能与先前观察到的风格标识比较，不能引用回复正文；每轮回复都须有本轮输入。',
   '整段需求描述不能为自选的输出值背书。不要把自选状态文案、生成式文本样例或界面草图上的文案当作已确认的精确预期。',
   '{"kind":"expect","control":"result","equals":"5","oracle":{"kind":"derived","version":1,"rule_id":"BR-001","steps":[0,1]}}',
   'derived 仅引用确认资料中带 verification.operation 的规则。version 为数字 1，rule_id 为确认的规则编号，steps 是之前同对象 fill 的从 0 开始且互不重复的整数序号。equals 须等于按该规则对这些输入的确定性计算结果。',

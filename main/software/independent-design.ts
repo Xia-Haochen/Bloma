@@ -15,6 +15,8 @@ import { leanBudget } from '../desktop/lean-budget'
 import { callLlmForJson, type LlmAttemptFailure } from '../kernel/llm-call'
 import { requirementCapabilities } from '../model/requirement-capabilities'
 import type { SDKQuery } from '../orchestration/stages/orchestration-contracts'
+import { readQualityLedger } from './quality-store'
+import { reviewIndependentCorrection, settleIndependentCorrection, type IndependentCorrection } from './independent-correction'
 
 import { readIndependentPolicy, independentDesignMatchesPolicy, type IndependentDesignPolicy } from './independent-policy'
 export { readIndependentPolicy, type IndependentDesignPolicy } from './independent-policy'
@@ -27,6 +29,7 @@ export interface IndependentDesignRecord {
   attempted?:boolean; authorization_hash?:string
   primary_model?:string
   funding?:'project'
+  correction?:IndependentCorrection
 }
 const sha=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex')
 function directory(projectId:string){if(!/^[A-Za-z0-9_-]+$/.test(projectId))throw Error('INDEPENDENT_PROJECT_INVALID');return join(getPromaHome(),'software-independent-design',projectId)}
@@ -77,9 +80,11 @@ export async function prepareIndependentDesign(input:{projectId:string;sessionId
     attempted=previous?.attempted===true;authorizationHash=previous?.authorization_hash
     const current = previous?.status === 'frozen' && previous.scope === scope && previous.operation === operation
       && previous.design_hash === base.design_hash && independentDesignMatchesPolicy(previous, policy) ? previous : undefined
-    // Only the user's explicit action may replace a disputed shared-budget design.
-    // Keep prior frozen bytes and never send a second request implicitly.
-    const assessment = shared && input.redesign && current?.contract ? assessIndependentCases(brief, current.contract) : undefined
+    const findings = current ? readQualityLedger(input.projectId).findings.filter(row => row.independent?.design_digest === current.digest) : []
+    const challenges=findings.filter(row=>row.challenge&&!row.challenge.resolution)
+    const challengeVersion=sha(challenges)
+    const assessment=shared&&input.redesign&&current?.contract?assessIndependentCases(brief,current.contract,
+      challenges.map(row=>({case_id:row.independent!.case_id,reason:row.challenge!.reason,evidence:row.challenge!.evidence}))):undefined
     const repair = assessment && !assessment.ready ? assessment : undefined
     redesigning = !!repair
     if (current && !repair && current.primary_model === input.primaryEnv.ANTHROPIC_MODEL) return current
@@ -124,6 +129,7 @@ export async function prepareIndependentDesign(input:{projectId:string;sessionId
       ...(previousFormatIssue ? { previous_format_issue: previousFormatIssue } : {}),
       ...(repair ? { previous_design_feedback: {
         contract: current!.contract,
+        ...(input.previousFailure?.reason ? {review_issue:input.previousFailure.reason.slice(0,7000)} : {}),
         cases: repair.cases.filter(row => row.status === 'disputed').slice(0, 12).map(({ id, feature, issues }) => ({ id, feature, issues })),
         coverage: repair.coverage.filter(row => ['unresolved','missing'].includes(row.status)).slice(0, 24).map(({ feature, category, status }) => ({ feature, category, status })),
       } } : {})}
@@ -183,7 +189,25 @@ export async function prepareIndependentDesign(input:{projectId:string;sessionId
     }
     if(prdScopeFingerprint(readPrdBackplane(input.projectId))!==scope||findProject(input.projectId).ux_confirmation?.design_hash!==base.design_hash
       ||(findProject(input.projectId).lean_operation_id??'initial')!==operation||sha(readIndependentPolicy(input.projectId))!==sha(policy))throw Error('INDEPENDENT_SCOPE_CHANGED')
-    return save(input.projectId,{...base,status:'frozen',...(shared?{funding:'project' as const}:{}),channel_id:route.channel_id,model:route.model,primary_model:input.primaryEnv.ANTHROPIC_MODEL,contract:result,digest:sha(result),attempted,authorization_hash:authorizationHash})
+    let correction:IndependentCorrection|undefined
+    if (repair && findings.some(row => row.challenge || row.checks.length)) {
+      if (!assessIndependentCases(brief,result).ready) throw Error('INDEPENDENT_CORRECTION_INVALID: 修改后案例仍缺少业务依据')
+      correction = await reviewIndependentCorrection({projectId:input.projectId,sessionId:input.sessionId,
+        before:current!.contract!,after:result,from:current!.digest!,findings,requirements:data.requirements,
+        query:leanBudget(input.projectId,'acceptance-design').wrap(async function*(prompt,options){
+          yield* input.query(prompt,{...options,accounting:{projectId:input.projectId,parentSessionId:input.sessionId,role:'acceptance_designer',scope}})
+        }),env,maxTokens,signal})
+    }
+    input.signal.throwIfAborted()
+    if (redesigning && (sha(readIndependentDesign(input.projectId))!==sha(current)
+      ||sha(readQualityLedger(input.projectId).findings.filter(row=>row.independent?.design_digest===current!.digest&&row.challenge&&!row.challenge.resolution))!==challengeVersion
+      ||prdScopeFingerprint(readPrdBackplane(input.projectId))!==scope
+      ||findProject(input.projectId).ux_confirmation?.design_hash!==base.design_hash
+      ||(findProject(input.projectId).lean_operation_id??'initial')!==operation
+      ||sha(readIndependentPolicy(input.projectId))!==sha(policy))) throw Error('INDEPENDENT_SCOPE_CHANGED')
+    const saved=save(input.projectId,{...base,status:'frozen',...(shared?{funding:'project' as const}:{}),channel_id:route.channel_id,model:route.model,primary_model:input.primaryEnv.ANTHROPIC_MODEL,contract:result,digest:sha(result),attempted,authorization_hash:authorizationHash,...(correction?{correction}:{})})
+    settleIndependentCorrection(input.projectId,saved)
+    return saved
   }catch(error){
     const failure={...base,status:'blocked' as const,reason:String(error),attempted,authorization_hash:authorizationHash}
     if(/INDEPENDENT_(?:RECORD_INVALID|FROZEN_BYTES_CHANGED)/.test(String(error)))return failure

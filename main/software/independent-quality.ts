@@ -13,6 +13,11 @@ import { findProject } from '../project/project-service'
 import { independentDesignMatchesPolicy } from './independent-policy'
 import { readSoftwareRunState } from './run-state'
 import { requirementCapabilities } from '../model/requirement-capabilities'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { getPromaHome } from '../../storage/config-paths'
+import type { IndependentDesignRecord } from './independent-design'
+import { settleIndependentCorrection } from './independent-correction'
 
 export interface IndependentClarification {
   questions: string[]
@@ -75,13 +80,12 @@ export function independentChallengeVersion(projectId: string) {
   return qualityHash(readQualityLedger(projectId).findings.filter(f => f.independent && f.challenge).map(f => [f.id, f.independent, f.challenge]))
 }
 export function currentIndependentSemantics(projectId: string, contract: IndependentCases): IndependentSemantics {
-  const base = assessIndependentCases(readPrdBackplane(projectId), contract), version = independentDesignVersion(projectId)
-  const challenged = readQualityLedger(projectId).findings.filter(f => f.independent?.design_version === version && f.challenge)
-  if (!challenged.length) return base
-  const cases = base.cases.map(c => { const challenge = challenged.find(f => f.independent?.case_id === c.id)?.challenge
-    return challenge ? { ...c, status: 'disputed' as const, issues: [...c.issues, `实现者争议尚待核对：${challenge.reason}；证据：${challenge.evidence}`] } : c })
-  return { ...base, digest: qualityHash([base.digest, challenged.map(f => f.challenge)]), cases, ready: false,
-    coverage: base.coverage.map(row => row.cases.some(id => cases.find(c => c.id === id)?.status === 'disputed') ? { ...row, status: 'unresolved' as const } : row) }
+  const design=readIndependentDesign(projectId)
+  if(design)settleIndependentCorrection(projectId,design)
+  const challenged = readQualityLedger(projectId).findings.filter(f => f.independent?.design_digest === design?.digest && f.challenge && !f.challenge.resolution)
+  return assessIndependentCases(readPrdBackplane(projectId),contract,challenged.map(f=>({
+    case_id:f.independent!.case_id,reason:f.challenge!.reason,evidence:f.challenge!.evidence,
+  })))
 }
 export async function recordIndependentDisputes(projectId: string, assessment: IndependentSemantics, signal?: AbortSignal) {
   const design = readIndependentDesign(projectId)
@@ -122,6 +126,7 @@ export async function recordIndependentFindings(projectId: string, candidate: So
   const identity = await qualityIdentity(projectId, signal)
   if (identity.source !== candidate.source.digest || independentDesignVersion(projectId) !== result.design_version) throw Error('INDEPENDENT_FINDING_CANDIDATE_CHANGED')
   const ledger = readQualityLedger(projectId)
+  const record = readIndependentDesign(projectId)
   const brief=readPrdBackplane(projectId)
   for (const finding of ledger.findings.filter(f => f.independent && f.independent.design_version !== result.design_version && f.disposition !== 'superseded')) {
     const requirement=brief.requirements.find(r=>r.id===finding.requirement)
@@ -139,7 +144,16 @@ export async function recordIndependentFindings(projectId: string, candidate: So
         return (environment?.mode??'isolated_local')===mode && (mode!=='controlled_service'||environment.configuration_digest===observed.environment?.configuration_digest)
       } catch {return false}
     })
-    let finding = ledger.findings.find(f => f.independent?.design_version === result.design_version && f.independent?.case_id === observed.id && sameEnvironment(f))
+    const currentCase=record?.contract?.cases.find(row=>row.id===observed.id)
+    let finding = ledger.findings.find(f => {
+      if(!f.independent||f.independent.case_id!==observed.id||f.disposition==='superseded'||!sameEnvironment(f))return false
+      if(f.independent.design_version===result.design_version)return true
+      if(!currentCase||f.identity.target!==identity.target||!/^[a-f0-9]{64}$/.test(f.independent.design_digest))return false
+      const file=join(getPromaHome(),'software-independent-design',projectId,f.independent.design_digest+'.json')
+      if(!existsSync(file))return false
+      const old=JSON.parse(readFileSync(file,'utf8')) as IndependentDesignRecord
+      return old.digest===qualityHash(old.contract)&&JSON.stringify(old.contract?.cases.find(row=>row.id===observed.id))===JSON.stringify(currentCase)
+    })
     if (!finding && observed.status === 'passed') continue
     if (!finding) {
       finding = { id: randomUUID(), review: `independent:${result.design_digest}:${observed.id}`, identity, requirement: observed.feature,

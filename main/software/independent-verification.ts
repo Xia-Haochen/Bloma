@@ -20,6 +20,8 @@ import { CORE_MANIFEST_REL, type CoreVerificationResult } from '../desktop/core-
 import { prepareAcceptanceEnvironment, AcceptanceEnvironmentError, type AcceptanceEnvironment, type AcceptanceEnvironmentEvidence } from './acceptance-environment'
 import { requirementCapabilities } from '../model/requirement-capabilities'
 import { isStaticGuiSelector } from './gui-selectors'
+import { sealGuiFixtures, materializeGuiFixtures } from '../desktop/gui-fixtures'
+import { mainRootDir } from '../platform/paths'
 
 export interface IndependentCaseResult { id: string; feature: string; status: 'passed' | 'failed' | 'unverified' | 'not_run'; kind: 'product_assertion' | 'product_runtime' | 'semantic' | 'adapter' | 'environment' | 'none'; expected_source?: string; issues?: string[]; steps: Array<{ id: string; passed: boolean; actual?: unknown }>; error?: string; evidence_warnings?:string[]; environment?: AcceptanceEnvironmentEvidence }
 export interface IndependentVerification { status: 'disabled' | 'passed' | 'failed' | 'unverified'; semantics?: IndependentSemantics; case_results?: IndependentCaseResult[]; design_version?: string; design_digest?: string
@@ -51,16 +53,22 @@ export function independentSuite(projectId:string,root:string,caseIds?:string[])
   const allowed=new Set(record.contract.cases.flatMap(item=>item.steps.flatMap(step=>'control'in step?[step.control]:[])))
   const controls=new Set(selected.flatMap(item=>item.steps.flatMap(step=>'control'in step?[step.control]:[])))
   if(Object.keys(adapter.controls).some(key=>!allowed.has(key))||[...controls].some(key=>!isStaticGuiSelector(adapter.controls[key])))throw Error('INDEPENDENT_ADAPTER_STATIC_CSS_REQUIRED')
-  return {version:1,scope_hash:record.scope,design_hash:record.design_hash,covers:[...new Set(selected.map(item=>item.feature))],steps:selected.flatMap(item=>item.steps.map((step,index)=>{
+  const suite:GuiAcceptanceSuite = {version:1,scope_hash:record.scope,design_hash:record.design_hash,covers:[...new Set(selected.map(item=>item.feature))],steps:selected.flatMap(item=>item.steps.map((step,index)=>{
     const id=`${item.id}-${index}`
     if(step.kind==='restart')return{id,kind:'restart' as const}
     if(step.kind==='speech_probe')throw Error('INDEPENDENT_SPEECH_REQUIRES_HOST_PROBE')
     const selector=adapter.controls[step.control]
+    if(step.kind==='speech_input')return{id,kind:'upload' as const,selector,path:'input/voice-golden.wav'}
     if(step.kind==='fill')return{id,kind:'fill' as const,selector,value:step.value}
     if(step.kind==='click')return{id,kind:'click' as const,selector}
     return{id,kind:'expect' as const,selector,property:step.property,
       ...(['nonempty','observed'].includes(step.oracle?.kind ?? '') ? {nonempty:true as const} : {equals:step.equals})}
   }))}
+  if (selected.some(item => item.steps.some(step => step.kind === 'speech_input'))) {
+    suite.fixtures = [{path:'input/voice-golden.wav',source:'voice-golden.wav'}]
+    return sealGuiFixtures(projectId,join(mainRootDir(),'templates/tools'),suite)
+  }
+  return suite
 }
 export async function verifyIndependentDesign(projectId:string,candidate:SoftwareRelease,signal?:AbortSignal,
   core?: Pick<CoreVerificationResult, 'speech'>):Promise<IndependentVerification>{
@@ -108,6 +116,7 @@ export async function verifyIndependentDesign(projectId:string,candidate:Softwar
         step.kind === 'expect' && step.oracle?.kind === 'observed' ? [[`${item.id}-${index}`, `${item.id}-${step.oracle.step}`]] : []))
       let environment:AcceptanceEnvironment|undefined,environmentEvidence:AcceptanceEnvironmentEvidence|undefined
       try {
+        materializeGuiFixtures(projectId,suite,join(temporary,'data'))
         const features=[item.feature,...(item.related??[]).map(row=>row.feature)]
         environment=await prepareAcceptanceEnvironment({root:candidate.root,features,signal,
           requiresLlm:brief.requirements.some(row=>features.includes(row.id)&&requirementCapabilities(row).has('llm')),

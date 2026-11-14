@@ -36,25 +36,15 @@ export interface QualityFinding {
   retest?: { identity: Identity; review: string; evidence: string; case_name: string; rules: string }
   requires_execution?: boolean
   reviewed?: { identity: Identity; review: string; evidence: string; basis?: 'static_misread'|'not_applicable' }
-  challenge?: { at: string; reason: string; evidence: string; source: 'implementer_claim' }
+  challenge?: { at: string; reason: string; evidence: string; source: 'implementer_claim'; resolution?:{review:string;action:'correct'|'retain';reason:string} }
   severity: 'critical' | 'high' | 'medium' | 'low'; location: string; trigger: string; evidence: string; reproduction: string; unknowns: string
   disposition: 'suspected' | 'disputed' | 'suggestion' | 'not_reproduced' | 'confirmed' | 'closed' | 'superseded'
   checks: Array<{ grounded?: boolean; at: string; identity: Identity; case_name: string; rules: string; outcome: 'failed' | 'passed' | 'unverified'; report?: string; candidate?: string; observation: string }>
 }
 export interface Ledger { version: 1; reviews: Review[]; findings: QualityFinding[]; collaboration?: CollaborationSelection[] }
-export const qualityHash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
+import {qualityHash,qualityLedgerPath,readQualityLedger,saveQualityLedger} from './quality-store'
+export {qualityHash,qualityLedgerPath,readQualityLedger,saveQualityLedger} from './quality-store'
 export const sameIdentity = (a: Identity, b: Identity) => qualityHash(a) === qualityHash(b)
-export function qualityLedgerPath(projectId: string) {
-  if (!/^[A-Za-z0-9_-]+$/.test(projectId)) throw Error('QUALITY_PROJECT_INVALID')
-  return join(getPromaHome(), 'software-quality', `${projectId}.json`)
-}
-export function readQualityLedger(projectId: string): Ledger {
-  const path = qualityLedgerPath(projectId)
-  if (!existsSync(path)) return { version: 1, reviews: [], findings: [] }
-  const value = JSON.parse(readFileSync(path, 'utf8')) as Ledger
-  if (value.version !== 1 || !Array.isArray(value.reviews) || !Array.isArray(value.findings) || value.collaboration!==undefined&&!Array.isArray(value.collaboration)) throw Error('QUALITY_LEDGER_INVALID')
-  return value // Corrupt evidence must fail closed, never silently reset history.
-}
 export async function qualityIdentity(projectId: string, signal?: AbortSignal): Promise<Identity> {
   const brief = readPrdBackplane(projectId)
   if (!brief.user_confirmed_at) throw Error('QUALITY_TARGET_NOT_CONFIRMED')
@@ -70,7 +60,7 @@ export function qualityTargetIdentity(projectId:string) {
 export function qualityIdentityForInputs(projectId:string,inputs:{source:string;environment:string;rules:string}):Identity {
   return {source:inputs.source,target:qualityTargetIdentity(projectId),environment:qualityHash([inputs.environment,inputs.rules])}
 }
-export const saveQualityLedger = (projectId: string, ledger: Ledger) => writeTextFileAtomic(qualityLedgerPath(projectId), JSON.stringify(ledger, null, 2))
+
 
 export function qualityRulesVersion(projectId: string) {
   return qualityHash([guiSuitePath(projectId), cliSuitePath(projectId)].map(path => existsSync(path) ? readFileSync(path).toString('base64') : null))
