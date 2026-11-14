@@ -1,4 +1,4 @@
-import { categories, outcomes, review, hasFailure, failureSummary, observedFailure, readableOutput, readableSummary } from './review.js';
+import { categories, outcomes, review, hasFailure, hasUnreadableFailure, failureSummary, observedFailure, readableOutput, readableSummary } from './review.js';
 
 const labels = {uncached: "非缓存输入", read: "缓存读取", write: "缓存写入", output: "输出"};
 const keys = Object.keys(labels);
@@ -165,7 +165,7 @@ export function mountTokenMonitor(root, transport) {
     const detail = element("details", "request-audit");
     detail.append(element("summary", "", categories[data.category] + " · " + outcomes[data.outcome]));
     const failed = hasFailure(row);
-    const summary = failed ? failureSummary(row) : "";
+    const summary = failed && !hasUnreadableFailure(row) ? failureSummary(row) : "";
     detail.append(element("p", "", "目的 · " + (failed ? readableSummary(row.finding?.purpose) || "详见技术详情" : data.purpose)));
     detail.append(element("p", "", (failed ? "失败原因 · " : "结果 · ") +
       (failed ? summary || observedFailure(row) : readableOutput(data.result) || "未记录可读的结果")));

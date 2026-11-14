@@ -4,7 +4,7 @@ import { readJsonFile, writeJsonFile } from '../storage/json-store'
 import { collectUsage } from './usage'
 import type { AuditFilter, AuditFinding, AuditProgress, ExchangeRate, UsageRow, UsageSnapshot } from '../shared/token-monitor'
 import config from './audit-config.json'
-import { failureSummary, hasFailure, needsAudit, readableSummary } from './web/review.js'
+import { failureSummary, hasFailure, hasUnreadableFailure, needsAudit, observedFailure, readableSummary } from './web/review.js'
 
 type Transport = (url: string, options?: RequestInit) => Promise<Response>
 const ollama = 'http://127.0.0.1:11434'
@@ -120,7 +120,7 @@ export class LocalAudit {
       if (!item) { deferred.push(row); continue }
       const trim = (value: unknown) => typeof value === 'string' ? value.slice(0, 180) : ''
       addFindings(this.home, [row])
-      const summary = failureSummary(row) || readableSummary(item.failureSummary)
+      const summary = failureSummary(row) || (hasUnreadableFailure(row) ? observedFailure(row) : readableSummary(item.failureSummary))
       if (needsSummary(row) && !summary) { deferred.push(row); continue }
       const finding = row.finding ?? (category(item.category) && outcome(item.outcome) ? {
         category: item.category, outcome: item.outcome, purpose: trim(item.purpose), result: trim(item.result), model, fingerprint: fingerprint(row),

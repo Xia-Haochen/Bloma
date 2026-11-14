@@ -45,6 +45,18 @@ def needs_summary(row):
     return has_failure(row) and not readable_summary(row.get("finding", {}).get("failureSummary"))
 
 
+def unreadable_failure_summary(row):
+    for tool in row["evidence"]["tools"]:
+        output = tool.get("diagnostic") or tool["result"]
+        if tool["state"] == "failed" and "�" in output:
+            if row["evidence"]["failure"]:
+                return row["evidence"]["failure"] + "。"
+            code = re.search(r'"exit_code"\s*:\s*(-?\d+)', output)
+            action = f"命令执行失败（退出码 {code[1]}）。" if code else "工具执行失败。"
+            return action + "错误输出有乱码，具体原因无法确认。"
+    return ""
+
+
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None
@@ -196,7 +208,7 @@ class LocalAudit:
             item = by_id.get(str(i), {})
             add_findings(self.home, [row])
             existing = row.get("finding")
-            summary = readable_summary((existing or {}).get("failureSummary")) or readable_summary(item.get("failureSummary"))
+            summary = readable_summary((existing or {}).get("failureSummary")) or unreadable_failure_summary(row) or readable_summary(item.get("failureSummary"))
             if needs_summary(row) and not summary:
                 deferred.append(row)
                 continue

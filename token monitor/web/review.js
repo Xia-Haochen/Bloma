@@ -62,12 +62,17 @@ export function failureSummary(row) {
   return readableSummary(row.finding?.failureSummary);
 }
 
+export function hasUnreadableFailure(row) {
+  return row.evidence.tools.some(tool => tool.state === "failed" && (tool.diagnostic || tool.result).includes("�"));
+}
+
 export function readableOutput(value) {
   return value.split(/\r?\n|\\r\\n|\\n/).filter(line => !line.includes("�")).join("\n").trim();
 }
 
 export function observedFailure(row) {
-  const tool = row.evidence.tools.find(tool => tool.state === "failed");
+  const failed = row.evidence.tools.filter(tool => tool.state === "failed");
+  const tool = failed.find(tool => (tool.diagnostic || tool.result).includes("�")) ?? failed[0];
   const output = tool?.diagnostic || tool?.result || "";
   const code = /"exit_code"\s*:\s*(-?\d+)/.exec(output)?.[1];
   const retry = row.retries?.find(item => item.http >= 400);
