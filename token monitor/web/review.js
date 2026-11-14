@@ -62,6 +62,17 @@ export function failureSummary(row) {
   return readableSummary(row.finding?.failureSummary);
 }
 
+export function browserFailure(row) {
+  const logs = row.evidence.tools.filter(tool => tool.state === "failed").map(tool => tool.diagnostic || tool.result);
+  if (logs.some(output => output.includes("DevTools remote debugging requires a non-default data directory"))) {
+    return "Edge 的远程调试未能启动。浏览器要求使用独立的数据目录，应用检查未能继续。";
+  }
+  if (logs.some(output => output.includes("Remote debugging pipe file descriptors are not open"))) {
+    return "Edge 启动时未能打开远程调试管道，页面验证未能继续。";
+  }
+  return "";
+}
+
 export function hasUnreadableFailure(row) {
   return row.evidence.tools.some(tool => tool.state === "failed" && (tool.diagnostic || tool.result).includes("�"));
 }
@@ -77,7 +88,12 @@ export function observedFailure(row) {
   const code = /"exit_code"\s*:\s*(-?\d+)/.exec(output)?.[1];
   const retry = row.retries?.find(item => item.http >= 400);
   if (row.evidence.failure) return row.evidence.failure + "。";
-  if (code) return `命令执行失败（退出码 ${code}）。${output.includes("�") ? "错误输出有乱码，具体原因无法确认。" : "具体原因可在技术详情中核对。"}`;
-  if (tool) return "工具执行失败。" + (output.includes("�") ? "错误输出有乱码，具体原因无法确认。" : "具体原因可在技术详情中核对。");
+  const browser = browserFailure(row);
+  if (browser) return browser;
+  const action = /\bmkdir\b/i.test(tool?.target ?? "") ? "创建目录失败" :
+    output.includes("Failed to launch the browser process") ? "浏览器进程启动失败" :
+    code ? "命令执行失败" : "工具执行失败";
+  if (tool) return action + (code ? `（退出码 ${code}）` : "") + "。" +
+    (output.includes("�") ? "错误输出无法读取，具体原因无法确认。" : "现有日志无法确认更具体的原因。");
   return retry ? `一次传输尝试失败（HTTP ${retry.http}）。` : "有传输尝试失败，日志未记录具体原因。";
 }

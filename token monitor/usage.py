@@ -92,6 +92,17 @@ def excerpt(blocks, limit):
     return text if len(text) <= limit else text[:limit].rstrip() + "…"
 
 
+def failed_output(content):
+    raw = content if isinstance(content, str) else "\n".join(
+        b["text"] for b in content if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)
+    ) if isinstance(content, list) else ""
+    errors = [line for line in re.split(r"\r?\n|\\r\\n|\\n", raw)
+              if "�" not in line and "<launching>" not in line and re.search(r"\[err\]|\berror:|requires |exit_code|exitCode=", line, re.I)]
+    if errors and len(raw) > 560:
+        raw = " ".join([*errors[-4:], raw[:160]])
+    return excerpt(raw, 560)
+
+
 def session_turns(path, project, session, issues):
     turns = []
     replies, results = [], {}
@@ -151,7 +162,7 @@ def evidence(end, item, transcript):
         summary = excerpt((result or {}).get("content"), 180)
         state = "unknown" if not result or "执行结果未知" in summary else "failed" if result.get("is_error") is True else "ok"
         tools.append({"name": call.get("name") or "工具调用", "target": excerpt(target, 180), "result": summary, "state": state,
-                      **({"diagnostic": excerpt(result.get("content"), 560)} if state == "failed" else {})})
+                      **({"diagnostic": failed_output(result.get("content"))} if state == "failed" else {})})
     failure = ""
     if end.get("stop_reason") in ("max_tokens", "length"):
         failure = "触及输出上限，响应被截断"

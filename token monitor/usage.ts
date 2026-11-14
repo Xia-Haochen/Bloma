@@ -77,6 +77,13 @@ function extract(content: unknown, limit: number): string {
   return text.length <= limit ? text : text.slice(0, limit).trimEnd() + '…'
 }
 
+function failedOutput(content: unknown): string {
+  const raw = Array.isArray(content) ? content.filter(object).filter(item => item.type === 'text').map(item => string(item.text)).join('\n') : string(content)
+  const lines = raw.split(/\r?\n|\\r\\n|\\n/)
+  const errors = lines.filter(line => !line.includes('�') && /\[err\]|\berror:|requires |exit_code|exitCode=/i.test(line) && !line.includes('<launching>'))
+  return errors.length && raw.length > 560 ? extract([...errors.slice(-4), raw.slice(0, 160)].join(' '), 560) : extract(raw, 560)
+}
+
 interface Reply { at: number; text: string; tools: Data[]; used?: boolean }
 interface Transcript { turns: UsageTurn[]; replies: Reply[]; results: Map<string, Data> }
 async function readTurns(home: string, project: string, session: string, issues: Issues): Promise<Transcript> {
@@ -122,7 +129,7 @@ function evidence(query: Query, transcript?: Transcript): AuditEvidence {
     const command = Array.isArray(args.command) ? args.command.filter(part => typeof part === 'string').join(' ') : args.command
     const target = extract(args.path ?? args.file_path ?? args.file ?? args.topic ?? command ?? args.pattern ?? args.goal, 180)
     return { name: string(tool.name) || '工具调用', target, result: summary,
-      ...(result?.is_error === true ? { diagnostic: extract(result.content, 560) } : {}),
+      ...(result?.is_error === true ? { diagnostic: failedOutput(result.content) } : {}),
       state: !result || summary.includes('执行结果未知') ? 'unknown' : result.is_error === true ? 'failed' : 'ok' }
   })
   const stop = string(query.end?.stop_reason)

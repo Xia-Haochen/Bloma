@@ -52,8 +52,8 @@ def unreadable_failure_summary(row):
             if row["evidence"]["failure"]:
                 return row["evidence"]["failure"] + "。"
             code = re.search(r'"exit_code"\s*:\s*(-?\d+)', output)
-            action = f"命令执行失败（退出码 {code[1]}）。" if code else "工具执行失败。"
-            return action + "错误输出有乱码，具体原因无法确认。"
+            action = "创建目录失败" if re.search(r"\bmkdir\b", tool["target"], re.I) else "命令执行失败" if code else "工具执行失败"
+            return action + (f"（退出码 {code[1]}）" if code else "") + "。错误输出无法读取，具体原因无法确认。"
     return ""
 
 
