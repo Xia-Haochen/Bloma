@@ -374,11 +374,13 @@ it.each(['custom','project'])('executes frozen B business values through an actu
   const server=createServer();await new Promise<void>(done=>server.listen(0,'127.0.0.1',done));const address=server.address();if(!address||typeof address==='string')throw Error('port');await new Promise<void>(done=>server.close(()=>done()))
   const root=project.root_path
   writeFileSync(join(root,'server.cjs'),`require('http').createServer((q,s)=>{s.setHeader('Content-Type','text/html');s.end(require('fs').readFileSync('index.html'))}).listen(Number(process.argv[2]),'127.0.0.1')`)
-  const html=`<input id="name"><button id="save" onclick="document.querySelector('#result').textContent=document.querySelector('#name').value">Save</button><output id="result"></output>`
+  const editor = funding === 'project' ? '<div id="name" contenteditable="true"></div>' : '<input id="name">'
+  const readValue = funding === 'project' ? 'innerText' : 'value'
+  const html=`${editor}<button id="save" onclick="document.querySelector('#result').textContent=document.querySelector('#name').${readValue}">Save</button><output id="result"></output>`
   writeFileSync(join(root,'index.html'),html);writeFileSync(join(root,'LAUNCH.json'),JSON.stringify({schema_version:2,ui:'browser',command:['node','server.cjs',String(address.port)],url:`http://127.0.0.1:${address.port}`}))
   writeFileSync(join(root,'INDEPENDENT_ADAPTER.json'),JSON.stringify({version:1,design_digest:design.digest,controls:{name:'#name',save:'#save',result:'#result'}}))
   const positive=await verifyIndependentDesign(project.project_id,await prepareSoftwareRelease(project.project_id,root),AbortSignal.timeout(45000));expect(positive.status,JSON.stringify(positive)).toBe('passed')
-  writeFileSync(join(root,'index.html'),html.replace('.value"',`.value+'Wrong'"`))
+  writeFileSync(join(root,'index.html'),html.replace(`.${readValue}"`,`.${readValue}+'Wrong'"`))
   expect((await verifyIndependentDesign(project.project_id,await prepareSoftwareRelease(project.project_id,root),AbortSignal.timeout(45000))).status).toBe('failed')
 },90000)
 

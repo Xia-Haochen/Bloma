@@ -63,7 +63,9 @@ export async function observeGuiStep(page: Page, step: GuiAcceptanceSuite['steps
     // Durable older transcripts used fill for selects. Preserve their intended
     // value/visible-label choice instead of forcing the model to redesign a UI.
     if (await locator.evaluate(element => element instanceof HTMLSelectElement)) return selectGuiOption(locator, { value: step.value }, true)
-    await locator.fill(step.value); return await locator.inputValue()
+    await locator.fill(step.value)
+    return locator.evaluate(element => element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
+      ? element.value : (element as HTMLElement).innerText)
   }
   if (step.kind === 'click') { await locator.click(); return 'clicked' }
   if (step.kind === 'press') { await locator.press(step.key); return 'key pressed' }
