@@ -43,6 +43,7 @@ export function mountTokenMonitor(root, transport) {
   let auditStatus = null;
   let auditCommand = null;
   let auditRevision = 0;
+  let moduleDrilldown = false;
   const state = {data: null, raw: "", query: {project: "", start: -Infinity, end: Infinity}, page: 0};
   const idFor = value => JSON.stringify(value);
   const inRange = item => (!state.query.project || item.project === state.query.project) &&
@@ -121,7 +122,7 @@ export function mountTokenMonitor(root, transport) {
     if (view === "outcome") Object.values(outcomes).forEach(label => grouping.set(label, emptyCounts()));
     const groupingBy = {
       phase: row => state.data.phases[row.phase], model: modelLabel, time: row => localDay(row.at),
-      module: row => categories[review(row).category], outcome: row => outcomes[review(row).outcome],
+      module: row => review(row).category, outcome: row => outcomes[review(row).outcome],
     };
     for (const row of view === "module" ? rows.filter(row => row.phase === "production") : rows) {
       const group = groupingBy[view](row);
@@ -138,11 +139,25 @@ export function mountTokenMonitor(root, transport) {
       time: "按请求开始日期汇总 · " + groups.length + " 个有记录的日期",
       phase: "按工作流步骤汇总 · 历史记录可按角色推断",
       model: "按供应商与模型汇总 · " + groups.length + " 个模型组合",
-      module: "制作阶段按请求的实际任务细分",
+      module: "制作阶段按请求的任务汇总。包含所勾选的缓存上下文，可取消「缓存读取」查看其余用量。点击模块查看请求明细。",
       outcome: "按每次请求的结果汇总已上报 Token",
     }[view];
-    const bars = groups.map(([name, counts]) => {
-      const row = element("div", "chart-row");
+    const bars = groups.map(([group, counts]) => {
+      const isModule = view === "module";
+      const name = isModule ? categories[group] : group;
+      const row = element(isModule ? "button" : "div", isModule ? "chart-row chart-module" : "chart-row");
+      if (isModule) {
+        row.type = "button";
+        row.addEventListener("click", () => {
+          moduleDrilldown = true;
+          $("task-filter").value = group;
+          $("outcome-filter").value = "";
+          $("search").value = "";
+          state.page = 0;
+          renderTurns(state.data.rows.filter(inRange));
+          focusTurns();
+        });
+      }
       const values = plotted.map(key => legend[key] + " " + count(counts[key])).join("，");
       const track = element("div", "track");
       track.setAttribute("role", "img");
@@ -282,6 +297,7 @@ export function mountTokenMonitor(root, transport) {
     const byTurn = new Map();
     const taskFilter = $("task-filter").value, outcomeFilter = $("outcome-filter").value;
     for (const row of rows) {
+      if (moduleDrilldown && row.phase !== "production") continue;
       const audit = review(row);
       if (taskFilter && audit.category !== taskFilter || outcomeFilter && audit.outcome !== outcomeFilter) continue;
       const id = idFor(row.turn);
@@ -294,12 +310,13 @@ export function mountTokenMonitor(root, transport) {
       return (calls.length || !taskFilter && !outcomeFilter && inRange(turn)) &&
         [turn.request, turn.reply, state.data.projects[turn.project], ...calls.flatMap(row => {
           const audit = review(row);
-          return [modelLabel(row), audit.purpose, audit.result, categories[audit.category]];
+          return [modelLabel(row), audit.purpose, audit.result, categories[audit.category], ...audit.evidence.tools.map(tool => tool.target)];
         })].some(value => value.toLowerCase().includes(query));
     }).sort((a, b) => b.at - a.at);
     const pages = Math.ceil(turns.length / pageSize);
     state.page = Math.min(state.page, Math.max(0, pages - 1));
-    $("turn-count").textContent = count(turns.length) + " 条对话或独立请求";
+    $("turn-count").textContent = (moduleDrilldown ? "制作阶段 · " : "") + count(turns.length) + " 条对话或独立请求";
+    $("clear-module").hidden = !moduleDrilldown;
     $("pagination").hidden = pages <= 1;
     $("page-label").textContent = (state.page + 1) + " / " + pages;
     $("previous").disabled = !state.page;
@@ -308,6 +325,12 @@ export function mountTokenMonitor(root, transport) {
     const children = turns.slice(state.page * pageSize, (state.page + 1) * pageSize).map(turn =>
       turnView(turn, byTurn.get(idFor([turn.project, turn.session, turn.id])) ?? [], openIds));
     $("turns").replaceChildren(...(children.length ? children : [element("p", "empty", "没有符合条件的对话。")]));
+  }
+
+  function focusTurns() {
+    const heading = $("turns-title");
+    heading.focus({preventScroll: true});
+    heading.scrollIntoView({block: "start", inline: "nearest"});
   }
 
   function renderPrices(rows) {
@@ -426,16 +449,20 @@ export function mountTokenMonitor(root, transport) {
     $(id).append(...Object.entries(options).map(([value, label]) => new Option(label, value)));
   }
   for (const id of ["search", "task-filter", "outcome-filter"]) $(id).addEventListener(id === "search" ? "input" : "change", () => {
+    if (id === "task-filter") moduleDrilldown = false;
     state.page = 0;
     if (state.data) renderTurns(state.data.rows.filter(inRange));
+  });
+  $("clear-module").addEventListener("click", () => {
+    $("task-filter").value = "";
+    $("task-filter").dispatchEvent(new Event("change"));
+    $("task-filter").focus();
   });
   for (const [id, step] of [["previous", -1], ["next", 1]]) {
     $(id).addEventListener("click", () => {
       state.page += step;
       renderTurns(state.data.rows.filter(inRange));
-      const heading = $("turns-title");
-      heading.focus({preventScroll: true});
-      heading.scrollIntoView({block: "start", inline: "nearest"});
+      focusTurns();
     });
   }
   function refreshPriceView() {

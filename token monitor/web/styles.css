@@ -83,6 +83,8 @@ input[type="checkbox"] { margin: 0; accent-color: var(--blue); }
 .chart { min-height: 188px; display: grid; align-content: center; gap: 8px; }
 .chart-row { display: grid; grid-template-columns: minmax(115px, 26%) minmax(55px, 1fr) minmax(55px, max-content); gap: 12px; align-items: center; font-size: 13px; }
 .chart-name { color: var(--muted); overflow-wrap: anywhere; }
+.chart-module { width: 100%; padding: 2px 0; border: 0; border-radius: 4px; background: transparent; color: inherit; text-align: left; }
+.chart-module:hover .chart-name { color: var(--blue); text-decoration: underline; }
 .track { display: flex; background: #eef2f8; height: 16px; border-radius: 4px; overflow: hidden; }
 .track span { height: 100%; }
 .chart-total, .number { text-align: right; font-variant-numeric: tabular-nums; }
