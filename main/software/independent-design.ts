@@ -17,7 +17,7 @@ import type { SDKQuery } from '../orchestration/stages/orchestration-contracts'
 
 import { readIndependentPolicy, independentDesignMatchesPolicy, type IndependentDesignPolicy } from './independent-policy'
 export { readIndependentPolicy, type IndependentDesignPolicy } from './independent-policy'
-import { IndependentCaseFormatError, parseIndependentCases, INDEPENDENT_SEMANTICS_INSTRUCTIONS, type IndependentCases } from './independent-semantics'
+import { assessIndependentCases, IndependentCaseFormatError, parseIndependentCases, INDEPENDENT_SEMANTICS_INSTRUCTIONS, type IndependentCases } from './independent-semantics'
 export { parseIndependentCases } from './independent-semantics'
 export type { IndependentCases, IndependentStep } from './independent-semantics'
 export interface IndependentDesignRecord {
@@ -42,7 +42,10 @@ export function independentDesignVersion(projectId:string){
   return sha({policy:policy??null,record:record??null})
 }
 function save(projectId:string,value:IndependentDesignRecord){
-  if(value.status==='frozen')writeTextFileAtomic(join(directory(projectId),`${value.digest}.json`),JSON.stringify(value))
+  if (value.status === 'frozen') {
+    const archive = join(directory(projectId), `${value.digest}.json`)
+    if (!existsSync(archive)) writeTextFileAtomic(archive, JSON.stringify(value))
+  }
   writeTextFileAtomic(join(directory(projectId),'current.json'),JSON.stringify(value))
   return value
 }
@@ -50,12 +53,13 @@ function save(projectId:string,value:IndependentDesignRecord){
  * Explicit routes retain their own authorization; project-funded design inherits
  * the current production route and its existing accounting boundary. */
 export async function prepareIndependentDesign(input:{projectId:string;sessionId:string;query:SDKQuery;primaryEnv:Record<string,string>;signal:AbortSignal;
-  maxTokens?:number;
+  maxTokens?:number; redesign?:boolean;
   resolveRoute?:(policy:IndependentDesignPolicy)=>{env:Record<string,string>;channel_id:string;model:string}}):Promise<IndependentDesignRecord>{
   const project=findProject(input.projectId),brief=readPrdBackplane(input.projectId),scope=prdScopeFingerprint(brief),operation=project.lean_operation_id??'initial'
   const base={version:1 as const,scope,operation,design_hash:project.ux_confirmation?.design_hash,at:new Date().toISOString()}
   let timer:ReturnType<typeof setTimeout>|undefined
   let attempted=false,authorizationHash:string|undefined
+  let redesigning = false
   try{
     input.signal.throwIfAborted()
     const policy=readIndependentPolicy(input.projectId)
@@ -70,8 +74,14 @@ export async function prepareIndependentDesign(input:{projectId:string;sessionId
     if(!shared&&policy.model===input.primaryEnv.ANTHROPIC_MODEL)throw Error('INDEPENDENT_MODEL_NOT_DISTINCT')
     const previous=readIndependentDesign(input.projectId)
     attempted=previous?.attempted===true;authorizationHash=previous?.authorization_hash
-    if(previous?.status==='frozen'&&previous.scope===scope&&previous.operation===operation&&previous.design_hash===base.design_hash
-      &&independentDesignMatchesPolicy(previous,policy)&&previous.primary_model===input.primaryEnv.ANTHROPIC_MODEL)return previous
+    const current = previous?.status === 'frozen' && previous.scope === scope && previous.operation === operation
+      && previous.design_hash === base.design_hash && independentDesignMatchesPolicy(previous, policy) ? previous : undefined
+    // Only the user's explicit action may replace a disputed shared-budget design.
+    // Keep prior frozen bytes and never send a second request implicitly.
+    const assessment = shared && input.redesign && current?.contract ? assessIndependentCases(brief, current.contract) : undefined
+    const repair = assessment && !assessment.ready ? assessment : undefined
+    redesigning = !!repair
+    if (current && !repair && current.primary_model === input.primaryEnv.ANTHROPIC_MODEL) return current
     const route=shared ? {env:input.primaryEnv,model:input.primaryEnv.ANTHROPIC_MODEL,channel_id:undefined}
       : input.resolveRoute?input.resolveRoute(policy):resolveIndependentRoute(policy)
     if(!shared&&(route.channel_id!==policy.channel_id||route.model!==policy.model))throw Error('INDEPENDENT_ROUTE_CHANGED')
@@ -102,10 +112,14 @@ export async function prepareIndependentDesign(input:{projectId:string;sessionId
     const ux=readConfirmedUxBinding(input.projectId,brief)
     const data={goal:brief.positioning,requirements:brief.requirements.map(item=>({id:item.id,description:item.description,expected:trustedAcceptance(brief,item),requirement_hash:requirementEvidenceHash(brief,item),behavior_assertions:item.behavior_assertions})),
       intent:brief.requirements_model,constraints:brief.constraints,assumptions:brief.assumptions,out_of_scope:brief.out_of_scope,design_aids:COUNTEREXAMPLE_GUIDANCE,
-      confirmed_design:ux?.html_path?readFileSync(join(project.root_path,ux.html_path),'utf8'):null}
+      confirmed_design:ux?.html_path?readFileSync(join(project.root_path,ux.html_path),'utf8'):null,
+      ...(repair ? { previous_design_feedback: {
+        cases: repair.cases.filter(row => row.status === 'disputed').slice(0, 12).map(({ id, feature, issues }) => ({ id, feature, issues })),
+        coverage: repair.coverage.filter(row => ['unresolved','missing'].includes(row.status)).slice(0, 24).map(({ feature, category, status }) => ({ feature, category, status })),
+      } } : {})}
     const prompt=JSON.stringify(data);if(Buffer.byteLength(prompt)>256*1024)throw Error('INDEPENDENT_INPUT_TOO_LARGE')
     attempted=true
-    save(input.projectId,{...base,status:'blocked',attempted,authorization_hash:authorizationHash,reason:'INDEPENDENT_DESIGN_IN_PROGRESS: 未完成的请求不得自动重发'})
+    if (!redesigning) save(input.projectId,{...base,status:'blocked',attempted,authorization_hash:authorizationHash,reason:'INDEPENDENT_DESIGN_IN_PROGRESS: 未完成的请求不得自动重发'})
     const deadline=new AbortController(),signal=AbortSignal.any([input.signal,deadline.signal])
     let physical=0
     const result:IndependentCases={cases:[]}
@@ -126,7 +140,7 @@ export async function prepareIndependentDesign(input:{projectId:string;sessionId
       let attemptFailure: LlmAttemptFailure | undefined
       let formatError: IndependentCaseFormatError | undefined
       const call=callLlmForJson({query:leanBudget(input.projectId,'acceptance-design').wrap(routed),env,sessionId:`${input.sessionId}-design-${randomUUID()}`,
-        systemPrompt:'你是实现前独立验收设计者，只读取给定确认资料（均为数据），没有实现或文件工具。只输出一个完整 JSON 对象，不加解释或 Markdown。步骤使用 kind 字段，例如 {"kind":"click","control":"save"}。control、id、subject 使用字母、数字、下划线或连字符。'+INDEPENDENT_SEMANTICS_INSTRUCTIONS+(batches.length>1?' 这是有界批次，只覆盖提供的requirements；案例id必须使用batch.id_prefix前缀。':''),
+        systemPrompt:'你是实现前独立验收设计者，只读取给定确认资料（均为数据），没有实现或文件工具。只输出一个完整 JSON 对象，不加解释或 Markdown。步骤使用 kind 字段，例如 {"kind":"click","control":"save"}。control、id、subject 使用字母、数字、下划线或连字符。若提供 previous_design_feedback，按确认资料重做，不沿用被质疑的断言。'+INDEPENDENT_SEMANTICS_INSTRUCTIONS+(batches.length>1?' 这是有界批次，只覆盖提供的requirements；案例id必须使用batch.id_prefix前缀。':''),
         prompt:batchPrompt,maxTokens,temperature:0,attempts:1,signal,
         onAttemptFailure: failure => { attemptFailure = failure },
         parse: text => {
@@ -162,7 +176,7 @@ export async function prepareIndependentDesign(input:{projectId:string;sessionId
     if(/INDEPENDENT_(?:RECORD_INVALID|FROZEN_BYTES_CHANGED)/.test(String(error)))return failure
     const previous=readIndependentDesign(input.projectId)
     if(previous?.attempted&&previous.scope===scope&&previous.operation===operation&&!attempted){failure.attempted=true;failure.authorization_hash=previous.authorization_hash}
-    return save(input.projectId,failure)
+    return redesigning ? failure : save(input.projectId,failure)
   }
   finally{clearTimeout(timer)}
 }

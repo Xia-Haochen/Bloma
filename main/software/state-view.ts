@@ -10,6 +10,7 @@ import { findProject } from '../project/project-service'
 import { readSoftwareRunState } from './run-state'
 import { activeSoftwareCommands, redactSoftwareOutput } from './process-manager'
 import { acceptanceScopeNote } from '../desktop/acceptance-evidence'
+import { assistantDisplayText } from '../../shared/message-presentation'
 
 /** Presentation facts only. A historical PASS is never a fresh delivery
  * credential; launch/promotion keep their existing independent gates. */
@@ -39,7 +40,8 @@ export function softwareStatusView(projectId: string, busy: boolean): SoftwareSt
   const goal: SoftwareStatusView['goal'] = project.status === 'archived' || project.status === 'abandoned' ? { status: 'archived', label: '项目已归档或放弃' }
     : project.current_stage === 'completed' && project.desktop_phase === 'delivered' ? { status: 'delivered', label: '已交付' }
     : project.longterm_summary?.status === 'awaiting_confirmation' ? { status: 'waiting_confirmation', label: '本阶段待你核对' } : { status: 'not_delivered', label: '本轮尚未交付' }
-  const reason = run?.error ?? project.desktop_blocked?.note
+  const rawReason = run?.error ?? project.desktop_blocked?.note
+  const reason = rawReason ? assistantDisplayText(rawReason) : undefined
   let reviewPurpose: 'candidate' | 'binding' | 'coverage' | undefined
   if (busy && run) try {
     const path = qualityLedgerPath(projectId)

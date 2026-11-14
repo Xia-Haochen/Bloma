@@ -13,7 +13,7 @@ import { visualCoverageComplete } from './visual-review-checklist'
 export async function deliveryQualityBlock(projectId: string, signal?: AbortSignal, activeRoute?: string): Promise<DeliveryBlock | undefined> {
     const correction=testCorrectionGate(projectId);if(correction)return blocked(correction==='TEST_CORRECTION_APPLY_REQUIRED'?'apply_correction':'correction_review', correction+': 先处理read_test_contract返回的裁定或已批准修改，再重新验证；批准不等于通过。')
     const design=readIndependentPolicy(projectId)?.enabled?readIndependentDesign(projectId):undefined
-    if(design?.contract){const semantics=currentIndependentSemantics(projectId,design.contract);if(!semantics.ready)return blocked('independent', `QUALITY_INDEPENDENT_SEMANTICS_UNRESOLVED: B预期或覆盖争议尚待澄清，不能改目标或断言过关：${JSON.stringify(semantics)}`)}
+    if(design?.contract){const semantics=currentIndependentSemantics(projectId,design.contract);if(!semantics.ready)return blocked('independent', 'QUALITY_INDEPENDENT_SEMANTICS_UNRESOLVED: 独立案例的预期或覆盖仍需核对。')}
     const current = await identity(projectId, signal), ledger = applicableQualityLedger(projectId)
     const selection = await selectQualityCollaboration(projectId,current,signal)
     const investigations = ledger.findings.filter(f => importantFinding(f) && findingNeedsInvestigation(f,current,rulesVersion(projectId),independentDesignVersion(projectId)))

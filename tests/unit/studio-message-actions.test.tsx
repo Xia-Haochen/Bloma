@@ -24,6 +24,16 @@ function fixture() {
   return store
 }
 describe('studio message actions and origin', () => {
+  it('shows a concise continue hint for a saved B assessment in the transcript', () => {
+    const store = fixture()
+    const messages = agentMessagesFamily('studio-actions')
+    store.set(messages, [...store.get(messages), { role: 'assistant', content: [{ type: 'text',
+      text: '独立案例的预期或覆盖声明尚有争议，未开始实现：\n{"digest":"legacy-assessment","cases":[]}' }], timestamp: 4 }])
+    render(<Provider store={store}><ChatPanel presentation="theatre" /></Provider>)
+    expect(screen.getByText(/回复「继续」查看当前待处理事项/)).toBeTruthy()
+    expect(document.body.textContent).not.toContain('legacy-assessment')
+  })
+
   it('host controls never become user bubbles or fork anchors; explicit human quotations remain visible', () => {
     const store = fixture()
     render(<Provider store={store}><ChatPanel presentation="theatre" onForkFromMessage={vi.fn()} /></Provider>)

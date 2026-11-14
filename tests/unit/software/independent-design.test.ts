@@ -20,6 +20,10 @@ import { configureIndependentPolicy, readIndependentPolicy, independentPolicyDig
 import { bindEvaluationRun, stageEvaluationRun, createEvaluationProtocol, recordEvaluationEvent, summarizeEvaluation, evaluationReport } from '../../../main/software/harness-evaluation'
 import { saveSoftwareRunState } from '../../../main/software/run-state'
 import { execFileSync } from 'node:child_process'
+import { handleLeanGuide } from '../../../main/guide/lean-guide'
+import { readPendingDecision } from '../../../main/guide/pending-decision'
+import { assistantDisplayText } from '../../../shared/message-presentation'
+import type { AgentEvent, AgentSendMessageInput } from '../../../shared/types'
 
 let home:string,old:string|undefined,project:ReturnType<typeof createProject>,policy:IndependentDesignPolicy,calls:number
 const contract: import('../../../main/software/independent-semantics').IndependentCases={cases:[{id:'save',feature:'F-001',coverage:['normal'],steps:[{kind:'fill',control:'name',value:'Alice'},{kind:'click',control:'save'},{kind:'expect',control:'result',equals:'Alice',oracle:{kind:'input',step:0}}]}]}
@@ -187,13 +191,16 @@ it('reports the exact oracle field without echoing unchecked model values or key
     expect(parse).not.toThrow(/private-sample/)
   }
 })
-it('routes an unresolved oracle to user clarification before implementation',async()=>{
+it('resumes the same project from a concise B question through task confirmation and a newly grounded design',async()=>{
  const options=sharedInput(),messages:string[]=[]
  const unresolved=structuredClone(contract)
  const last=unresolved.cases[0].steps.at(-1)!
  if(last.kind!=='expect')throw Error('fixture')
  last.equals=''
  last.oracle={kind:'unresolved',question:'输入“嗯，我下午三点到”时，清理后的完整文本应是什么？'}
+ unresolved.cases.push({ ...structuredClone(unresolved.cases[0]), id: 'unrequested', coverage: ['cancel'],
+   steps: [{kind:'click',control:'cancel',intent:'cancel'}, {kind:'expect',control:'result',equals:'',
+     oracle:{kind:'unresolved',question:'是否要增加取消功能？'}}] })
  const routed:SDKQuery=async function*(_prompt,settings){
   expect(settings.accounting?.role).toBe('acceptance_designer')
   yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify(unresolved)}]}}
@@ -202,8 +209,83 @@ it('routes an unresolved oracle to user clarification before implementation',asy
   {publish:()=>{},persistAssistant:(_session,text)=>messages.push(text),persistSystem:()=>{},complete:()=>{}})
  expect(findProject(project.project_id).current_stage,JSON.stringify(messages)).toBe('blocked_for_user_decision')
  expect(messages.join('\n')).toContain(last.oracle.question)
+ expect(messages.join('\n')).not.toMatch(/是否要增加取消功能|"coverage"|"digest"/)
+ const previous = readIndependentDesign(project.project_id)!
  const ledger=JSON.parse(readFileSync(join(home,'software-quality',project.project_id+'.json'),'utf8'))
  expect(ledger.findings.some((finding:any)=>finding.disposition==='disputed')).toBe(true)
+ const events: AgentEvent[] = []
+ const publish = (event: AgentEvent) => events.push(event)
+ const send: AgentSendMessageInput = {request_id:'reply',project_id:project.project_id,session_id:'s',mode:'quick',
+   current_stage:'blocked_for_user_decision',content:'继续'}
+ const signal = new AbortController()
+ let guideCalls = 0, makerCalls = 0
+ const sameModel: SDKQuery = async function*(prompt, settings) {
+   if (settings.accounting?.role === 'brief') {
+     const data = JSON.parse(prompt)
+     guideCalls++
+     expect(data.guide_context.acceptance_questions).toEqual([last.oracle!.kind === 'unresolved' && last.oracle!.question])
+     yield {type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify({
+       action:'brief',goal:'保存姓名',ui:'required',delivery:'browser',
+       requirements:[{id:'F-001',description:'保存姓名',expected:'保存Alice显示Alice。输入“嗯，我下午三点到”时显示“我下午三点到”。'}],
+     })}]}}
+   } else if (settings.accounting?.role === 'acceptance_designer') {
+     const data = JSON.parse(prompt)
+     const required = data.requirements[0]
+     expect(required.expected).toContain('我下午三点到')
+     const next = structuredClone(contract)
+     next.cases[0].basis = {requirement_hash:required.requirement_hash,expected_source:required.expected}
+     const assertion = next.cases[0].steps.at(-1)!
+     if(assertion.kind !== 'expect') throw Error('fixture')
+     assertion.equals = '我下午三点到'
+     assertion.oracle = {kind:'literal',quote:assertion.equals}
+     next.coverage_notes!.forEach(note => {note.source = required.expected})
+     yield {type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify(next)}]}}
+   } else {
+     makerCalls++
+     expect(readIndependentDesign(project.project_id)?.scope).not.toBe(previous.scope)
+     signal.abort()
+   }
+ }
+ const guide = {query:sameModel,env:options.primaryEnv,signal:signal.signal,sessionId:'s',history:[],maxTokens:8192,persistAssistant:(text:string)=>messages.push(text)}
+ expect(assistantDisplayText('独立案例的预期或覆盖声明尚有争议，内部信息：\n{"digest":"secret"}')).not.toContain('secret')
+ await handleLeanGuide(send, publish, guide)
+ expect(guideCalls).toBe(0)
+ expect(messages.at(-1)).toContain(last.oracle.question)
+ const failedRedesign: SDKQuery = async function*(prompt, settings) {
+   expect(settings.accounting?.role).toBe('acceptance_designer')
+   expect(JSON.parse(prompt).previous_design_feedback.cases.map((row:{id:string})=>row.id)).toContain('save')
+   yield {type:'assistant',message:{role:'assistant',content:[{type:'text',text:'不是有效的 JSON'}]}}
+ }
+ await handleLeanGuide({...send,request_id:'redesign',content:'重新设计验收'},publish,{...guide,query:failedRedesign})
+ expect(readIndependentDesign(project.project_id)).toEqual(previous)
+ expect(findProject(project.project_id).current_stage).toBe('blocked_for_user_decision')
+ expect(events.at(-2)?.payload.text).toContain('这次重新设计未生成可用案例')
+ await handleLeanGuide({...send,content:'清理后是“我下午三点到”。'},publish,guide)
+ expect(guideCalls).toBe(1)
+ expect(makerCalls).toBe(0)
+ expect(readIndependentDesign(project.project_id)?.digest).toBe(previous.digest)
+ expect(readPrdBackplane(project.project_id).user_confirmed_at).toBeFalsy()
+ const decision = readPendingDecision(project.project_id, 's')!
+ const option = (decision.payload.questions as {id:string}[])[0]
+ await handleLeanGuide({...send,request_id:'confirm',content:'按这份做',metadata:{source:'card_option',selected_option_id:option.id}},publish,guide)
+ expect(readPrdBackplane(project.project_id).user_confirmed_at).toBeTruthy()
+ expect(readIndependentDesign(project.project_id)?.status).toBe('frozen')
+ expect(readIndependentDesign(project.project_id)?.digest).not.toBe(previous.digest)
+ expect(JSON.parse(readFileSync(join(home,'software-independent-design',project.project_id,previous.digest+'.json'),'utf8'))).toEqual(previous)
+ expect(makerCalls, JSON.stringify(events.slice(-8))).toBe(1)
+ const frozen = readIndependentDesign(project.project_id)!
+ const server = createServer(); await new Promise<void>(done => server.listen(0,'127.0.0.1',done))
+ const address = server.address()
+ if (!address || typeof address === 'string') throw Error('port')
+ await new Promise<void>(done => server.close(() => done()))
+ const root = project.root_path
+ writeFileSync(join(root, 'server.cjs'), `require('node:http').createServer((q,s)=>{s.setHeader('Content-Type','text/html');s.end(require('node:fs').readFileSync('index.html'))}).listen(${address.port},'127.0.0.1')`)
+ writeFileSync(join(root, 'index.html'), '<meta charset="utf-8"><input id="name"><button id="save" onclick="document.querySelector(\'#result\').textContent=\'我下午三点到\'">整理</button><output id="result"></output>')
+ writeFileSync(join(root, 'LAUNCH.json'), JSON.stringify({schema_version:2,ui:'browser',command:['node','server.cjs'],url:`http://127.0.0.1:${address.port}`}))
+ writeFileSync(join(root, 'INDEPENDENT_ADAPTER.json'), JSON.stringify({version:1,design_digest:frozen.digest,controls:{name:'#name',save:'#save',result:'#result'}}))
+ const checked = await verifyIndependentDesign(project.project_id, await prepareSoftwareRelease(project.project_id, root), AbortSignal.timeout(35000))
+ expect(checked.status, JSON.stringify(checked)).toBe('passed')
+ expect(checked.design_digest).toBe(frozen.digest)
 },60000)
 it('keeps legacy projects without an explicit policy in their existing mode',async()=>{
  updateProject(project.project_id,{independent_design_default:undefined})

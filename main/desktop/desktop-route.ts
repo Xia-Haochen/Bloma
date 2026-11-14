@@ -15,7 +15,7 @@ export function shouldEnterDesktopLine(project:DesktopLineProjectLike|undefined)
 export function isDesktopLineActive(project:DesktopLineProjectLike|undefined):boolean{
   return shouldEnterDesktopLine(project)&&(PHASE_IDS.has(project?.desktop_phase??'')||['generating_mvp','testing','completed','ready'].includes(project?.current_stage??''))
 }
-interface DesktopStageInput{projectId:string;sessionId:string;requestId:string;content:string;maxTokens?:number;signal?:AbortSignal;images?:import('../../shared/types').PastedImageRef[];initialMessagePersisted?:boolean}
+interface DesktopStageInput{projectId:string;sessionId:string;requestId:string;content:string;maxTokens?:number;signal?:AbortSignal;images?:import('../../shared/types').PastedImageRef[];initialMessagePersisted?:boolean;redesignIndependentCases?:boolean}
 export async function enterDesktopLine(input:DesktopStageInput,query:SDKQuery,env:Record<string,string>,deps:DesktopRouteDeps):Promise<boolean>{
   const project=findProject(input.projectId),retirement=workflowRetirementReason(project)
   if(retirement){deps.publish(input,'message_delta',{text:retirement});deps.complete(input.sessionId,input.projectId,'incomplete');return true}

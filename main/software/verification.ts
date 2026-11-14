@@ -156,7 +156,11 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
     if (core.status !== 'passed' && !localPending) { result.status = core.status; result.summary = [core.summary, ...core.missing].join('\n'); return result }
     const independent = result.independent = await verifyIndependentDesign(projectId,candidate,signal)
     if(independent.status!=='disabled'&&independent.status!=='passed'){
-      result.status=independent.status;result.summary=`独立设计的宿主执行未通过：${independent.error??'实际断言失败'}\n${JSON.stringify({cases:independent.case_results,coverage:independent.semantics?.coverage})}`;return result
+      result.status = independent.status
+      result.summary = independent.semantics?.ready === false ? '独立案例的预期或覆盖仍需核对。'
+        : independent.status === 'failed' ? '独立验收发现实际行为未达到预期。'
+        : '独立验收未完成，请查看执行记录。'
+      return result
     }
     const launch = result.launch = await runLaunchSmoke(candidate.root, { signal, allowCleanExit: candidate.launch.mode === 'command',projectId })
     const brief = readPrdBackplane(projectId), windowReady = brief.lean_brief?.ui !== 'required'

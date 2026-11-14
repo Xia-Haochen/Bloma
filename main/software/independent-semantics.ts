@@ -23,6 +23,13 @@ function explicitlyRequested(source: string, category: IndependentCategory) {
   return source.split(/[；;。!?！？\n]/).some(clause => !/不(?:要求|需要|支持|做)|无需|无须|不在范围|范围外/.test(clause) && patterns[category].test(clause))
 }
 
+export function independentCategoryRequested(brief: PrdBackplane, feature: string, category: IndependentCategory): boolean {
+  const requirement = brief.requirements.find(row => row.id === feature)
+  return !!requirement && explicitlyRequested([
+    requirement.description, trustedAcceptance(brief, requirement), ...(requirement.behavior_assertions ?? []),
+  ].join('；'), category)
+}
+
 /** Contains only a stable code and a schema path, never model response text. */
 export class IndependentCaseFormatError extends Error {}
 
@@ -160,7 +167,7 @@ export function assessIndependentCases(brief: PrdBackplane, contract: Independen
     const ids = contract.cases.filter(c => c.feature === requirement.id && c.coverage?.includes(category) && cases.find(s => s.id === c.id)?.status === 'grounded').map(c => c.id)
     const notes = contract.coverage_notes?.filter(n => n.feature === requirement.id && n.category === category) ?? []
     const valid = notes.length === 1 && notes[0].source === trustedAcceptance(brief, requirement)
-    const requested=explicitlyRequested([requirement.description,trustedAcceptance(brief,requirement),...(requirement.behavior_assertions??[])].join('；'),category)
+    const requested = independentCategoryRequested(brief, requirement.id, category)
     const status = ids.length && !notes.length ? 'declared_cases' as const : category !== 'normal' && !requested && !ids.length && valid && notes[0].disposition === 'not_applicable' ? 'declared_not_applicable' as const
       : notes.length ? 'unresolved' as const : 'missing' as const
     return { feature: requirement.id, category, status, cases: ids, reason: requested&&notes[0]?.disposition==='not_applicable'?'确认资料明确提及该类行为，不能仅凭B的不适用声明跳过':notes[0]?.reason }
@@ -176,10 +183,11 @@ export const INDEPENDENT_SEMANTICS_INSTRUCTIONS = [
   'input 引用同对象之前的 fill。step 是从 0 开始的整数步骤序号，equals 等于该输入原值。',
   '{"kind":"expect","control":"result","equals":"已保存","oracle":{"kind":"literal","quote":"已保存"}}',
   'literal 逐字引用当前或关联需求已确认 expected 中的业务值，equals 必须等于 quote。',
+  '整段需求描述不能为自选的输出值背书。不要把自选状态文案、生成式文本样例或界面草图上的文案当作已确认的精确预期。',
   '{"kind":"expect","control":"result","equals":"5","oracle":{"kind":"derived","version":1,"rule_id":"BR-001","steps":[0,1]}}',
   'derived 仅引用确认资料中带 verification.operation 的规则。version 为数字 1，rule_id 为确认的规则编号，steps 是之前同对象 fill 的从 0 开始且互不重复的整数序号。equals 须等于按该规则对这些输入的确定性计算结果。',
   '{"kind":"expect","control":"result","equals":"","oracle":{"kind":"unresolved","question":"输入“嗯，我下午三点到”时，清理后的完整文本应是什么？"}}',
   '缺少可确认的预期值或规则时，用 unresolved。equals 填空字符串，question 给出一个具体输入并询问应观察到的结果。该步骤供用户澄清，不能作为通过依据。示例内容不属于当前任务，不能直接照搬。',
-  '每需求有 normal。其余四种错误面用案例 coverage 或 coverage_notes 说明不适用或待澄清及确认来源，不适用声明不是覆盖证明。多对象须不同 subject 及不同值并各自断言。取消操作标 intent:cancel 且其后断言，重开后必须断言。',
+  '每需求有 normal。其余四种错误面用案例 coverage 或 coverage_notes 说明不适用或待澄清及确认来源。source 逐字复制该需求的 expected。不适用声明不是覆盖证明。未要求持久化、取消或多对象时，不要添加该能力或追问其表现，用 not_applicable 说明原因。多对象须不同 subject 及不同值并各自断言。取消操作标 intent:cancel 且其后断言，重开后必须断言。',
   'related 可引用本批其他需求的 {feature,requirement_hash,expected_source} 作为跨模块规则依据，引用必须逐字对应确认资料。关联引用本身不计入该需求覆盖，仍须其自己的正常案例。最多 12 案例，每案例 32 步，不得返回 PASS 或修改目标。',
 ].join('\n')

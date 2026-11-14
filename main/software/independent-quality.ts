@@ -1,14 +1,66 @@
 import { serializeRedactedJson } from '../../shared/redacted-json'
 import { independentCaseOutcome } from './verification-evidence'
 import { randomUUID } from 'node:crypto'
-import { independentDesignVersion, readIndependentDesign } from './independent-design'
+import { independentDesignVersion, readIndependentDesign, readIndependentPolicy } from './independent-design'
 import type { IndependentVerification } from './independent-verification'
 import type { SoftwareRelease } from './release-store'
 import { qualityIdentity, qualityTargetIdentity, qualityHash, readQualityLedger, saveQualityLedger, type QualityFinding } from './quality-ledger'
 import { redactSoftwareOutput } from './process-manager'
 import { readPrdBackplane } from '../project/prd-store'
-import { trustedAcceptance } from '../project/requirement-contract'
-import { assessIndependentCases, type IndependentCases, type IndependentSemantics } from './independent-semantics'
+import { prdScopeFingerprint, trustedAcceptance } from '../project/requirement-contract'
+import { assessIndependentCases, independentCategoryRequested, type IndependentCases, type IndependentSemantics } from './independent-semantics'
+import { findProject } from '../project/project-service'
+import { independentDesignMatchesPolicy } from './independent-policy'
+import { readSoftwareRunState } from './run-state'
+
+export interface IndependentClarification {
+  questions: string[]
+  canRedesign: boolean
+}
+
+export function independentClarification(projectId: string, contract: IndependentCases, assessment: IndependentSemantics): IndependentClarification {
+  const brief = readPrdBackplane(projectId)
+  const policy = readIndependentPolicy(projectId)
+  const questions: string[] = []
+  // A model proposal cannot require a product decision for an unrequested case.
+  for (const item of contract.cases) {
+    if (!assessment.cases.some(row => row.id === item.id && row.status === 'disputed')) continue
+    if (!item.coverage?.some(category => independentCategoryRequested(brief, item.feature, category))) continue
+    for (const step of item.steps) {
+      if (step.kind !== 'expect' || step.oracle?.kind !== 'unresolved') continue
+      const question = redactSoftwareOutput(step.oracle.question).replace(/\s+/g, ' ').trim().slice(0, 280)
+      if (question && !questions.includes(question)) questions.push(question)
+    }
+  }
+  return { questions, canRedesign: !!policy?.enabled && 'funding' in policy }
+}
+
+export function independentClarificationText({ questions, canRedesign }: IndependentClarification): string {
+  if (!questions.length) return '独立验收案例需要重新设计。部分断言或覆盖要求无法从已确认的需求得到。'
+    + (canRedesign ? '回复「重新设计验收」，让 B 按当前任务单重做案例。也可以直接补充一条例子，说明输入和期望结果。' : '你可以在这里补充具体输入和期望结果，再核对独立验收的配置与授权。')
+  const visible = questions.slice(0, 3)
+  return ['开工前需要确认以下验收预期。请直接在这里回复，我会整理成任务单请你确认。',
+    ...visible.map((question, index) => `${index + 1}. ${question}`),
+    ...(questions.length > visible.length ? ['先确认以上几项，其余问题会在复核时继续处理。'] : []),
+    ...(canRedesign ? ['如果这些行为不在你的需求里，可以回复「重新设计验收」。'] : []),
+  ].join('\n\n')
+}
+
+/** Recover the active clarification from existing scope, design and run records. */
+export function readIndependentClarification(projectId: string, sessionId: string): IndependentClarification | undefined {
+  const project = findProject(projectId)
+  if (project.current_stage !== 'blocked_for_user_decision' || project.desktop_phase
+    || project.lean_operation_id === undefined || project.status !== 'active') return
+  const run = readSoftwareRunState(projectId)
+  if (run?.status !== 'waiting_user' || run.sessionId !== sessionId || run.operationId !== project.lean_operation_id) return
+  const design = readIndependentDesign(projectId), brief = readPrdBackplane(projectId)
+  if (design?.status !== 'frozen' || !design.contract || !brief.user_confirmed_at || design.operation !== run.operationId
+    || design.scope !== prdScopeFingerprint(brief) || design.design_hash !== project.ux_confirmation?.design_hash) return
+  const policy = readIndependentPolicy(projectId)
+  if (!policy || !independentDesignMatchesPolicy(design, policy)) return
+  const assessment = currentIndependentSemantics(projectId, design.contract)
+  if (!assessment.ready) return independentClarification(projectId, design.contract, assessment)
+}
 
 export function independentChallengeVersion(projectId: string) {
   return qualityHash(readQualityLedger(projectId).findings.filter(f => f.independent && f.challenge).map(f => [f.id, f.independent, f.challenge]))

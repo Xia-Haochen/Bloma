@@ -84,6 +84,7 @@ export function defaultQuickSecurityGate(projectId: string, checkedRoot?: string
 
 /** 路由输入面（orchestration 层从 AgentSendMessageInput 抽取）。 */
 export interface DesktopRouteInput {
+  redesignIndependentCases?: boolean
   observedSoftwareVersion?: string
   images?: import('../../shared/types').PastedImageRef[]
   initialMessagePersisted?: boolean
