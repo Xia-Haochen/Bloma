@@ -16,6 +16,8 @@ describe('confirmed verification capabilities', () => {
   it('uses explicit declarations and required implications instead of vocabulary guesses', () => {
     expect([...requirementCapabilities({ id: 'F-001', description: '语音模型简介', capabilities: [] })]).toEqual([])
     expect(requirementCapabilities({ id: 'F-001', description: '通过硬件输入', capabilities: ['microphone'] }).has('speech')).toBe(true)
+    expect(requirementCapabilities({ id: 'F-001', description: '用模型整理转写文字' }).has('llm')).toBe(true)
+    expect(requirementCapabilities({ id: 'F-001', description: '采集用户语音并转写' }).has('microphone')).toBe(true)
     expect(requirementCapabilities({ id: 'F-001', description: '撤销刚才的文件操作', capabilities: ['rename_undo'] }).has('prefix_rename')).toBe(true)
     expect(() => requirementCapabilities({ id: 'F-001', description: '旧文档', capabilities: ['invented'] as never })).toThrow('INVALID_REQUIREMENT_CAPABILITIES')
   })

@@ -20,7 +20,7 @@ export function requirementCapabilities(item: SketchRequirement): ReadonlySet<Re
       .split(/[，。；,;\n]|但是|但|不过/).map(text => text.trim())
       .filter(text => !/^(?:(?:本版|该功能|此功能|系统|产品|用户)\s*)?(?:不需要|无需|不用|不要|不支持|不包含|不提供|禁止)|^(?:no\b|without\b|do(?:es)? not\b)/i.test(text))
     for (const text of clauses) {
-      if (/\b(?:LLM|AI)\b|大模型|真实模型|智能(?:总结|翻译|回答|对话|生成|润色)|(?:模型).*(?:调用|增强|Key|API|密钥)|(?:Key|密钥).*(?:模型|AI)/i.test(text)) result.add('llm')
+      if (/\b(?:LLM|AI)\b|大模型|真实模型|智能(?:总结|翻译|回答|对话|生成|润色)|(?:模型).*(?:调用|增强|Key|API|密钥)|(?:Key|密钥).*(?:模型|AI)|(?:用|由|通过|调用)模型(?:整理|改写|归纳|摘要)/i.test(text)) result.add('llm')
       if (/(?:语音(?:输入|录入|识别|转写|转文字)|音频(?:文件)?(?:识别|转写|转文字)|(?:导入|上传).*音频.*(?:文字|转写)|麦克风|录音|\bASR\b)/i.test(text)) result.add('speech')
       if (/(?:麦克风|录音|语音(?:输入|录入)|采集(?:用户)?语音)/.test(text)) result.add('microphone')
       if (/(?:文件|文件夹|目录|文件名)/.test(text) && /前缀/.test(text) && /(?:重命名|改名)/.test(text)) {
