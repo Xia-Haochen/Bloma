@@ -53,8 +53,8 @@
         <label>审查范围 <select id="audit-mode"><option value="pending">仅审查待判定</option><option value="all">全部未审查请求</option></select></label>
         <button id="audit-models" type="button" class="button secondary">检测 Ollama</button>
         <button id="audit-run" type="button" class="button primary">审查当前筛选</button>
+        <span class="audit-feedback" role="status"><span id="audit-spinner" class="audit-spinner" aria-hidden="true" hidden></span><span id="audit-status"></span></span>
         <button id="audit-stop" type="button" class="button secondary" hidden>处理完本批后停止</button>
-        <span id="audit-status" role="status"></span>
         <span id="audit-model-status" role="status"></span>
       </div>
       <div class="wide-table" id="audit-breakdown"></div>

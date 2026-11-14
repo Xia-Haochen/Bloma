@@ -41,7 +41,7 @@ export function mountTokenMonitor(root, transport) {
   let stopped = false;
   let timer;
   let auditStatus = null;
-  let auditCommand = false;
+  let auditCommand = null;
   let auditRevision = 0;
   const state = {data: null, raw: "", query: {project: "", start: -Infinity, end: Infinity}, page: 0};
   const idFor = value => JSON.stringify(value);
@@ -460,21 +460,30 @@ export function mountTokenMonitor(root, transport) {
   function renderAuditStatus() {
     const job = auditStatus;
     const busy = job?.state === "running" || job?.state === "stopping";
-    $("audit-run").disabled = busy || auditCommand;
+    $("audit-run").disabled = busy || Boolean(auditCommand);
     $("audit-stop").hidden = !busy;
-    $("audit-stop").disabled = auditCommand || job?.state === "stopping";
+    $("audit-stop").disabled = Boolean(auditCommand) || job?.state === "stopping";
+    $("audit-spinner").hidden = !busy && !auditCommand;
+    if (auditCommand === "start") {
+      $("audit-status").textContent = "正在启动审查…";
+      return;
+    }
+    if (auditCommand === "stop") {
+      $("audit-status").textContent = "正在提交停止请求…";
+      return;
+    }
     if (!job) {
       $("audit-status").textContent = "";
       return;
     }
-    const title = {running: "后台审查中", stopping: "本批结束后停止", stopped: "已停止",
+    const title = {running: "正在审查", stopping: "正在审查，将在本批结束后停止", stopped: "已停止",
       completed: job.processed ? "审查完成" : "当前范围没有待审查的请求", error: "审查失败"};
-    $("audit-status").textContent = [job.model, title[job.state],
+    $("audit-status").textContent = [title[job.state], job.model,
       "已处理 " + count(job.processed) + " 条", job.remaining ? "剩余 " + count(job.remaining) + " 条" : "", job.error].filter(Boolean).join(" · ");
   }
 
-  async function sendAuditCommand(command) {
-    auditCommand = true;
+  async function sendAuditCommand(action, command) {
+    auditCommand = action;
     auditRevision++;
     renderAuditStatus();
     let failure;
@@ -483,7 +492,7 @@ export function mountTokenMonitor(root, transport) {
     } catch (error) {
       failure = error.message;
     } finally {
-      auditCommand = false;
+      auditCommand = null;
       if (!stopped) {
         renderAuditStatus();
         if (failure) $("audit-status").textContent = failure;
@@ -491,13 +500,13 @@ export function mountTokenMonitor(root, transport) {
     }
   }
 
-  $("audit-stop").addEventListener("click", () => sendAuditCommand(() => transport.auditStop()));
+  $("audit-stop").addEventListener("click", () => sendAuditCommand("stop", () => transport.auditStop()));
   $("audit-run").addEventListener("click", () => {
     if (auditCommand || !state.data) return;
     const {project, start, end} = state.query;
     const filter = {project, model: $("audit-model").value, mode: $("audit-mode").value,
       ...(Number.isFinite(start) ? {start} : {}), ...(Number.isFinite(end) ? {end} : {})};
-    return sendAuditCommand(() => transport.auditStart(filter));
+    return sendAuditCommand("start", () => transport.auditStart(filter));
   });
   $("refresh-prices").addEventListener("click", async () => {
     const button = $("refresh-prices");

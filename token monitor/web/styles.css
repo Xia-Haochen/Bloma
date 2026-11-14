@@ -115,6 +115,10 @@ dialog::backdrop { background: #121b3466; }
 .price-sources { gap: 7px; }
 .source-button { border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px; color: var(--blue); background: #fff; }
 .audit-panel table { white-space: normal; }
+.audit-feedback { display: inline-flex; align-items: center; gap: 8px; color: var(--blue); font-weight: 600; }
+.audit-spinner { flex: 0 0 16px; width: 16px; height: 16px; border: 2px solid #d7e2f8; border-top-color: currentColor; border-radius: 50%; animation: audit-spin 800ms linear infinite; }
+@keyframes audit-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .audit-spinner { animation: none; } }
 #failure-details { margin-top: 14px; }
 #failure-list details { padding: 8px 0; border-bottom: 1px solid var(--line); }
 .audit-evidence { margin: 6px 0 8px; padding-left: 20px; color: var(--muted); overflow-wrap: anywhere; white-space: normal; }
