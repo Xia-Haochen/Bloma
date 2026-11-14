@@ -23,37 +23,55 @@ function explicitlyRequested(source: string, category: IndependentCategory) {
   return source.split(/[；;。!?！？\n]/).some(clause => !/不(?:要求|需要|支持|做)|无需|无须|不在范围|范围外/.test(clause) && patterns[category].test(clause))
 }
 
+/** Contains only a stable code and a schema path, never model response text. */
+export class IndependentCaseFormatError extends Error {}
+
 /** Shape validation keeps all proposed business assertions intact. Semantic
  * disputes are assessed separately, never repaired by changing B's bytes. */
 export function parseIndependentCases(textValue: string, features: string[]): IndependentCases {
-  if (Buffer.byteLength(textValue) > 64 * 1024) throw Error('INDEPENDENT_CASES_TOO_LARGE')
-  const value = JSON.parse(textValue) as IndependentCases
+  if (Buffer.byteLength(textValue) > 64 * 1024) throw new IndependentCaseFormatError('INDEPENDENT_CASES_TOO_LARGE')
+  const raw = textValue.trim()
+  const fenced = raw.match(/^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/i)
+  let value: IndependentCases
+  try { value = JSON.parse(fenced?.[1] ?? raw) } catch {
+    throw new IndependentCaseFormatError('INDEPENDENT_JSON_INVALID: 应返回一个完整 JSON 对象')
+  }
   if (!value || !keys(value, ['cases', 'coverage_notes']) || !Array.isArray(value.cases) || !value.cases.length || value.cases.length > 12
-    || new Set(value.cases.map(c => c?.id)).size !== value.cases.length) throw Error('INDEPENDENT_CASES_INVALID')
-  for (const item of value.cases) {
-    if (!item || !keys(item, ['id', 'feature', 'steps', 'basis', 'coverage', 'related']) || !/^[A-Za-z0-9_-]{1,64}$/.test(item.id) || !features.includes(item.feature)
-      || !Array.isArray(item.steps) || !item.steps.length || item.steps.length > 32 || !item.steps.some(s => s.kind === 'expect') || !item.steps.some(s => ['click', 'fill'].includes(s.kind))) throw Error('INDEPENDENT_CASE_INVALID')
-    if (item.basis !== undefined && (!item.basis || !keys(item.basis, ['requirement_hash', 'expected_source']) || !text(item.basis.requirement_hash, 64) || !text(item.basis.expected_source))) throw Error('INDEPENDENT_BASIS_INVALID')
-    if(item.related!==undefined&&(!Array.isArray(item.related)||item.related.length>8||new Set(item.related.map(r=>r?.feature)).size!==item.related.length||item.related.some(r=>!r||!keys(r,['feature','requirement_hash','expected_source'])||r.feature===item.feature||!features.includes(r.feature)||!text(r.requirement_hash,64)||!text(r.expected_source))))throw Error('INDEPENDENT_RELATED_INVALID')
-    if (item.coverage !== undefined && (!Array.isArray(item.coverage) || !item.coverage.length || new Set(item.coverage).size !== item.coverage.length || item.coverage.some(c => !INDEPENDENT_CATEGORIES.includes(c)))) throw Error('INDEPENDENT_COVERAGE_INVALID')
-    for (const step of item.steps) {
+    || new Set(value.cases.map(c => c?.id)).size !== value.cases.length) throw new IndependentCaseFormatError('INDEPENDENT_CASES_INVALID: cases')
+  const identifier = (input: unknown) => typeof input === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(input)
+  for (const [caseIndex, item] of value.cases.entries()) {
+    const path = `cases[${caseIndex}]`
+    if (!item || !keys(item, ['id', 'feature', 'steps', 'basis', 'coverage', 'related']) || !identifier(item.id) || !features.includes(item.feature)) {
+      throw new IndependentCaseFormatError(`INDEPENDENT_CASE_INVALID: ${path} 的 id、feature 或字段不合法`)
+    }
+    if (!Array.isArray(item.steps) || !item.steps.length || item.steps.length > 32 || !item.steps.some(s => s?.kind === 'expect') || !item.steps.some(s => s?.kind === 'click' || s?.kind === 'fill')) {
+      throw new IndependentCaseFormatError(`INDEPENDENT_CASE_INVALID: ${path}.steps 须包含操作和断言`)
+    }
+    if (item.basis !== undefined && (!item.basis || !keys(item.basis, ['requirement_hash', 'expected_source']) || !text(item.basis.requirement_hash, 64) || !text(item.basis.expected_source))) throw new IndependentCaseFormatError(`INDEPENDENT_BASIS_INVALID: ${path}.basis`)
+    if(item.related!==undefined&&(!Array.isArray(item.related)||item.related.length>8||new Set(item.related.map(r=>r?.feature)).size!==item.related.length||item.related.some(r=>!r||!keys(r,['feature','requirement_hash','expected_source'])||r.feature===item.feature||!features.includes(r.feature)||!text(r.requirement_hash,64)||!text(r.expected_source))))throw new IndependentCaseFormatError(`INDEPENDENT_RELATED_INVALID: ${path}.related`)
+    if (item.coverage !== undefined && (!Array.isArray(item.coverage) || !item.coverage.length || new Set(item.coverage).size !== item.coverage.length || item.coverage.some(c => !INDEPENDENT_CATEGORIES.includes(c)))) throw new IndependentCaseFormatError(`INDEPENDENT_COVERAGE_INVALID: ${path}.coverage`)
+    for (const [stepIndex, step] of item.steps.entries()) {
+      const stepPath = `${path}.steps[${stepIndex}]`
+      if (!step) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}`)
       const allowed = step.kind === 'fill' ? ['kind', 'control', 'value', 'subject'] : step.kind === 'expect' ? ['kind', 'control', 'equals', 'oracle', 'subject'] : step.kind === 'click' ? ['kind', 'control', 'subject', 'intent'] : step.kind === 'restart' ? ['kind'] : []
-      if (!allowed.length || !keys(step, allowed) || 'control' in step && !/^[A-Za-z0-9_-]{1,64}$/.test(step.control)
-        || 'value' in step && !text(step.value, 2000) || 'equals' in step && !text(step.equals)
-        || step.subject !== undefined && !/^[A-Za-z0-9_-]{1,64}$/.test(step.subject)) throw Error('INDEPENDENT_STEP_INVALID')
-      if(step.kind==='click'&&step.intent!==undefined&&!['submit','cancel'].includes(step.intent))throw Error('INDEPENDENT_STEP_INVALID')
+      if (!allowed.length || !keys(step, allowed)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}`)
+      if (step.kind !== 'restart' && !identifier(step.control)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.control`)
+      if (step.kind === 'fill' && !text(step.value, 2000)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.value`)
+      if (step.kind === 'expect' && !text(step.equals)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.equals`)
+      if (step.subject !== undefined && !identifier(step.subject)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.subject`)
+      if (step.kind === 'click' && step.intent !== undefined && !['submit', 'cancel'].includes(step.intent)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.intent`)
       if (step.kind === 'expect' && step.oracle !== undefined) {
         const oracle = step.oracle
         if (!oracle || (oracle.kind === 'input' ? !keys(oracle, ['kind', 'step']) || !Number.isSafeInteger(oracle.step)
           : oracle.kind === 'literal' ? !keys(oracle, ['kind', 'quote']) || !text(oracle.quote) || !oracle.quote.trim()
           : oracle.kind === 'derived' ? !keys(oracle, ['kind','version','rule_id','steps']) || oracle.version !== 1 || !/^BR-\d{3,}$/.test(oracle.rule_id) || !Array.isArray(oracle.steps) || !oracle.steps.length || oracle.steps.length > 32 || new Set(oracle.steps).size !== oracle.steps.length || oracle.steps.some(n => !Number.isSafeInteger(n))
-          : oracle.kind === 'unresolved' ? !keys(oracle, ['kind', 'question']) || !text(oracle.question) || !oracle.question.trim() : true)) throw Error('INDEPENDENT_ORACLE_INVALID')
+          : oracle.kind === 'unresolved' ? !keys(oracle, ['kind', 'question']) || !text(oracle.question) || !oracle.question.trim() : true)) throw new IndependentCaseFormatError(`INDEPENDENT_ORACLE_INVALID: ${stepPath}.oracle`)
       }
     }
   }
   if (value.coverage_notes !== undefined && (!Array.isArray(value.coverage_notes) || value.coverage_notes.length > 64 || value.coverage_notes.some(note => !note
     || !keys(note, ['feature', 'category', 'disposition', 'reason', 'source']) || !features.includes(note.feature) || !INDEPENDENT_CATEGORIES.includes(note.category)
-    || !['not_applicable', 'unresolved'].includes(note.disposition) || !text(note.reason, 1200) || !note.reason.trim() || !text(note.source)))) throw Error('INDEPENDENT_COVERAGE_NOTES_INVALID')
+    || !['not_applicable', 'unresolved'].includes(note.disposition) || !text(note.reason, 1200) || !note.reason.trim() || !text(note.source)))) throw new IndependentCaseFormatError('INDEPENDENT_COVERAGE_NOTES_INVALID: coverage_notes')
   return value
 }
 export function assessIndependentCases(brief: PrdBackplane, contract: IndependentCases): IndependentSemantics {

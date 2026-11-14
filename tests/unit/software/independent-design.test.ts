@@ -32,13 +32,13 @@ const query:SDKQuery=async function*(prompt,options){calls++;expect(prompt).not.
   yield{type:'result',subtype:'success',usage:{input_tokens:100,output_tokens:100}}
 }
 function input(q=query){return{projectId:project.project_id,sessionId:'s',query:q,primaryEnv:{ANTHROPIC_MODEL:'model-a'},signal:new AbortController().signal,resolveRoute:route}}
-function sharedInput(){
+function sharedInput(response = () => JSON.stringify(contract)){
  const sharedQuery:SDKQuery=async function*(prompt,options){
   calls++;expect(prompt).not.toContain('IMPLEMENTATION_SENTINEL');expect(options.tools).toBeUndefined()
   expect(options.env.ANTHROPIC_MODEL).toBe('model-a');expect(options.monetaryPolicyPath).toBeUndefined()
   expect(options.maxTokens).toBe(8192)
   options.requestGuard?.({url:'https://a.invalid/v1/messages',body:JSON.stringify({model:'model-a'})})
-  yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify(contract)}]}}
+  yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:response()}]}}
   yield{type:'result',subtype:'success',usage:{input_tokens:100,output_tokens:100}}
  }
  return {...input(sharedQuery),primaryEnv:{ANTHROPIC_MODEL:'model-a',ANTHROPIC_BASE_URL:'https://a.invalid'},maxTokens:8192}
@@ -139,8 +139,8 @@ it('defaults new GUI projects to a separate design context on the current model 
  expect(leanBudget(project.project_id,'acceptance-design').snapshot().requests).toBe(before.requests+1)
  expect((await prepareIndependentDesign(options)).digest).toBe(result.digest);expect(calls).toBe(1)
 })
-it('freezes default B through the normal production entry before the maker runs',async()=>{
- const options=sharedInput(),controller=new AbortController(),order:string[]=[]
+it('freezes a fenced default B response through the normal production entry before the maker runs',async()=>{
+ const options=sharedInput(() => '```json\n'+JSON.stringify(contract)+'\n```'),controller=new AbortController(),order:string[]=[]
  const routed:SDKQuery=async function*(prompt,settings){
   if(settings.accounting?.role==='acceptance_designer'){
    order.push('B');yield* options.query(prompt,settings);return
@@ -152,6 +152,20 @@ it('freezes default B through the normal production entry before the maker runs'
   {publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
  expect(order).toEqual(['B','A']);expect(calls).toBe(1)
 },60000)
+it('retains a safe field diagnostic for invalid B output and freezes only a valid explicit retry', async () => {
+  const invalid = structuredClone(contract)
+  const step = invalid.cases[0].steps[1]
+  if (step.kind !== 'click') throw Error('fixture')
+  step.control = 'invalid control with private text'
+  const failure = await prepareIndependentDesign(sharedInput(() => JSON.stringify(invalid)))
+  expect(failure).toMatchObject({status:'blocked', reason:expect.stringContaining('cases[0].steps[1].control')})
+  expect(failure.contract).toBeUndefined()
+  expect(readIndependentDesign(project.project_id)?.reason).not.toContain(step.control)
+  expect(calls).toBe(1)
+  const resumed = await prepareIndependentDesign(sharedInput())
+  expect(resumed).toMatchObject({status:'frozen', contract})
+  expect(calls).toBe(2)
+})
 it('records default B disputes before an application launch file exists',async()=>{
  const options=sharedInput(),messages:string[]=[]
  const unresolved=structuredClone(contract)
