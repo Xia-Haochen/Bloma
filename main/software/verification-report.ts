@@ -8,6 +8,9 @@ import { redactSoftwareOutput } from './process-manager'
 import type { SoftwareVerification } from './verification'
 import { verificationFailure } from './verification-diagnostics'
 import {safeToolFeedback,type ToolFeedback} from '../../shared/tool-feedback'
+import {applicableQualityLedger,qualityIdentityForInputs,qualityRulesVersion} from './quality-ledger'
+import {qualityWorkQueue} from './quality-closeout'
+import {independentDesignVersion} from './independent-design'
 
 const digest=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const readMore=(report_hash:string,offset=0)=>({tool:'read_production_context',arguments:{topic:'verification-report',report_hash,offset}})
@@ -30,10 +33,10 @@ export function verificationRefusalFeedback(error:unknown):ToolFeedback{
   return{schema_version:1,source:'host',execution:'not_run',verification:'unverified',scope:'verification_admission',
     category:code?'invalid_input':'unknown',reason:code??'VERIFICATION_ADMISSION_UNRESOLVED',fingerprint:code?digest([code,contract]):undefined,recovery:code?'correct_input':'inspect'}
 }
-function preview(value:unknown,reportHash:string,persisted=true){
+function preview(value:unknown,reportHash:string,persisted=true,details?:unknown){
   if(value===undefined)return undefined
   const text=typeof value==='string'?redactSoftwareOutput(value):serializeRedactedJson(value,redactSoftwareOutput)
-  return text.length<=1200?JSON.parse(serializeRedactedJson(value,redactSoftwareOutput)):{preview:text.slice(0,1200),truncated:true,total_characters:text.length,read_more:persisted?{tool:'read_production_context',arguments:{topic:'verification-report',section:'raw',report_hash:reportHash,offset:0}}:{source:'current_tool_result',note:'前置错误未生成验收报告，完整错误在本次工具回执summary中'}}
+  return text.length<=1200?JSON.parse(serializeRedactedJson(value,redactSoftwareOutput)):{preview:text.slice(0,1200),truncated:true,total_characters:text.length,read_more:details??(persisted?{tool:'read_production_context',arguments:{topic:'verification-report',section:'raw',report_hash:reportHash,offset:0}}:{source:'current_tool_result',note:'前置错误未生成验收报告，完整错误在本次工具回执summary中'})}
 }
 export function verificationCases(result:SoftwareVerification){
   const gui=(result.core?.host_gui?.case_results??[]).map((row,index)=>{
@@ -114,7 +117,28 @@ export function verificationResponse(projectId:string,result:SoftwareVerificatio
   const cases=view.cases.slice(0,4)
   const failure=view.failure&&{category:view.failure.category,code:view.failure.code,step:view.failure.step,
     classification_basis:view.failure.classification_basis,expected:view.failure.expected,actual:view.failure.actual,paths:view.failure.paths,allowed_changes:view.failure.allowed_changes}
-  return {status:result.status,summary:redactSoftwareOutput(result.summary).slice(0,1600),reused:Boolean(result.reused),
+  let quality:unknown
+  if(result.input_identity){
+    const details={tool:'read_quality_findings',arguments:{}}
+    try{
+      const queue=qualityWorkQueue(
+        applicableQualityLedger(projectId),qualityIdentityForInputs(projectId,result.input_identity),
+        undefined,qualityRulesVersion(projectId),independentDesignVersion(projectId),
+      )
+      const problems=queue.problems.slice(0,4).map(row=>{
+        const readFinding={tool:'read_quality_findings',arguments:{finding_id:row.id}}
+        return Object.fromEntries(Object.entries(row).map(([key,value])=>[
+          key,preview(value,view.report_hash,persisted,readFinding),
+        ]))
+      })
+      quality={
+        status:queue.status,problem_count:queue.problems.length,problems,
+        omitted:Math.max(0,queue.problems.length-4),details,
+        authority:'当前质量台账的待办投影；疑点仍需核查，执行通过不自动关闭未绑定问题。',
+      }
+    }catch(failure){quality={status:'unavailable',error:redactSoftwareOutput(String(failure)),details}}
+  }
+  return {status:result.status,summary:redactSoftwareOutput(result.summary).slice(0,1600),reused:Boolean(result.reused),quality,
     failure,
     evidence:{report_hash,report_available,freshness,candidate_id,input_identity,counts,case_count,cases,failure_distribution,action_counts,
       omitted:case_count-cases.length,details:view.details},

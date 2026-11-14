@@ -14,7 +14,8 @@ import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,existsSync} from
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {createHash} from 'node:crypto'
-import {beforeEach,afterEach,expect,it} from 'vitest'
+import {beforeEach,afterEach,expect,it,vi} from 'vitest'
+import * as correctionProbe from '../../../main/software/test-correction-probe'
 import {createProject} from '../../../main/project/project-service'
 import {updateProject} from '../../../main/project/project-service'
 import {createServer} from 'node:net'
@@ -82,6 +83,30 @@ it('aborts and drains owned fixture work before its temporary home can be remove
   expect(stopped).toBe(true);expect(activeFixtureWork).toBeUndefined()
 })
 const proposal=()=>proposeTestCorrection(p.project_id,{contract_digest:before.digest,file:'acceptance.mjs',old_text:"toHaveText('current')",new_text:"toHaveText('created')",feature_ids:['F-001'],reason:'独立原始记录显示创建时值，当前值不是需求预期'})
+it.each([0,255])('keeps binary correction inputs archived without expanding byte %i into model text',byte=>{
+ writeFileSync(join(p.root_path,'sample.bin'),Buffer.alloc(300000,byte))
+ writeFileSync(join(p.root_path,'native-inputs.json'),JSON.stringify({files:['sample.bin']}))
+ writeFileSync(join(p.root_path,'acceptance.mjs'),original+'\n// include a binary input')
+ const proposed=proposeTestTransaction(p.project_id,{contract_digest:before.digest,script:'acceptance.mjs',reason:'Add an independently reviewable binary fixture'})
+ const pending=pendingTestCorrectionInputs(p.project_id).find(row=>row.id===proposed.id)!
+ const binary=pending.files!.after.find(row=>row.file==='sample.bin')!
+ expect(binary).toMatchObject({size:300000,content_available:false})
+ expect(binary).not.toHaveProperty('text')
+ expect(Buffer.byteLength(JSON.stringify(pending))).toBeLessThan(256*1024)
+ const destination=join(home,'binary-probe');mkdirSync(destination)
+ stageTestCorrectionCandidate(p.project_id,pending.native,destination)
+ expect(sha(readFileSync(join(destination,'sample.bin')))).toBe(binary.sha256)
+})
+it('rejects oversized text before executing the proposal probe',async()=>{
+ writeFileSync(join(p.root_path,'acceptance.mjs'),original+'\n//'+ 'x'.repeat(270000))
+ proposeTestTransaction(p.project_id,{contract_digest:before.digest,script:'acceptance.mjs',reason:'Oversized review input'})
+ const probe=vi.spyOn(correctionProbe,'probeTestCorrection')
+ const query=vi.fn()
+ try{
+  await expect(reviewPendingTestCorrections({projectId:p.project_id,sessionId:'s',query,env:{},maxTokens:8192,signal:new AbortController().signal})).rejects.toThrow('TEST_CORRECTION_REVIEW_INPUT_TOO_LARGE')
+  expect(probe).not.toHaveBeenCalled();expect(query).not.toHaveBeenCalled()
+ }finally{probe.mockRestore()}
+})
 function decision(id:string){const evidence=join(home,'independent.json');writeFileSync(evidence,'{"observed":"created","original_assertion":"current"}');return{verdict:'approve' as const,reviewer:'independent_operator' as const,reason:'核对确认需求和独立原始记录后裁定',expected_sources:{'F-001':'旧记录保留创建时信息'},evidence:[{path:evidence,sha256:sha(readFileSync(evidence))}]}}
 it('adjudicates with isolated frozen inputs, preserves failure, and leaves application to the existing host',async()=>{
   proposal();let calls=0
@@ -226,24 +251,41 @@ it('real browser: failed frozen expectation is retained, independently corrected
   const listener=createServer();await new Promise<void>(r=>listener.listen(0,'127.0.0.1',r));const port=(listener.address() as {port:number}).port;await new Promise<void>(r=>listener.close(()=>r()))
   writeFileSync(join(project.root_path,'server.cjs'),`require('http').createServer((q,s)=>{s.setHeader('content-type','text/html');s.end('<button id="load" onclick="document.getElementById(\\'version\\').textContent=\\'created\\'">Load</button><p id="version"></p>')}).listen(${port},'127.0.0.1')`)
   writeFileSync(join(project.root_path,'LAUNCH.json'),JSON.stringify({schema_version:2,ui:'browser',command:['node','server.cjs'],url:`http://127.0.0.1:${port}`}))
+  writeFileSync(join(project.root_path,'audio.bin'),Buffer.alloc(300000,255))
+  writeFileSync(join(project.root_path,'native-inputs.json'),JSON.stringify({files:['audio.bin']}))
   writeFileSync(join(project.root_path,'acceptance.mjs'),frozenOriginal)
   const failed=await phase('initial_wrong_stage',()=>verifyProjectStage(id,'first','acceptance.mjs',signal))
   expect(failed.status).toBe('failed');expect(failed.feedback.scope).toBe('partial_cumulative_gui')
   const oldAttempt=readProjectStages(id).attempts[0],serverBefore=readFileSync(join(project.root_path,'server.cjs'),'utf8')
   registerNativeGuiTests(id,'acceptance.mjs')
-  const a=proposeTestCorrection(id,{contract_digest:oldAttempt.native.digest,file:'acceptance.mjs',old_text:"toHaveText('current')",new_text:"toHaveText('created')",feature_ids:['F-001'],reason:'确认预期为created，失败证据实际也是created，current不符来源'})
+  writeFileSync(join(project.root_path,'acceptance.mjs'),frozenOriginal.replace("toHaveText('current')","toHaveText('created')"))
+  const a=proposeTestTransaction(id,{contract_digest:oldAttempt.native.digest,script:'acceptance.mjs',reason:'确认预期为created，失败证据实际也是created，current不符来源'})
   const workingEdit=frozenOriginal.replace("toHaveText('current')","toHaveText('unfinished')")
   writeFileSync(join(project.root_path,'acceptance.mjs'),workingEdit)
+  let reviewCalls=0
   const reviewQuery:import('../../../main/orchestration/stages/orchestration-contracts').SDKQuery=async function*(prompt){
     const packet=JSON.parse(prompt)
     expect(packet.proposed_execution).toMatchObject({product_verified:false,source_unchanged:true,result:{status:'passed'}})
     expect(packet).toHaveProperty('baseline_execution')
     expect(packet).not.toHaveProperty('execution')
+    expect(Buffer.byteLength(prompt)).toBeLessThan(256*1024)
+    expect(packet.proposal.files.before.find((f:any)=>f.file==='audio.bin')).toMatchObject({content_available:false,size:300000})
+    expect(packet.proposal.files.after.find((f:any)=>f.file==='audio.bin').sha256).toBe(packet.proposal.files.before.find((f:any)=>f.file==='audio.bin').sha256)
     expect(readFileSync(join(project.root_path,'acceptance.mjs'),'utf8')).toBe(workingEdit)
     expect(readProjectStages(id).attempts.map(a=>a.status)).toEqual(['failed'])
+    if(reviewCalls++===0){
+      yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:'incomplete review'}]}}
+      return
+    }
     yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify({verdict:'approve',reason:'对照确认预期和独立隔离执行',assessment:[{feature:'F-001',preserved:true,reason:'实际加载并检查创建时值，旧失败保留'}]})}]}}
   }
+  await phase('incomplete_review_preserves_proposal',async()=>{
+    await expect(reviewPendingTestCorrections({projectId:id,sessionId:'s',query:reviewQuery,env:{},maxTokens:8192,signal})).rejects.toThrow('TEST_CORRECTION_REVIEW_REQUIRED')
+    expect(testCorrectionView(id).proposals.find(row=>row.id===a.id)?.status).toBe('pending')
+    expect(readFileSync(join(project.root_path,'acceptance.mjs'),'utf8')).toBe(workingEdit)
+  })
   await phase('review_corrected_proposal',()=>reviewPendingTestCorrections({projectId:id,sessionId:'s',query:reviewQuery,env:{},maxTokens:8192,signal:AbortSignal.any([signal,AbortSignal.timeout(60000)])}))
+  expect(reviewCalls).toBe(2)
   expect(testCorrectionView(id).proposals.find(row=>row.id===a.id)?.status).toBe('approved')
   expect(()=>applyApprovedTestCorrections(id)).toThrow('WORKING_BYTES_CHANGED')
   expect(readFileSync(join(project.root_path,'acceptance.mjs'),'utf8')).toBe(workingEdit)

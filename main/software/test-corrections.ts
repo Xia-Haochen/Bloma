@@ -117,6 +117,15 @@ function archivedFiles(id:string,n:NativeGuiTests){
     return{file:pathOf(n,f.path),sha256:f.sha256,size:f.size,encoding:Buffer.from(text).equals(bytes)?'utf8':'base64',text:Buffer.from(text).equals(bytes)?text:bytes.toString('base64')}
   })
 }
+/** Binary bytes stay in the immutable archive. A text model receives identity,
+ * not a base64 dump or an invented interpretation of the fixture's contents. */
+function reviewFiles(id:string,native:NativeGuiTests){
+  return archivedFiles(id,native).map(file=>{
+    if(file.encoding==='utf8'&&!file.text.includes('\0'))return {...file,content_available:true}
+    const {text,...metadata}=file
+    return {...metadata,content_available:false}
+  })
+}
 export function stageTestCorrectionCandidate(id:string,native:NativeGuiTests,root:string){
   for(const f of archivedFiles(id,native)){
     const target=safeWorkingPath(root,f.file);mkdirSync(dirname(target),{recursive:true});writeFileSync(target,Buffer.from(f.text,f.encoding as BufferEncoding))
@@ -180,7 +189,7 @@ export function pendingTestCorrectionInputs(id:string){
     id:p.id,scope:p.scope,file:p.file,reason:p.reason,expected_sources:p.expected_sources,
     before:readTestContractFile(id,p.before.digest,p.file),after:{text:p.replacement,sha256:p.new_hash},
     cases:p.before.cases,proposed_cases:p.after.cases,native:p.after,
-    ...(p.transaction?{transaction:p.transaction,files:{before:archivedFiles(id,p.before).filter(f=>f.file!==p.file),after:archivedFiles(id,p.after).filter(f=>f.file!==p.file)}}:{}),
+    ...(p.transaction?{transaction:p.transaction,files:{before:reviewFiles(id,p.before).filter(f=>f.file!==p.file),after:reviewFiles(id,p.after).filter(f=>f.file!==p.file)}}:{}),
   }))
 }
 export function testCorrectionGate(id:string){

@@ -12,6 +12,11 @@ import {probeTestCorrection} from './test-correction-probe'
 
 const hash=(text:string)=>createHash('sha256').update(text).digest('hex')
 interface Decision {verdict:'approve'|'reject';reason:string;assessment:Array<{feature:string;preserved:boolean;reason:string}>}
+function reviewText(packet:unknown){
+  const text=JSON.stringify(packet)
+  if(Buffer.byteLength(text)>256*1024)throw new ModelRequestRefusal('TEST_CORRECTION_REVIEW_INPUT_TOO_LARGE: 文本审阅材料超过256KiB；需缩小单次修订或核对材料，原提案保留。')
+  return text
+}
 /** A host-owned isolated review, sharing production accounting. It sees frozen
  * inputs and execution evidence, never maker/peer history or a writable tool. */
 export async function reviewPendingTestCorrections(input:{projectId:string;sessionId:string;query:SDKQuery;env:Record<string,string>;maxTokens:number;signal:AbortSignal}){
@@ -28,13 +33,12 @@ export async function reviewPendingTestCorrections(input:{projectId:string;sessi
       if(!String(error).includes('VERIFICATION_REPORT_NOT_FOUND'))throw error
       baseline_execution={available:false}
     }
-    let proposed_execution:unknown
-    try{proposed_execution=await probeTestCorrection(input.projectId,proposal,input.signal)}
-    catch(error){input.signal.throwIfAborted();proposed_execution={status:'unverified',error:String(error),product_verified:false}}
-    const packet={proposed_execution,baseline_execution,proposal,resources:executionWindowFacts(),
-      boundary:'proposed_execution 是宿主对本提案封存字节的实际隔离执行。baseline_execution 仅是上次正式验收，用于比较原失败。'}
-    const text=JSON.stringify(packet)
-    if(Buffer.byteLength(text)>256*1024)throw new ModelRequestRefusal('TEST_CORRECTION_REVIEW_INPUT_TOO_LARGE')
+    const packet={proposed_execution:undefined as unknown,baseline_execution,proposal,resources:executionWindowFacts(),
+      boundary:'proposed_execution 是宿主对本提案封存字节的实际隔离执行。baseline_execution 仅是上次正式验收。二进制文件只提供身份，content_available=false表示未提供内容理解证据。核对文件增删/哈希变化及实测能否支持输入契约；哈希相同只证明字节相同，哈希、大小和制作方说明不能证明新内容语义等价。证据不足时拒绝并说明缺口。'}
+    reviewText(packet) // Reject deterministic material failures before running the app.
+    try{packet.proposed_execution=await probeTestCorrection(input.projectId,proposal,input.signal)}
+    catch(error){input.signal.throwIfAborted();packet.proposed_execution={status:'unverified',error:String(error),product_verified:false}}
+    const text=reviewText(packet)
     const features=Object.keys(proposal.expected_sources)
     let failure=''
     const decision=await callLlmForJson<Decision>({query:input.query,env:input.env,sessionId:input.sessionId+'-test-review-'+randomUUID(),

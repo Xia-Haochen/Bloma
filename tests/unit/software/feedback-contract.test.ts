@@ -13,6 +13,10 @@ import {safeToolFeedback,toolFeedbackLabel,type ToolFeedback} from '../../../sha
 import {createProject} from '../../../main/project/project-service'
 import {buildProductionContextTool} from '../../../main/desktop/production-context'
 import {createToolState} from '../../../main/agent/loop/agent-loop'
+import {qualityIdentityForInputs,saveQualityLedger,readQualityLedger,qualityRulesVersion} from '../../../main/software/quality-ledger'
+import {readPrdBackplane,markPrdUserConfirmed} from '../../../main/project/prd-store'
+import {syncDocuments} from '../../../main/project/document-sync'
+import {parseLeanBrief} from '../../../main/guide/lean-brief'
 
 let home:string,old:string|undefined
 beforeEach(()=>{old=process.env.PROMA_HOME;home=mkdtempSync(join(tmpdir(),'feedback-contract-'));process.env.PROMA_HOME=home})
@@ -30,6 +34,40 @@ function receipt(id:string,r:SoftwareVerification){
   const hash=createHash('sha256').update(JSON.stringify(r)).digest('hex')
   writeFileSync(join(home,'software-verification',id+'.json'),JSON.stringify({version:1,state:'complete',at:1,result:r,result_hash:hash}));return hash
 }
+it('returns current coverage repair work with failed verification without closing the finding',()=>{
+ const project=createProject({request_id:'coverage',mode:'quick'},{workflowVersion:'software-v1'}),id=project.project_id
+ const parsed=parseLeanBrief(JSON.stringify({action:'brief',goal:'Save',ui:'none',requirements:[{description:'Save records',expected:'Records survive restart'}]}),{projectId:id,sessionId:'s',source:'Save records',previous:readPrdBackplane(id),software:true})!
+ if(parsed.action!=='brief')throw Error('fixture')
+ syncDocuments({request_id:'confirm',project_id:id,session_id:'s',checkpoint:'requirement_confirmed'},parsed.brief);markPrdUserConfirmed(id)
+ const input={source:'source',scope:'scope',rules:'rules',environment:'environment',request_id:'request'}
+ const finding={id:'coverage-gap',review:'coverage',identity:qualityIdentityForInputs(id,input),requirement:'F-001',expected_source:'Records survive restart',category:'coverage',severity:'high' as const,location:'tests',trigger:'Restart the app',evidence:'Only in-memory output was checked',reproduction:'Save then reopen',unknowns:'Persistence',disposition:'suspected' as const,checks:[]}
+ saveQualityLedger(id,{version:1,reviews:[],findings:[finding]})
+ const failed=result({status:'failed',summary:'Another assertion failed',input_identity:input})
+ receipt(id,failed)
+ const response=verificationResponse(id,failed)
+ expect(response).toMatchObject({status:'failed',quality:{status:'needs_work',problem_count:1,problems:[{id:'coverage-gap',trigger:'Restart the app'}]}})
+ expect(JSON.stringify(response)).toContain('read_quality_findings')
+ expect(readQualityLedger(id).findings[0].disposition).toBe('suspected')
+ const ledger=readQualityLedger(id),current=qualityIdentityForInputs(id,input),rules=qualityRulesVersion(id)
+ ledger.findings[0].disposition='closed'
+ ledger.findings[0].checks=[
+  {identity:current,rules,case_name:'save',outcome:'failed',grounded:true,at:'before',observation:'Saved record missing after restart'},
+  {identity:current,rules,case_name:'save',outcome:'passed',grounded:true,at:'after',observation:'Saved record retained after restart'},
+ ]
+ saveQualityLedger(id,ledger)
+ expect(verificationResponse(id,failed)).toMatchObject({status:'failed',quality:{problem_count:0,problems:[]}})
+ const changed=result({...failed,input_identity:{...input,source:'new-source'}})
+ receipt(id,changed)
+ expect(verificationResponse(id,changed)).toMatchObject({quality:{problem_count:1}})
+})
+it('links bounded coverage excerpts to the finding rather than the execution report',()=>{
+ const project=createProject({request_id:'coverage-long',mode:'quick'},{workflowVersion:'software-v1'}),id=project.project_id
+ const input={source:'s',scope:'scope',rules:'r',environment:'e',request_id:'request'}
+ saveQualityLedger(id,{version:1,reviews:[],findings:[{id:'long',review:'review',identity:qualityIdentityForInputs(id,input),requirement:'unscoped',expected_source:'expected',category:'coverage',severity:'high',location:'test',trigger:'x'.repeat(5000),evidence:'evidence',reproduction:'steps',unknowns:'unknown',disposition:'suspected',checks:[]}]})
+ const failed=result({status:'failed',summary:'failed',input_identity:input});receipt(id,failed)
+ const view=verificationResponse(id,failed)
+ expect(view).toMatchObject({quality:{problems:[{trigger:{truncated:true,read_more:{tool:'read_quality_findings',arguments:{finding_id:'long'}}}}]}})
+})
 it('does not turn a generic failure or static rule hit into a confirmed business root cause',()=>{
   const unknown=result({status:'failed',summary:'something failed'})
   expect(verificationFailure(unknown)).toMatchObject({category:'unknown',diagnosis:{certainty:'unknown',root_cause_confirmed:false}})

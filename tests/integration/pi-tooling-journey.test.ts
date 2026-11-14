@@ -32,7 +32,13 @@ it('measures real Pi cross-file repair and archived early diagnostics with share
     const started=performance.now(),result=await tool.execute(input,ctx)
     rows.push({name:tool.name,input_bytes:Buffer.byteLength(JSON.stringify(input)),output_bytes:Buffer.byteLength(result.output),execution_ms:performance.now()-started,is_error:result.isError===true})
     expect(result.output).not.toContain('PRIVATE_SECRET')
-    if(tool.name==='run_command'){starts++;const value=JSON.parse(result.output);processId=value.process_id;nextSeq=value.next_seq;expect(value.verification).toBe('not_applicable')}
+    if(tool.name==='run_command'){
+     starts++;const value=JSON.parse(result.output);processId=value.process_id;nextSeq=value.next_seq
+     // The initial command reply may already consume the ready event. Later
+     // cursor reads correctly omit it, so retain that observation here too.
+     ready ||= result.output.includes('BUILD_READY')
+     expect(value.verification).toBe('not_applicable')
+    }
     if(tool.name==='read_process'){
      const value=JSON.parse(result.output);if(input.mode==='log'){expect(result.output).toContain('EARLY_NOTE');expect(result.output).toContain('[REDACTED]');searchReads++}
      else {nextSeq=value.next_seq;ready ||= result.output.includes('BUILD_READY');finished=value.state==='exited';if(finished)expect(value.exit_code,result.output).toBe(0)}

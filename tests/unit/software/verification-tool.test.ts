@@ -1,4 +1,4 @@
-import {withFundedExecutionWindow} from '../../../main/software/execution-limits'
+import {withFundedExecutionWindow,configureSoftwareExecutionLimits} from '../../../main/software/execution-limits'
 import {leanBudget} from '../../../main/desktop/lean-budget'
 import { withEmptyQualityReview } from '../../fixtures/quality-review-query'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -144,6 +144,7 @@ it('invalidates an earlier tool PASS when final delivery checks fail, even after
 
 it('normal production aligns an admitted outer window without clearing old request counts',async()=>{
  await setup()
+ configureSoftwareExecutionLimits(project.project_id,findProject(project.project_id).lean_operation_id!,{requests:16,output:4096,reason:'Fixture starts below platform capacity so an admitted window can extend it'})
  const budget=leanBudget(project.project_id,'desktop-implement');budget.recordRuntime(0);const snapshot=budget.snapshot()
  writeFileSync(snapshot.file,JSON.stringify({version:1,requests:snapshot.limits.requests,output:0,phases:{}}))
  const query:SDKQuery=async function*(){yield {type:'assistant',message:{role:'assistant',content:[{type:'text',text:'完成原目标。'}]}};yield {type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}}
