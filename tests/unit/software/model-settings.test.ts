@@ -19,12 +19,28 @@ beforeEach(() => {
 afterEach(() => { if(old===undefined)delete process.env.PROMA_HOME;else process.env.PROMA_HOME=old;rmSync(home,{recursive:true,force:true,maxRetries:4,retryDelay:100}) })
 function input(): SoftwareModelSettingsSave { return { request_id:'save',project_id:project.project_id,revision:softwareModelSettings(project.project_id).revision,
   variant:'independent',channel_id:'b',model:'model-b',authorize_budget:true,budget:{cap_rmb:1,context_tokens:4096,input_rmb_per_million:1,output_rmb_per_million:2} } }
+it('defaults to shared design and preserves explicit opt-out and custom configuration',()=>{
+ expect(softwareModelSettings(project.project_id)).toMatchObject({variant:'independent',funding:'project'})
+ saveSoftwareModelSettings({...input(),variant:'single'})
+ expect(softwareModelSettings(project.project_id).variant).toBe('single')
+ saveSoftwareModelSettings({request_id:'shared',project_id:project.project_id,revision:softwareModelSettings(project.project_id).revision,variant:'independent',funding:'project'})
+ expect(readIndependentPolicy(project.project_id)).toEqual({version:1,enabled:true,funding:'project'})
+ saveSoftwareModelSettings(input())
+ expect(softwareModelSettings(project.project_id)).toMatchObject({funding:'independent',model:'model-b'})
+})
+it('retains the saved shared preference for a later operation without reusing a B budget proof',()=>{
+ saveSoftwareModelSettings({request_id:'shared',project_id:project.project_id,revision:softwareModelSettings(project.project_id).revision,variant:'independent',funding:'project'})
+ const indexPath=join(home,'projects.json'),index=JSON.parse(readFileSync(indexPath,'utf8'))
+ index.projects.find((row:any)=>row.project_id===project.project_id).lean_operation_id='next-operation'
+ writeFileSync(indexPath,JSON.stringify(index))
+ expect(readIndependentPolicy(project.project_id)).toEqual({version:1,enabled:true,funding:'project'})
+})
 it('saves an explicitly authorized project budget without requesting models or exposing keys/host paths', () => {
   const result=saveSoftwareModelSettings(input())
   expect(result).toMatchObject({variant:'independent',admission:'not_checked',budget:{cap_rmb:1,accounted_upper_rmb:0,remaining_rmb:1},pricing:{context_tokens:4096}})
   expect(JSON.stringify(result)).not.toContain('SECRET_SENTINEL');expect(JSON.stringify(result)).not.toContain(home)
   const policy=readIndependentPolicy(project.project_id)!
-  if(!policy.enabled)throw Error('fixture')
+  if(!policy.enabled||'funding' in policy)throw Error('fixture')
   const proof=JSON.parse(readFileSync(policy.authorization_path,'utf8'))
   expect(proof).toMatchObject({source:'direct_user_confirmation',source_ui:'project_model_settings',project_id:project.project_id,operation_id:project.lean_operation_id,model:'model-b',cap_rmb:1})
   expect(JSON.parse(readFileSync(policy.monetary_policy_path+'.state.json','utf8')).entries).toEqual([])
@@ -36,7 +52,7 @@ it('rejects absent consent, stale revisions, disabled models and insufficient co
   expect(()=>saveSoftwareModelSettings({...input(),budget:{...input().budget!,cap_rmb:.000001}})).toThrow('保守预留')
 })
 it('preserves historical liability and refuses to replace a spent or unreadable local budget', () => {
-  saveSoftwareModelSettings(input());const policy=readIndependentPolicy(project.project_id)!;if(!policy.enabled)throw Error('fixture')
+  saveSoftwareModelSettings(input());const policy=readIndependentPolicy(project.project_id)!;if(!policy.enabled||'funding' in policy)throw Error('fixture')
   const file=policy.monetary_policy_path+'.state.json',state=JSON.parse(readFileSync(file,'utf8'))
   state.entries.push({id:'used',host:'b.invalid',model:'model-b',charged_micro_rmb:200000,reserved_micro_rmb:200000,status:'unknown'})
   writeFileSync(file,JSON.stringify(state));const bytes=readFileSync(file,'utf8')
@@ -48,7 +64,7 @@ it('enforces execution locks through the actual IPC and returns current saved st
   const handlers=new Map<string, (...args:unknown[])=>Promise<any>>()
   registerProjectDeliverablesIpc({handle:(name:string,fn:(...args:unknown[])=>Promise<any>)=>handlers.set(name,fn)} as never,{} as never)
   const get=()=>handlers.get(IPC_CHANNELS.SOFTWARE_MODEL_SETTINGS_GET)!({}, {request_id:'get',project_id:project.project_id})
-  expect((await get()).data.variant).toBe('single')
+  expect((await get()).data).toMatchObject({variant:'independent',funding:'project'})
   const run=registerBackgroundRun('settings-test',new AbortController(),project.project_id,()=>{})
   try{expect((await get()).data.locked).toBe(true);expect((await handlers.get(IPC_CHANNELS.SOFTWARE_MODEL_SETTINGS_SAVE)!({},input())).ok).toBe(false)}finally{unregisterBackgroundRun('settings-test',run)}
   expect((await handlers.get(IPC_CHANNELS.SOFTWARE_MODEL_SETTINGS_SAVE)!({},input())).data.variant).toBe('independent')

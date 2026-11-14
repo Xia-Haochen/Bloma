@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { independentDesignVersion, readIndependentDesign } from './independent-design'
 import type { IndependentVerification } from './independent-verification'
 import type { SoftwareRelease } from './release-store'
-import { qualityIdentity, qualityHash, readQualityLedger, saveQualityLedger, type QualityFinding } from './quality-ledger'
+import { qualityIdentity, qualityTargetIdentity, qualityHash, readQualityLedger, saveQualityLedger, type QualityFinding } from './quality-ledger'
 import { redactSoftwareOutput } from './process-manager'
 import { readPrdBackplane } from '../project/prd-store'
 import { trustedAcceptance } from '../project/requirement-contract'
@@ -25,7 +25,11 @@ export function currentIndependentSemantics(projectId: string, contract: Indepen
 export async function recordIndependentDisputes(projectId: string, assessment: IndependentSemantics, signal?: AbortSignal) {
   const design = readIndependentDesign(projectId)
   if (design?.status !== 'frozen' || !design.digest) throw Error('INDEPENDENT_CURRENT_DESIGN_REQUIRED')
-  const identity = await qualityIdentity(projectId, signal), version = independentDesignVersion(projectId), ledger = readQualityLedger(projectId), brief = readPrdBackplane(projectId)
+  signal?.throwIfAborted()
+  const version = independentDesignVersion(projectId), ledger = readQualityLedger(projectId), brief = readPrdBackplane(projectId)
+  // These are pre-implementation design disputes. Bind them to the frozen
+  // design without requiring an application entry or inventing runtime evidence.
+  const identity = {source:design.digest,target:qualityTargetIdentity(projectId),environment:qualityHash({phase:'independent-design',version})}
   const disputes = [...assessment.cases.filter(c => c.status === 'disputed').map(c => ({ id: c.id, feature: c.feature, issues: c.issues })),
     ...assessment.coverage.filter(c => ['missing', 'unresolved'].includes(c.status)).map(c => ({ id: `coverage:${c.feature}:${c.category}`, feature: c.feature, issues: [c.reason ?? `缺少${c.category}覆盖说明`] }))]
   for (const row of disputes) {
@@ -34,6 +38,7 @@ export async function recordIndependentDisputes(projectId: string, assessment: I
     ledger.findings.push({ id: randomUUID(), review: `independent:${design.digest}:${row.id}`, identity, requirement: row.feature, expected_source: requirement && trustedAcceptance(brief, requirement) || '', category: 'independent_expectation', severity: 'medium',
       location: `B:${row.id}`, trigger: '实现前核对独立预期', evidence: row.issues.join('；'), reproduction: row.id, unknowns: row.issues.join('；'), disposition: 'disputed', checks: [], independent: { design_version: version, design_digest: design.digest, case_id: row.id } })
   }
+  signal?.throwIfAborted()
   saveQualityLedger(projectId, ledger)
 }
 /** Raising a dispute blocks reuse; it never excludes a valid failure or grants

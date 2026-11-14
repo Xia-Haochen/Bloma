@@ -16,7 +16,8 @@ import {tmpdir} from 'node:os'
 import {createHash} from 'node:crypto'
 import {beforeEach,afterEach,expect,it,vi} from 'vitest'
 import * as correctionProbe from '../../../main/software/test-correction-probe'
-import {createProject} from '../../../main/project/project-service'
+import {createProject as createRawProject} from '../../../main/project/project-service'
+import {configureIndependentPolicy} from '../../../main/software/independent-policy'
 import {updateProject} from '../../../main/project/project-service'
 import {createServer} from 'node:net'
 import {readPrdBackplane,markPrdUserConfirmed} from '../../../main/project/prd-store'
@@ -32,6 +33,11 @@ import {proposeTestCorrection,decideTestCorrection,applyTestCorrection,filterApp
 import {buildTestCorrectionTools} from '../../../main/software/test-correction-tools'
 import {createSoftwareCollaborationPolicy} from '../../../main/software/collaboration-policy'
 import {createToolState} from '../../../main/agent/loop/agent-loop'
+function createProject(...args:Parameters<typeof createRawProject>){
+ const project=createRawProject(...args)
+ configureIndependentPolicy(project.project_id,{version:1,enabled:false})
+ return project
+}
 let home:string,old:string|undefined,p:ReturnType<typeof createProject>,before:NativeGuiTests,original:string
 // A timed-out Vitest callback is not automatically cancelled. Keep its own
 // asynchronous work attached until it has stopped, before restoring HOME.
@@ -290,7 +296,9 @@ it('real browser: failed frozen expectation is retained, independently corrected
   expect(()=>applyApprovedTestCorrections(id)).toThrow('WORKING_BYTES_CHANGED')
   expect(readFileSync(join(project.root_path,'acceptance.mjs'),'utf8')).toBe(workingEdit)
   writeFileSync(join(project.root_path,'acceptance.mjs'),frozenOriginal)
-  await phase('apply_and_host_verify',()=>buildSoftwareVerifyTool(id,createSoftwareCollaborationPolicy(id,project.root_path,'s')).execute({},{projectId:id,sessionId:'s',requestId:'approved-recovery',signal:AbortSignal.any([signal,AbortSignal.timeout(60000)]),state:createToolState()}))
+  const verified=await phase('apply_and_host_verify',()=>buildSoftwareVerifyTool(id,createSoftwareCollaborationPolicy(id,project.root_path,'s')).execute({},{projectId:id,sessionId:'s',requestId:'approved-recovery',signal:AbortSignal.any([signal,AbortSignal.timeout(60000)]),state:createToolState()}))
+  expect(verified.isError,verified.output).not.toBe(true)
+  expect(JSON.parse(verified.output).status).toBe('passed')
   expect(readFileSync(join(project.root_path,'acceptance.mjs'),'utf8')).toContain("toHaveText('created')")
   expect(readProjectStages(id).attempts[0].status).toBe('failed')
   expect((await phase('new_correct_stage',()=>verifyProjectStage(id,'first','acceptance.mjs',signal))).status).toBe('passed')

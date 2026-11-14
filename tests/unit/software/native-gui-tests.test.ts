@@ -18,6 +18,7 @@ import { guiSuitePath } from '../../../main/desktop/gui-acceptance';
 import { verifySoftwareCandidate, recentSoftwareVerification } from '../../../main/software/verification';
 import { closeAllDebugSessions } from '../../../main/software/debug-sessions';
 import { buildSoftwareVerifyTool } from '../../../main/software/verification-tool';
+import { configureIndependentPolicy } from '../../../main/software/independent-policy';
 import { verificationResponse } from '../../../main/software/verification-report';
 import { createSoftwareCollaborationPolicy } from '../../../main/software/collaboration-policy';
 import { createToolState } from '../../../main/agent/loop/agent-loop';
@@ -70,6 +71,7 @@ beforeEach(async () => {
     home = mkdtempSync(join(tmpdir(), 'bloma-native-gui-'));
     process.env.PROMA_HOME = home;
     project = createProject({ request_id: 'c', mode: 'longterm' }, { workflowVersion: 'software-v1' });
+    configureIndependentPolicy(project.project_id,{version:1,enabled:false});
     const parsed = parseLeanBrief(JSON.stringify({ action: 'brief', goal: 'Names', ui: 'required', delivery: 'browser', requirements: [
             { description: '新增姓名并重开保留', expected: '保存Alice并关闭重开后仍显示Alice' }, { description: '拒绝空姓名', expected: '空姓名提示required，不改变已有Alice' }
         ] }), { projectId: project.project_id, sessionId: 's', source: 'Names', previous: readPrdBackplane(project.project_id), software: true })!;

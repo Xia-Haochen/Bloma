@@ -17,6 +17,7 @@ function setup(value=state){
 it('requires explicit consent, resets it when the budget changes and sends exact project configuration',async()=>{
   const save=setup();await screen.findByText('预算准入：开工时检查 · 设计：尚未准备')
   fireEvent.click(screen.getByRole('radio',{name:/A＋B/}))
+  fireEvent.change(screen.getByLabelText('B 配置方式'),{target:{value:'independent'}})
   fireEvent.change(screen.getByLabelText('B 的渠道'),{target:{value:'b'}});fireEvent.change(screen.getByLabelText('B 的模型'),{target:{value:'model-b'}})
   for(const [label,value]of [['B 独立设计预算','1'],['上下文上限','4096'],['输入单价','1'],['输出单价','2']])fireEvent.change(screen.getByLabelText(label),{target:{value}})
   expect((screen.getByRole('button',{name:'保存并授权 B 预算'}) as HTMLButtonElement).disabled).toBe(true)
@@ -32,6 +33,15 @@ it('renders locked state and cannot save even through form submission',async()=>
   await screen.findByText(/本轮已开始或已登记对照/)
   fireEvent.submit(screen.getByRole('form',{name:'项目验收模型配置'}));expect(save).not.toHaveBeenCalled()
   expect((screen.getByRole('button',{name:'保存仅 A 的验收配置'}) as HTMLButtonElement).disabled).toBe(true)
+})
+it('saves inherited B without a separate model or budget form',async()=>{
+ const save=setup({...state,variant:'independent',funding:'project'})
+ const button=await screen.findByRole('button',{name:'保存 B 配置'})
+ expect(screen.queryByLabelText('B 独立设计预算')).toBeNull()
+ fireEvent.click(button)
+ await waitFor(()=>expect(save).toHaveBeenCalledTimes(1))
+ expect(save.mock.calls[0][0]).toMatchObject({variant:'independent',funding:'project'})
+ expect(save.mock.calls[0][0]).not.toHaveProperty('budget')
 })
 it('shows a failed read instead of presenting an editable default single-model selection',async()=>{
   Object.assign(window,{electronAPI:{projectDeliverables:{modelSettings:vi.fn(async()=>({ok:false,error:{message:'配置损坏'}}))}}})

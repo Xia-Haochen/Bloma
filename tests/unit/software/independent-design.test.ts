@@ -32,6 +32,17 @@ const query:SDKQuery=async function*(prompt,options){calls++;expect(prompt).not.
   yield{type:'result',subtype:'success',usage:{input_tokens:100,output_tokens:100}}
 }
 function input(q=query){return{projectId:project.project_id,sessionId:'s',query:q,primaryEnv:{ANTHROPIC_MODEL:'model-a'},signal:new AbortController().signal,resolveRoute:route}}
+function sharedInput(){
+ const sharedQuery:SDKQuery=async function*(prompt,options){
+  calls++;expect(prompt).not.toContain('IMPLEMENTATION_SENTINEL');expect(options.tools).toBeUndefined()
+  expect(options.env.ANTHROPIC_MODEL).toBe('model-a');expect(options.monetaryPolicyPath).toBeUndefined()
+  expect(options.maxTokens).toBe(8192)
+  options.requestGuard?.({url:'https://a.invalid/v1/messages',body:JSON.stringify({model:'model-a'})})
+  yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify(contract)}]}}
+  yield{type:'result',subtype:'success',usage:{input_tokens:100,output_tokens:100}}
+ }
+ return {...input(sharedQuery),primaryEnv:{ANTHROPIC_MODEL:'model-a',ANTHROPIC_BASE_URL:'https://a.invalid'},maxTokens:8192}
+}
 beforeEach(()=>{old=process.env.PROMA_HOME;home=mkdtempSync(join(tmpdir(),'bloma-independent-'));process.env.PROMA_HOME=home;calls=0
   project=createProject({request_id:'c',mode:'quick'},{workflowVersion:'software-v1'})
   const parsed=parseLeanBrief(JSON.stringify({action:'brief',goal:'保存姓名',ui:'required',delivery:'browser',requirements:[{description:'保存姓名',expected:'保存Alice显示Alice'}]}),{projectId:project.project_id,sessionId:'s',source:'姓名',previous:readPrdBackplane(project.project_id),software:true})!
@@ -118,7 +129,57 @@ it('allows host selection before confirmation without authorizing B or accepting
     expect(()=>configureIndependentPolicy(project.project_id,invalid)).toThrow('POLICY_INVALID')
   }
 })
-it('defaults to explicit single-model mode with zero calls',async()=>{expect((await prepareIndependentDesign(input())).status).toBe('disabled');expect(calls).toBe(0);expect(readIndependentDesign(project.project_id)).toBeUndefined()})
+it('defaults new GUI projects to a separate design context on the current model and shared budget',async()=>{
+ const options=sharedInput()
+ const before=leanBudget(project.project_id,'acceptance-design').snapshot()
+ expect(readIndependentPolicy(project.project_id)).toEqual({version:1,enabled:true,funding:'project'})
+ const result=await prepareIndependentDesign({...options,maxTokens:8192})
+ expect(result,result.reason).toMatchObject({status:'frozen',funding:'project',model:options.primaryEnv.ANTHROPIC_MODEL})
+ expect(calls).toBe(1)
+ expect(leanBudget(project.project_id,'acceptance-design').snapshot().requests).toBe(before.requests+1)
+ expect((await prepareIndependentDesign(options)).digest).toBe(result.digest);expect(calls).toBe(1)
+})
+it('freezes default B through the normal production entry before the maker runs',async()=>{
+ const options=sharedInput(),controller=new AbortController(),order:string[]=[]
+ const routed:SDKQuery=async function*(prompt,settings){
+  if(settings.accounting?.role==='acceptance_designer'){
+   order.push('B');yield* options.query(prompt,settings);return
+  }
+  order.push('A');expect(readIndependentDesign(project.project_id)?.status).toBe('frozen')
+  controller.abort();return
+ }
+ await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'default-b',content:'按已确认目标制作',maxTokens:8192,signal:controller.signal},routed,options.primaryEnv,
+  {publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
+ expect(order).toEqual(['B','A']);expect(calls).toBe(1)
+},60000)
+it('records default B disputes before an application launch file exists',async()=>{
+ const options=sharedInput(),messages:string[]=[]
+ const unresolved=structuredClone(contract)
+ const last=unresolved.cases[0].steps.at(-1)!
+ if(last.kind!=='expect')throw Error('fixture')
+ last.oracle={kind:'unresolved',question:'Which saved value is required?'}
+ const routed:SDKQuery=async function*(_prompt,settings){
+  expect(settings.accounting?.role).toBe('acceptance_designer')
+  yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify(unresolved)}]}}
+ }
+ await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'default-dispute',content:'按已确认目标制作',maxTokens:8192,signal:AbortSignal.timeout(30000)},routed,options.primaryEnv,
+  {publish:()=>{},persistAssistant:(_session,text)=>messages.push(text),persistSystem:()=>{},complete:()=>{}})
+ expect(findProject(project.project_id).current_stage,JSON.stringify(messages)).toBe('blocked_for_user_decision')
+ expect(messages.join('\n')).toContain('Which saved value is required?')
+ const ledger=JSON.parse(readFileSync(join(home,'software-quality',project.project_id+'.json'),'utf8'))
+ expect(ledger.findings.some((finding:any)=>finding.disposition==='disputed')).toBe(true)
+},60000)
+it('keeps legacy projects without an explicit policy in their existing mode',async()=>{
+ updateProject(project.project_id,{independent_design_default:undefined})
+ expect((await prepareIndependentDesign(input())).status).toBe('disabled');expect(calls).toBe(0)
+})
+it('leaves command-only projects on their supported CLI verification path',async()=>{
+ const parsed=parseLeanBrief(JSON.stringify({action:'brief',goal:'输出文本',ui:'none',delivery:'command',requirements:[{description:'输出文本',expected:'输出hello'}]}),{projectId:project.project_id,sessionId:'s',source:'输出hello',previous:readPrdBackplane(project.project_id),software:true})!
+ if(parsed.action!=='brief')throw Error('fixture')
+ syncDocuments({request_id:'cli',project_id:project.project_id,session_id:'s',checkpoint:'requirement_confirmed'},parsed.brief)
+ markPrdUserConfirmed(project.project_id)
+ expect((await prepareIndependentDesign(input())).status).toBe('disabled');expect(calls).toBe(0)
+})
 it('blocks the real production entry before implementer calls when required B capability is missing',async()=>{
   configureIndependentPolicy(project.project_id,policy);const model=vi.fn(async function*(){throw Error('must not call implementer')})
   stageEvaluationRun(project.project_id,createEvaluationProtocol([{id:'names',goal:'保存姓名',delivery:'browser',requirements:[{description:'保存姓名',expected:'保存Alice显示Alice'}],constraints:[],out_of_scope:[]}]),'names','independent','production-staged')
@@ -186,9 +247,12 @@ it('rejects cancelled preparation and damaged frozen design without resurrecting
   record.contract.cases[0].steps[2].equals='Wrong';writeFileSync(file,JSON.stringify(record))
   expect((await prepareIndependentDesign(input())).status).toBe('blocked');expect(()=>readIndependentDesign(project.project_id)).toThrow('FROZEN_BYTES_CHANGED')
 })
-it('executes frozen B business values through an actual browser and rejects a product defect without accepting revised adapter expectations',async()=>{
-  writeFileSync(join(home,'software-independent-design/policy.json'),JSON.stringify({version:1,enabled:false}))
-  configureIndependentPolicy(project.project_id,policy);const design=await prepareIndependentDesign(input());expect(design.status).toBe('frozen')
+it.each(['custom','project'])('executes frozen B business values through an actual browser with %s funding and rejects a product defect',async funding=>{
+  if(funding==='custom'){
+    writeFileSync(join(home,'software-independent-design/policy.json'),JSON.stringify({version:1,enabled:false}))
+    configureIndependentPolicy(project.project_id,policy)
+  }
+  const design=await prepareIndependentDesign(funding==='custom'?input():sharedInput());expect(design.status,design.reason).toBe('frozen')
   const server=createServer();await new Promise<void>(done=>server.listen(0,'127.0.0.1',done));const address=server.address();if(!address||typeof address==='string')throw Error('port');await new Promise<void>(done=>server.close(()=>done()))
   const root=project.root_path
   writeFileSync(join(root,'server.cjs'),`require('http').createServer((q,s)=>{s.setHeader('Content-Type','text/html');s.end(require('fs').readFileSync('index.html'))}).listen(Number(process.argv[2]),'127.0.0.1')`)

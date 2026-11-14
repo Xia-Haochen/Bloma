@@ -8,6 +8,7 @@ import { findProject } from '../project/project-service'
 import { readPrdBackplane } from '../project/prd-store'
 import { prdScopeFingerprint, trustedAcceptance } from '../project/requirement-contract'
 import { readIndependentDesign, readIndependentPolicy, independentDesignVersion } from './independent-design'
+import { independentDesignMatchesPolicy } from './independent-policy'
 import { observeSoftwareGui } from './gui-observer'
 import type { SoftwareRelease } from './release-store'
 import type { GuiAcceptanceSuite } from '../desktop/gui-acceptance'
@@ -30,7 +31,7 @@ export function independentSuite(projectId:string,root:string,caseIds?:string[])
   const policy=readIndependentPolicy(projectId)
   if(record?.status!=='frozen'||!record.contract||record.scope!==prdScopeFingerprint(readPrdBackplane(projectId))
     ||record.operation!==(project.lean_operation_id??'initial')||record.design_hash!==project.ux_confirmation?.design_hash
-    ||policy?.enabled&&(record.channel_id!==policy.channel_id||record.model!==policy.model))throw Error('INDEPENDENT_CURRENT_DESIGN_REQUIRED')
+    ||policy?.enabled&&!independentDesignMatchesPolicy(record,policy))throw Error('INDEPENDENT_CURRENT_DESIGN_REQUIRED')
   const semantics=currentIndependentSemantics(projectId,record.contract)
   const selected=caseIds?record.contract.cases.filter(c=>caseIds.includes(c.id)):record.contract.cases
   if(!selected.length||caseIds&&selected.length!==caseIds.length||selected.some(c=>semantics.cases.find(s=>s.id===c.id)?.status!=='grounded')||!caseIds&&!semantics.ready)throw Error('INDEPENDENT_SEMANTICS_UNRESOLVED: 不得执行无依据预期或把争议写成产品缺陷')
@@ -60,7 +61,7 @@ export async function verifyIndependentDesign(projectId:string,candidate:Softwar
   if(record?.status!=='frozen'||!record.contract)throw Error('INDEPENDENT_CURRENT_DESIGN_REQUIRED')
   // Check the target even when every proposal is disputed and no process runs.
   if(record.scope!==prdScopeFingerprint(brief)||record.operation!==(findProject(projectId).lean_operation_id??'initial')||record.design_hash!==findProject(projectId).ux_confirmation?.design_hash
-    ||record.channel_id!==policy.channel_id||record.model!==policy.model)throw Error('INDEPENDENT_CURRENT_DESIGN_REQUIRED')
+    ||!independentDesignMatchesPolicy(record,policy))throw Error('INDEPENDENT_CURRENT_DESIGN_REQUIRED')
   const semantics=currentIndependentSemantics(projectId,record.contract)
   const designVersion=independentDesignVersion(projectId),challengeVersion=independentChallengeVersion(projectId)
   const directory=join(getPromaHome(),'software-independent-evidence',projectId,randomUUID())

@@ -258,6 +258,7 @@ export interface ChannelModel {
 }
 
 export interface SoftwareModelSettings {
+  funding?: 'project' | 'independent'
   design_request_limit?:number
   project_id: string; revision: string; variant: 'single'|'independent'; locked: boolean; lock_reason?: string
   channels: Array<{ id: string; name: string; models: string[] }>
@@ -267,6 +268,7 @@ export interface SoftwareModelSettings {
   budget_error?: string; design_status: string; admission: 'not_checked'
 }
 export interface SoftwareModelSettingsSave extends RequestEnvelope {
+  funding?: 'project' | 'independent'
   project_id: string; revision: string; variant: 'single'|'independent'
   channel_id?: string; model?: string; authorize_budget?: boolean
   budget?: { cap_rmb: number; context_tokens: number; input_rmb_per_million: number; output_rmb_per_million: number }
@@ -1359,6 +1361,8 @@ export interface Project {
   workflow_retirement?: string
   /** Stable during a task/repair/resume; a new user task after delivery gets a new allowance. */
   lean_operation_id?: string
+  /** New GUI projects use a separate acceptance-design context by default. */
+  independent_design_default?: 'project'
   gui_acceptance?: { status: 'pending' | 'sealed' | 'unverified'; scope_hash: string; reason?: string }
   /** Host-owned UX confirmation; generated project files cannot grant a new confirmation. */
   ux_confirmation?: { prd_fingerprint: string; design_hash: string; html_hash: string | null }

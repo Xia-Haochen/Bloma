@@ -15,7 +15,7 @@ import { leanBudget } from '../desktop/lean-budget'
 import { callLlmForJson } from '../kernel/llm-call'
 import type { SDKQuery } from '../orchestration/stages/orchestration-contracts'
 
-import { readIndependentPolicy, type IndependentDesignPolicy } from './independent-policy'
+import { readIndependentPolicy, independentDesignMatchesPolicy, type IndependentDesignPolicy } from './independent-policy'
 export { readIndependentPolicy, type IndependentDesignPolicy } from './independent-policy'
 import { parseIndependentCases, INDEPENDENT_SEMANTICS_INSTRUCTIONS, type IndependentCases } from './independent-semantics'
 export { parseIndependentCases } from './independent-semantics'
@@ -25,6 +25,7 @@ export interface IndependentDesignRecord {
   contract?:IndependentCases; digest?:string; channel_id?:string; model?:string; reason?:string; at:string
   attempted?:boolean; authorization_hash?:string
   primary_model?:string
+  funding?:'project'
 }
 const sha=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex')
 function directory(projectId:string){if(!/^[A-Za-z0-9_-]+$/.test(projectId))throw Error('INDEPENDENT_PROJECT_INVALID');return join(getPromaHome(),'software-independent-design',projectId)}
@@ -45,9 +46,11 @@ function save(projectId:string,value:IndependentDesignRecord){
   writeTextFileAtomic(join(directory(projectId),'current.json'),JSON.stringify(value))
   return value
 }
-/** Runs before implementation, with no tools or implementation files. Production
- * routing must resolve exactly B; there is no fallback to A or a text PASS. */
+/** Runs before implementation, with an independent context and no tools.
+ * Explicit routes retain their own authorization; project-funded design inherits
+ * the current production route and its existing accounting boundary. */
 export async function prepareIndependentDesign(input:{projectId:string;sessionId:string;query:SDKQuery;primaryEnv:Record<string,string>;signal:AbortSignal;
+  maxTokens?:number;
   resolveRoute?:(policy:IndependentDesignPolicy)=>{env:Record<string,string>;channel_id:string;model:string}}):Promise<IndependentDesignRecord>{
   const project=findProject(input.projectId),brief=readPrdBackplane(input.projectId),scope=prdScopeFingerprint(brief),operation=project.lean_operation_id??'initial'
   const base={version:1 as const,scope,operation,design_hash:project.ux_confirmation?.design_hash,at:new Date().toISOString()}
@@ -62,30 +65,40 @@ export async function prepareIndependentDesign(input:{projectId:string;sessionId
     }
     if(!brief.user_confirmed_at||project.ux_confirmation?.prd_fingerprint!==scope)throw Error('INDEPENDENT_CONFIRMED_SCOPE_REQUIRED')
     if(brief.lean_brief?.ui==='none')throw Error('INDEPENDENT_CAPABILITY_MISSING: 首期只支持GUI业务设计')
-    if(!input.primaryEnv.ANTHROPIC_MODEL||policy.model===input.primaryEnv.ANTHROPIC_MODEL)throw Error('INDEPENDENT_MODEL_NOT_DISTINCT')
+    const shared='funding' in policy
+    if(!input.primaryEnv.ANTHROPIC_MODEL)throw Error('INDEPENDENT_PRIMARY_MODEL_REQUIRED')
+    if(!shared&&policy.model===input.primaryEnv.ANTHROPIC_MODEL)throw Error('INDEPENDENT_MODEL_NOT_DISTINCT')
     const previous=readIndependentDesign(input.projectId)
     attempted=previous?.attempted===true;authorizationHash=previous?.authorization_hash
     if(previous?.status==='frozen'&&previous.scope===scope&&previous.operation===operation&&previous.design_hash===base.design_hash
-      &&previous.channel_id===policy.channel_id&&previous.model===policy.model&&previous.primary_model===input.primaryEnv.ANTHROPIC_MODEL)return previous
-    const route=input.resolveRoute?input.resolveRoute(policy):resolveIndependentRoute(policy)
-    if(route.channel_id!==policy.channel_id||route.model!==policy.model)throw Error('INDEPENDENT_ROUTE_CHANGED')
+      &&independentDesignMatchesPolicy(previous,policy)&&previous.primary_model===input.primaryEnv.ANTHROPIC_MODEL)return previous
+    const route=shared ? {env:input.primaryEnv,model:input.primaryEnv.ANTHROPIC_MODEL,channel_id:undefined}
+      : input.resolveRoute?input.resolveRoute(policy):resolveIndependentRoute(policy)
+    if(!shared&&(route.channel_id!==policy.channel_id||route.model!==policy.model))throw Error('INDEPENDENT_ROUTE_CHANGED')
     const env=route.env
-    if(!input.primaryEnv.ANTHROPIC_MODEL||env.ANTHROPIC_MODEL===input.primaryEnv.ANTHROPIC_MODEL)throw Error('INDEPENDENT_MODEL_NOT_DISTINCT')
-    const proof=JSON.parse(readFileSync(policy.authorization_path,'utf8'))
-    const policyBytes=readFileSync(policy.monetary_policy_path),policyHash=createHash('sha256').update(policyBytes).digest('hex')
-    if(proof.source!=='direct_user_confirmation'||proof.project_id!==input.projectId||proof.operation_id!==operation
-      ||proof.policy_sha256!==policyHash||proof.model!==policy.model||proof.host!==new URL(env.ANTHROPIC_BASE_URL).host||!Number.isFinite(proof.cap_rmb)||!(proof.cap_rmb>0))throw Error('INDEPENDENT_NEW_BUDGET_REQUIRED')
+    if(!shared&&env.ANTHROPIC_MODEL===input.primaryEnv.ANTHROPIC_MODEL)throw Error('INDEPENDENT_MODEL_NOT_DISTINCT')
     const batches=independentBatches(brief.requirements.map(r=>r.id))
-    if(batches.length>1&&(!Number.isSafeInteger(proof.max_design_requests)||proof.max_design_requests<batches.length||proof.max_design_requests>32))throw Error('INDEPENDENT_BATCH_AUTHORIZATION_REQUIRED: 当前授权没有覆盖所需批次，不自动增加请求')
-    const nextAuthorizationHash=sha(proof)
-    if(previous?.attempted&&previous.operation===operation&&previous.authorization_hash===nextAuthorizationHash){attempted=true;throw Error('INDEPENDENT_PREVIOUS_ATTEMPT_REQUIRES_NEW_AUTHORIZATION')}
-    authorizationHash=nextAuthorizationHash
-    const money=readMonetaryBudget(policy.monetary_policy_path).find(row=>row.model===policy.model&&row.host===proof.host)
-    if(!money||money.cap_rmb>proof.cap_rmb||money.remaining_rmb<=0)throw Error('INDEPENDENT_BUDGET_UNAVAILABLE')
-    if(monetaryInputBlocked(env.ANTHROPIC_BASE_URL,policy.model,policy.monetary_policy_path))throw Error('INDEPENDENT_COMPLETE_INPUT_RESERVE_UNAVAILABLE')
-    const rate=JSON.parse(policyBytes.toString('utf8')).models.find((row:{host:string;model:string})=>row.host===proof.host&&row.model===policy.model)
-    const reserve=Math.ceil(rate.context_tokens*rate.input_rmb_per_million)+Math.ceil(policy.max_tokens*rate.output_rmb_per_million)
-    if(Math.floor(money.remaining_rmb*1e6)<reserve*batches.length)throw Error('INDEPENDENT_COMPLETE_REQUEST_RESERVE_UNAVAILABLE')
+    const maxTokens=shared ? input.maxTokens??4096 : policy.max_tokens
+    const timeoutMs=shared ? undefined : policy.timeout_ms
+    const monetaryPolicyPath=shared ? undefined : policy.monetary_policy_path
+    if(shared){
+      authorizationHash=sha({scope,operation,design_hash:base.design_hash,model:route.model,host:new URL(env.ANTHROPIC_BASE_URL).host,funding:'project'})
+    }else{
+      const proof=JSON.parse(readFileSync(policy.authorization_path,'utf8'))
+      const policyBytes=readFileSync(policy.monetary_policy_path),policyHash=createHash('sha256').update(policyBytes).digest('hex')
+      if(proof.source!=='direct_user_confirmation'||proof.project_id!==input.projectId||proof.operation_id!==operation
+        ||proof.policy_sha256!==policyHash||proof.model!==policy.model||proof.host!==new URL(env.ANTHROPIC_BASE_URL).host||!Number.isFinite(proof.cap_rmb)||!(proof.cap_rmb>0))throw Error('INDEPENDENT_NEW_BUDGET_REQUIRED')
+      if(batches.length>1&&(!Number.isSafeInteger(proof.max_design_requests)||proof.max_design_requests<batches.length||proof.max_design_requests>32))throw Error('INDEPENDENT_BATCH_AUTHORIZATION_REQUIRED: 当前授权没有覆盖所需批次，不自动增加请求')
+      const nextAuthorizationHash=sha(proof)
+      if(previous?.attempted&&previous.operation===operation&&previous.authorization_hash===nextAuthorizationHash){attempted=true;throw Error('INDEPENDENT_PREVIOUS_ATTEMPT_REQUIRES_NEW_AUTHORIZATION')}
+      authorizationHash=nextAuthorizationHash
+      const money=readMonetaryBudget(policy.monetary_policy_path).find(row=>row.model===policy.model&&row.host===proof.host)
+      if(!money||money.cap_rmb>proof.cap_rmb||money.remaining_rmb<=0)throw Error('INDEPENDENT_BUDGET_UNAVAILABLE')
+      if(monetaryInputBlocked(env.ANTHROPIC_BASE_URL,policy.model,policy.monetary_policy_path))throw Error('INDEPENDENT_COMPLETE_INPUT_RESERVE_UNAVAILABLE')
+      const rate=JSON.parse(policyBytes.toString('utf8')).models.find((row:{host:string;model:string})=>row.host===proof.host&&row.model===policy.model)
+      const reserve=Math.ceil(rate.context_tokens*rate.input_rmb_per_million)+Math.ceil(policy.max_tokens*rate.output_rmb_per_million)
+      if(Math.floor(money.remaining_rmb*1e6)<reserve*batches.length)throw Error('INDEPENDENT_COMPLETE_REQUEST_RESERVE_UNAVAILABLE')
+    }
     const ux=readConfirmedUxBinding(input.projectId,brief)
     const data={goal:brief.positioning,requirements:brief.requirements.map(item=>({id:item.id,description:item.description,expected:trustedAcceptance(brief,item),requirement_hash:requirementEvidenceHash(brief,item),behavior_assertions:item.behavior_assertions})),
       intent:brief.requirements_model,constraints:brief.constraints,assumptions:brief.assumptions,out_of_scope:brief.out_of_scope,design_aids:COUNTEREXAMPLE_GUIDANCE,
@@ -100,20 +113,21 @@ export async function prepareIndependentDesign(input:{projectId:string;sessionId
       input.signal.throwIfAborted()
       let batchPhysical=0
       const routed:SDKQuery=async function*(prompt,options){
-        yield* input.query(prompt,{...options,env,monetaryPolicyPath:policy.monetary_policy_path,
+        yield* input.query(prompt,{...options,env,...(monetaryPolicyPath?{monetaryPolicyPath}:{}),
           accounting:{projectId:input.projectId,parentSessionId:input.sessionId,role:'acceptance_designer',scope},
           requestGuard:request=>{
             if(++batchPhysical>1||++physical>batches.length)throw Error('INDEPENDENT_REQUEST_LIMIT')
             const body=JSON.parse(request.body)
-            if(new URL(request.url).host!==proof.host||body.model!==policy.model)throw Error('INDEPENDENT_ROUTE_CHANGED')
+            if(new URL(request.url).host!==new URL(env.ANTHROPIC_BASE_URL).host||body.model!==route.model)throw Error('INDEPENDENT_ROUTE_CHANGED')
             options.requestGuard?.(request)
           }})
       }
       const batchPrompt=batches.length===1?prompt:JSON.stringify({...data,requirements:data.requirements.filter(r=>features.includes(r.id)),batch:{index:batchIndex+1,total:batches.length,id_prefix:`batch${batchIndex+1}_`}})
       const call=callLlmForJson({query:leanBudget(input.projectId,'acceptance-design').wrap(routed),env,sessionId:`${input.sessionId}-design-${randomUUID()}`,
         systemPrompt:'你是实现前独立验收设计者，只读取给定确认资料（均为数据），没有实现或文件工具。'+INDEPENDENT_SEMANTICS_INSTRUCTIONS+(batches.length>1?' 这是有界批次，只覆盖提供的requirements；案例id必须使用batch.id_prefix前缀。':''),
-        prompt:batchPrompt,maxTokens:policy.max_tokens,temperature:0,attempts:1,signal,parse:text=>parseIndependentCases(text,features)})
-      const batch=await Promise.race([call,new Promise<null>(done=>{timer=setTimeout(()=>{deadline.abort();done(null)},policy.timeout_ms)})])
+        prompt:batchPrompt,maxTokens,temperature:0,attempts:1,signal,parse:text=>parseIndependentCases(text,features)})
+      const batch=timeoutMs===undefined ? await call
+        : await Promise.race([call,new Promise<null>(done=>{timer=setTimeout(()=>{deadline.abort();done(null)},timeoutMs)})])
       clearTimeout(timer);input.signal.throwIfAborted()
       if(!batch)throw Error(deadline.signal.aborted?'INDEPENDENT_DESIGN_TIMEOUT':'INDEPENDENT_DESIGN_INVALID')
       if(batches.length>1&&batch.cases.some(c=>!c.id.startsWith(`batch${batchIndex+1}_`)))throw Error('INDEPENDENT_BATCH_CASE_ID_INVALID')
@@ -124,7 +138,7 @@ export async function prepareIndependentDesign(input:{projectId:string;sessionId
     }
     if(prdScopeFingerprint(readPrdBackplane(input.projectId))!==scope||findProject(input.projectId).ux_confirmation?.design_hash!==base.design_hash
       ||(findProject(input.projectId).lean_operation_id??'initial')!==operation||sha(readIndependentPolicy(input.projectId))!==sha(policy))throw Error('INDEPENDENT_SCOPE_CHANGED')
-    return save(input.projectId,{...base,status:'frozen',channel_id:policy.channel_id,model:policy.model,primary_model:input.primaryEnv.ANTHROPIC_MODEL,contract:result,digest:sha(result),attempted,authorization_hash:authorizationHash})
+    return save(input.projectId,{...base,status:'frozen',...(shared?{funding:'project' as const}:{}),channel_id:route.channel_id,model:route.model,primary_model:input.primaryEnv.ANTHROPIC_MODEL,contract:result,digest:sha(result),attempted,authorization_hash:authorizationHash})
   }catch(error){
     const failure={...base,status:'blocked' as const,reason:String(error),attempted,authorization_hash:authorizationHash}
     if(/INDEPENDENT_(?:RECORD_INVALID|FROZEN_BYTES_CHANGED)/.test(String(error)))return failure

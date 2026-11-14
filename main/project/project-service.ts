@@ -74,7 +74,8 @@ export function createProject(input: ProjectCreateInput, options?: { workflowVer
   getSnapshotsDir(WORKSPACE_SLUG, projectId)
 
   const project: Project = {
-    ...(options ? { workflow_version: options.workflowVersion, lean_operation_id: randomUUID() } : {}),
+    ...(options ? { workflow_version: options.workflowVersion, lean_operation_id: randomUUID(),
+      ...(options.workflowVersion === 'software-v1' ? { independent_design_default: 'project' as const } : {}) } : {}),
     project_id: projectId,
     workspace_slug: WORKSPACE_SLUG,
     name: deriveProjectDisplayName(input.initial_message) ?? input.initial_message?.slice(0, 32) ?? '未命名项目',

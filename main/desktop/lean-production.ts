@@ -261,7 +261,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     }
   }
   if ((!initialBudgetStop)) {
-    const design = await prepareIndependentDesign({projectId:input.projectId,sessionId:input.sessionId,query:input.query,primaryEnv:input.env,signal})
+    const design = await prepareIndependentDesign({projectId:input.projectId,sessionId:input.sessionId,query:input.query,primaryEnv:input.env,maxTokens:input.maxTokens,signal})
     if(design.status==='blocked'){blocked(`独立验收设计尚未就绪：${design.reason}`);return}
     if(design.status==='frozen'&&design.contract){
       const semantics=currentIndependentSemantics(input.projectId,design.contract)

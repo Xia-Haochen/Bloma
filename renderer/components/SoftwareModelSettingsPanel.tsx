@@ -13,6 +13,7 @@ function ProjectModelSettings({ projectId, name }: { projectId: string; name: st
   const running = useAtomValue(hasActiveStreamAtom)
   const [data, setData] = React.useState<SoftwareModelSettings>()
   const [variant, setVariant] = React.useState<'single'|'independent'>('single')
+  const [funding, setFunding] = React.useState<'project'|'independent'>('project')
   const [channel, setChannel] = React.useState(''), [model, setModel] = React.useState('')
   const [cap, setCap] = React.useState(''), [context, setContext] = React.useState('')
   const [inputPrice, setInputPrice] = React.useState(''), [outputPrice, setOutputPrice] = React.useState('')
@@ -22,6 +23,7 @@ function ProjectModelSettings({ projectId, name }: { projectId: string; name: st
   React.useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
   const apply = (value: SoftwareModelSettings) => {
     setData(value); setVariant(value.variant); setChannel(value.channel_id ?? ''); setModel(value.model ?? '')
+    setFunding(value.funding ?? (value.channel_id ? 'independent' : 'project'))
     setCap(value.budget ? String(value.budget.cap_rmb) : ''); setConsent(false)
     setContext(value.pricing ? String(value.pricing.context_tokens) : ''); setInputPrice(value.pricing ? String(value.pricing.input_rmb_per_million) : ''); setOutputPrice(value.pricing ? String(value.pricing.output_rmb_per_million) : '')
   }
@@ -40,13 +42,14 @@ function ProjectModelSettings({ projectId, name }: { projectId: string; name: st
   const locked = !data || data.locked || running || pending
   const enabled = variant === 'independent'
   const edit = (setter: (value: string) => void, value: string) => { setter(value); setConsent(false); setMessage('') }
-  const valid = !enabled || data?.channels.find(item => item.id === channel)?.models.includes(model) && [cap,context,inputPrice,outputPrice].every(value => value.trim() !== '' && Number.isFinite(Number(value)))
+  const valid = !enabled || funding==='project' || data?.channels.find(item => item.id === channel)?.models.includes(model) && [cap,context,inputPrice,outputPrice].every(value => value.trim() !== '' && Number.isFinite(Number(value)))
     && Number(cap) > 0 && Number.isSafeInteger(Number(context)) && Number(context) > 0 && Number(inputPrice) >= 0 && Number(outputPrice) >= 0 && consent
   const save = async (event: React.FormEvent) => {
     event.preventDefault(); if (locked || !valid || !data) return
     setPending(true); setError(''); setMessage('')
     const payload: SoftwareModelSettingsSave = { request_id: crypto.randomUUID(), project_id: projectId, revision: data.revision, variant }
-    if (enabled) Object.assign(payload, { channel_id: channel, model, authorize_budget: consent,
+    if(enabled)payload.funding=funding
+    if (enabled&&funding==='independent') Object.assign(payload, { channel_id: channel, model, authorize_budget: consent,
       budget: { cap_rmb: Number(cap), context_tokens: Number(context), input_rmb_per_million: Number(inputPrice), output_rmb_per_million: Number(outputPrice) } })
     try {
       const api = window.electronAPI?.projectDeliverables
@@ -61,18 +64,20 @@ function ProjectModelSettings({ projectId, name }: { projectId: string; name: st
   const reason = data?.lock_reason?.includes('READ_ONLY') ? '项目已归档或放弃，配置只读。' : '本轮已开始或已登记对照，配置只读；已有版本、预算和记录保留。'
   return <form className="model-settings" aria-label="项目验收模型配置" onSubmit={event => void save(event)}>
     <header><div><h2>验收设计</h2><p>{name || '当前项目'} · 仅影响这个项目</p></div><button type="button" disabled={pending} onClick={() => void load()}>刷新</button></header>
-    <p>A 沿用当前会话的制作模型，按需协作子任务也继承 A。可单独授权 B 设计业务案例，由平台执行检查和交付裁决。</p>
+    <p>新 GUI 项目默认由 B 在独立上下文中设计验收案例，沿用制作模型和项目预算。也可单独配置 B 的渠道、模型与额度，由平台执行检查。</p>
     {error && <p role="alert">{error}</p>}
     {data?.locked && <p role="status">{reason}</p>}
     {running && <p role="status">项目正在运行，暂不能修改配置。</p>}
     <fieldset disabled={locked}><legend>验收方式</legend>
       <label className="model-choice"><input type="radio" name="verification-mode" checked={!enabled} onChange={() => { setVariant('single'); setConsent(false); setMessage('') }} /><span><strong>仅使用制作模型 A</strong><small>沿用 A 完成制作与按需协作；这里不关闭子任务，平台执行验收。</small></span></label>
       <label className="model-choice"><input type="radio" name="verification-mode" checked={enabled} onChange={() => { setVariant('independent'); setConsent(false); setMessage('') }} /><span><strong>A＋B 独立验收设计</strong><small>B 只读确认需求与界面，设计关键业务案例；A 实现，平台裁决。</small></span></label>
-      {enabled && <div className="model-settings-fields">
+      {enabled && <label>B 配置方式<select aria-label="B 配置方式" value={funding} onChange={event=>{setFunding(event.target.value as 'project'|'independent');setConsent(false);setMessage('')}}><option value="project">沿用制作模型与项目预算</option><option value="independent">单独配置渠道、模型与额度</option></select></label>}
+      {enabled&&funding==='project'&&<p>B 只读取确认资料，在独立上下文中生成案例。调用计入项目共享额度，单次输出沿用制作配置。</p>}
+      {enabled&&funding==='independent' && <div className="model-settings-fields">
         <label>B 的渠道<select aria-label="B 的渠道" value={channel} onChange={event => { edit(setChannel,event.target.value); setModel('') }}><option value="">选择已启用渠道</option>{data?.channels.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
         <label>B 的模型<select aria-label="B 的模型" value={model} onChange={event => edit(setModel,event.target.value)}><option value="">选择模型</option>{data?.channels.find(item => item.id === channel)?.models.map(value => <option key={value} value={value}>{value}</option>)}</select></label>
         {!data?.channels.length && <p>暂无可用渠道，请先在“模型渠道”中配置并启用。</p>}
-        <p>B 必须与 A 使用不同模型，运行时核对。当前支持 GUI 关键案例，单次设计最多一次请求。</p>
+        <p>B 必须与 A 使用不同模型，运行时核对。当前支持 GUI 关键案例，每批设计最多一次请求。</p>
         <label>B 独立设计预算（元，不含 A）<input aria-label="B 独立设计预算" type="number" min="0.000001" max="10000" step="any" value={cap} onChange={event => edit(setCap,event.target.value)} /></label>
         <details open={!data?.budget}><summary>计价与保守预留</summary><p>按供应商现行价格填写；平台未核对供应商余额。缓存输入按普通输入单价保守计入。</p>
           <div className="model-settings-grid">
@@ -87,7 +92,7 @@ function ProjectModelSettings({ projectId, name }: { projectId: string; name: st
     {data?.budget && <p>已保存的 B 预算：{data.budget.cap_rmb} 元 · 已计责任上界 {data.budget.accounted_upper_rmb} 元 · 剩余 {data.budget.remaining_rmb} 元</p>}
     {data?.budget_error && <p role="alert">{data.budget_error}</p>}
     {data && <p>预算准入：开工时检查 · 设计：{({not_prepared:'尚未准备',frozen:'已冻结',blocked:'受阻',disabled:'未启用'} as Record<string,string>)[data.design_status] ?? '记录待核对'}</p>}
-    <footer><button type="submit" disabled={locked || !valid}>{pending ? '处理中…' : enabled ? '保存并授权 B 预算' : '保存仅 A 的验收配置'}</button><span>已有账本和失败记录保留。</span></footer>
+    <footer><button type="submit" disabled={locked || !valid}>{pending ? '处理中…' : enabled ? funding==='project'?'保存 B 配置':'保存并授权 B 预算' : '保存仅 A 的验收配置'}</button><span>已有账本和失败记录保留。</span></footer>
     {message && <p role="status">{message}</p>}
   </form>
 }
