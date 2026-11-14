@@ -84,6 +84,8 @@ const electronAPI: ElectronAPI = {
     read: () => ipcRenderer.invoke(IPC_CHANNELS.TOKEN_MONITOR_READ),
     refreshPrices: () => ipcRenderer.invoke(IPC_CHANNELS.TOKEN_MONITOR_REFRESH),
     openSource: provider => ipcRenderer.invoke(IPC_CHANNELS.TOKEN_MONITOR_OPEN_SOURCE, provider),
+    auditModels: () => ipcRenderer.invoke(IPC_CHANNELS.TOKEN_MONITOR_MODELS),
+    auditBatch: filter => ipcRenderer.invoke(IPC_CHANNELS.TOKEN_MONITOR_AUDIT, filter),
   },
   clipboard: {
     writeText: (input) => ipcRenderer.invoke(IPC_CHANNELS.CLIPBOARD_WRITE_TEXT, input),

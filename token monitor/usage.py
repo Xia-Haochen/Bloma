@@ -94,12 +94,18 @@ def excerpt(blocks, limit):
 
 def session_turns(path, project, session, issues):
     turns = []
+    replies, results = [], {}
     turn = None
     for message in lines(path, issues):
         at = timestamp(message.get("timestamp"))
         if at is None:
             continue
         role, origin = message.get("role"), message.get("origin")
+        content = message.get("content")
+        blocks = [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+        for block in blocks:
+            if block.get("type") == "tool_result" and safe_id(block.get("tool_use_id")):
+                results[block["tool_use_id"]] = block
         if role == "user" and origin not in ("system", "agent"):
             turn_id = message.get("client_message_id") or message.get("id")
             if not safe_id(turn_id):
@@ -110,11 +116,50 @@ def session_turns(path, project, session, issues):
                 "reply": "",
             }
             turns.append(turn)
-        elif turn and role == "assistant" and origin != "system":
+        elif role == "assistant" and origin != "system":
             summary = excerpt(message.get("content"), 220)
-            if summary:
+            if summary and turn:
                 turn["reply"] = summary
-    return sorted(turns, key=lambda item: item["at"])
+            replies.append({"at": at, "text": summary, "tools": [b for b in blocks if b.get("type") == "tool_use"]})
+    return sorted(turns, key=lambda item: item["at"]), replies, results
+
+
+def evidence(end, item, transcript):
+    replies, results = transcript
+    finish = timestamp(end.get("at"))
+    raw_ids = end.get("audit_tool_ids")
+    ids = [i for i in raw_ids if safe_id(i)] if isinstance(raw_ids, list) else []
+    reply = next((r for r in replies if not r.get("used") and any(t.get("id") in ids for t in r["tools"])), None) if ids else None
+    source = "id" if reply else "none"
+    if not reply and not ids and finish is not None and end.get("status") == "completed" and end.get("scope") in ("loop", "handoff"):
+        started = timestamp(item.get("start", {}).get("at"))
+        earliest = max(started if started is not None else finish - 120, finish - 120)
+        candidates = [r for r in replies if not r.get("used") and earliest <= r["at"] <= finish + 120]
+        if len(candidates) == 1:
+            reply, source = candidates[0], "time"
+    if reply:
+        reply["used"] = True
+    calls = reply["tools"] if reply else [{"id": i} for i in ids]
+    tools = []
+    for call in [t for t in calls if not ids or t.get("id") in ids][:16]:
+        result = results.get(call.get("id"))
+        args = call.get("input")
+        args = args if isinstance(args, dict) else {}
+        target = next((args[k] for k in ("path", "file_path", "file", "topic", "command", "pattern", "goal") if args.get(k) is not None), None)
+        if isinstance(target, list) and target is args.get("command"):
+            target = " ".join(part for part in target if isinstance(part, str))
+        summary = excerpt((result or {}).get("content"), 180)
+        state = "unknown" if not result or "执行结果未知" in summary else "failed" if result.get("is_error") is True else "ok"
+        tools.append({"name": call.get("name") or "工具调用", "target": excerpt(target, 180), "result": summary, "state": state})
+    failure = ""
+    if end.get("stop_reason") in ("max_tokens", "length"):
+        failure = "触及输出上限，响应被截断"
+    elif end.get("status") == "cancelled":
+        failure = "请求已取消"
+    elif end.get("status") in ("failed", "error"):
+        statuses = [code for code in item["http"].values() if code >= 400]
+        failure = f"HTTP {statuses[-1]}" if statuses else "请求异常结束，日志未记录具体原因"
+    return {"text": reply["text"] if reply else "", "tools": tools, "source": source, "failure": failure}
 
 
 def usage_number(value):
@@ -134,16 +179,15 @@ def collect(home):
     for path in ledgers:
         for record in lines(path, issues):
             event = record.get("event")
-            if event not in ("query_started", "query_finished", "transport_started", "transport_finished"):
+            if event not in ("query_started", "query_finished", "transport_started", "transport_finished", "transport_response"):
                 continue
             project, query, session = (record.get(k) for k in ("project_id", "query_id", "session_id"))
             if record.get("version") != 1 or not all(map(safe_id, (project, query, session))):
                 issues["malformed"] += 1
                 continue
             projects.setdefault(project, "未分配项目" if project == "unassigned" else project)
-            if not record.get("parent_session_id") and (home / "agent-sessions" / f"{session}.jsonl").is_file():
-                sessions.setdefault(session, project)
-            item = queries.setdefault((project, query), {"attempts": set(), "failed": set()})
+            sessions.setdefault(session, project)
+            item = queries.setdefault((project, query), {"attempts": set(), "failed": {}, "http": {}})
             if event == "query_started":
                 item["start"] = record
             elif event == "query_finished":
@@ -151,11 +195,17 @@ def collect(home):
             elif type(record.get("transport_index")) is int:
                 if event == "transport_started":
                     item["attempts"].add(record["transport_index"])
+                elif event == "transport_response":
+                    response = record.get("response")
+                    if isinstance(response, dict) and type(response.get("status")) is int:
+                        item["http"][record["transport_index"]] = response["status"]
                 elif record.get("status") != "completed":
-                    item["failed"].add(record["transport_index"])
+                    item["failed"][record["transport_index"]] = record.get("status") or ""
 
+    transcripts = {}
     for session, project in sessions.items():
-        turns = session_turns(home / "agent-sessions" / f"{session}.jsonl", project, session, issues)
+        turns, replies, results = session_turns(home / "agent-sessions" / f"{session}.jsonl", project, session, issues)
+        transcripts[(project, session)] = (replies, results)
         by_session[(project, session)] = ([t["at"] for t in turns], turns)
         for turn in turns:
             turn_index[(project, session, turn["id"])] = turn
@@ -206,6 +256,8 @@ def collect(home):
         usage = end.get("usage")
         usage = usage if isinstance(usage, dict) else {}
         counts = {key: usage_number(usage.get(raw)) for key, raw in USAGE.items()}
+        retries = [{"index": i, "status": status, **({"http": item["http"][i]} if i in item["http"] else {})}
+                   for i, status in item["failed"].items()]
         rows.append({
             "id": query, "project": project, "session": session, "turn": list(exact),
             "inferred": inferred, "at": at, "phase": phase,
@@ -215,6 +267,7 @@ def collect(home):
             "status": end.get("status", "unknown") if end else "running",
             "missing": counts["uncached"] is None or counts["output"] is None,
             "attempts": len(item["attempts"]), "failed": len(item["failed"]),
+            "retries": retries, "evidence": evidence(end, item, transcripts.get((project, session), ([], {}))),
         })
     projects.update({turn["project"]: projects.get(turn["project"], turn["project"]) for turn in turn_index.values()})
     return {"projects": projects, "rows": rows, "turns": list(turn_index.values()), "issues": dict(issues)}

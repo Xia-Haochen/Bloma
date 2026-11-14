@@ -21,15 +21,17 @@
       <article class="panel metric"><span>总 Token</span><strong id="total">—</strong><small id="calls">模型请求</small></article>
       <article class="panel metric"><span>输入 Token</span><strong id="input">—</strong><small id="input-sub">含缓存读写</small></article>
       <article class="panel metric"><span>输出 Token</span><strong id="output">—</strong><small>供应商上报输出</small></article>
-      <article class="panel metric"><span>API 估算费用</span><strong id="cost">—</strong><small id="cost-sub">美元 · 公开文本费率</small></article>
+      <article class="panel metric"><span>API 估算费用 · 人民币</span><strong id="cost">—</strong><small id="cost-sub">公开文本费率</small></article>
     </section>
     <section class="panel analysis" aria-labelledby="analysis-title">
       <div class="section-heading">
         <div><h2 id="analysis-title">用量分析</h2><p id="chart-caption">按请求开始时间统计已上报的 Token</p></div>
         <fieldset class="switcher" aria-label="图表分类方式">
-          <label><input type="radio" name="view" value="time" checked><span>用量趋势</span></label>
-          <label><input type="radio" name="view" value="phase"><span>工作流阶段</span></label>
+          <label><input type="radio" name="view" value="time"><span>用量趋势</span></label>
+          <label><input type="radio" name="view" value="phase" checked><span>工作流阶段</span></label>
           <label><input type="radio" name="view" value="model"><span>供应商 / 模型</span></label>
+          <label><input type="radio" name="view" value="module"><span>制作细分</span></label>
+          <label><input type="radio" name="view" value="outcome"><span>请求结果</span></label>
         </fieldset>
       </div>
       <fieldset class="legend" id="legend" aria-label="显示的 Token 类别">
@@ -38,12 +40,32 @@
         <label><input type="checkbox" value="write" checked><span class="swatch write"></span>缓存写入</label>
         <label><input type="checkbox" value="output" checked><span class="swatch output"></span>输出</label>
       </fieldset>
+      <div class="legend" id="result-legend" hidden aria-label="请求结果图例">
+        <span>● 有成果</span><span class="failed-text">● 失败</span><span class="partial-text">● 部分完成</span><span class="unknown-text">● 证据不足</span>
+      </div>
+      <label class="module-option" id="module-option" hidden><input id="module-results" type="checkbox" checked> 按结果给制作模块着色</label>
       <div class="chart" id="chart"></div>
+    </section>
+    <section class="panel analysis audit-panel" aria-labelledby="audit-title">
+      <div class="section-heading"><div><h2 id="audit-title">请求审查</h2><p id="audit-summary">查看已上报的失败用量和未计量的传输尝试。</p></div></div>
+      <div class="price-toolbar">
+        <label>本地模型 <select id="audit-model"><option value="">自动选择</option></select></label>
+        <button id="audit-models" type="button" class="button secondary">检测 Ollama</button>
+        <button id="audit-run" type="button" class="button primary">审查当前筛选</button>
+        <button id="audit-stop" type="button" class="button secondary" hidden>处理完本批后停止</button>
+        <span id="audit-status" role="status"></span>
+      </div>
+      <div class="wide-table" id="audit-breakdown"></div>
+      <details id="failure-details"><summary id="failure-title">失败与未计量尝试</summary><div id="failure-list"></div></details>
     </section>
     <section class="panel conversation" aria-labelledby="turns-title">
       <div class="section-heading">
         <div><h2 id="turns-title">逐轮对话</h2><p id="turn-count">查看本地摘要和每次模型调用</p></div>
-        <label class="search"><span class="sr-only">搜索对话</span><input id="search" type="search" placeholder="搜索摘要、模型或供应商"></label>
+        <div class="audit-filters">
+          <label><span class="sr-only">任务模块</span><select id="task-filter"><option value="">所有任务</option></select></label>
+          <label><span class="sr-only">请求结果</span><select id="outcome-filter"><option value="">所有结果</option></select></label>
+          <label class="search"><span class="sr-only">搜索对话</span><input id="search" type="search" placeholder="搜索摘要、任务或模型"></label>
+        </div>
       </div>
       <div class="table-head" aria-hidden="true"><span>对话摘要</span><span>阶段 / 模型</span><span>Token</span><span></span></div>
       <div id="turns"></div>
@@ -54,7 +76,7 @@
     <footer>数据来自 Bloma 本机请求账本 · 时间采用浏览器时区</footer>
   </section>
   <dialog id="prices" aria-labelledby="prices-title">
-    <div class="dialog-head"><div><h2 id="prices-title">模型价格</h2><p>美元 / 100 万文本 Token · 标准费率，适用时显示区间</p></div><button class="button plain" id="prices-close" type="button" aria-label="关闭价格表">关闭</button></div>
+    <div class="dialog-head"><div><h2 id="prices-title">模型价格</h2><p>人民币 / 100 万文本 Token · 标准费率，适用时显示区间</p><p id="exchange-rate"></p></div><button class="button plain" id="prices-close" type="button" aria-label="关闭价格表">关闭</button></div>
     <div class="price-toolbar"><button id="refresh-prices" class="button primary" type="button">从官网刷新</button><label><input id="all-models" type="checkbox">显示全部已知模型</label><span id="price-update" role="status"></span></div>
     <div id="price-sources" class="price-sources"></div>
     <div class="wide-table" id="price-table"></div>

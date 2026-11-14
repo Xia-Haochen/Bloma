@@ -30,6 +30,7 @@ export interface UsageTurn {
   unlinked?: boolean
 }
 export interface UsageRow {
+  id: string
   project: string
   turn: [string, string, string]
   at: number
@@ -44,6 +45,9 @@ export interface UsageRow {
   status: string
   missing: boolean
   failed: number
+  retries: { index: number; status: string; http?: number }[]
+  evidence: AuditEvidence
+  finding?: AuditFinding
 }
 export interface UsageSnapshot {
   projects: Record<string, string>
@@ -52,4 +56,31 @@ export interface UsageSnapshot {
   issues: { malformed: number; unreadable: number }
   phases: typeof USAGE_PHASES
   pricing: MonitorPrices
+  fx: ExchangeRate
 }
+
+export interface ToolAttempt {
+  name: string
+  target: string
+  result: string
+  state: 'ok' | 'failed' | 'unknown'
+}
+
+export interface AuditEvidence {
+  text: string
+  tools: ToolAttempt[]
+  source: 'id' | 'time' | 'none'
+  failure: string
+}
+
+export interface AuditFinding {
+  category: string
+  outcome: 'success' | 'failed' | 'partial' | 'unknown'
+  purpose: string
+  result: string
+  model: string
+  fingerprint: string
+}
+export interface ExchangeRate { rate: number; date: string }
+export interface AuditProgress { model: string; processed: number; remaining: number }
+export interface AuditFilter { project?: string; start?: number; end?: number; model?: string }

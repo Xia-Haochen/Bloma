@@ -3,13 +3,17 @@ import { IPC_CHANNELS } from '../../shared/types'
 import { getPromaHome } from '../../storage/config-paths'
 import { PricingCatalog, officialPricingUrl } from '../../token monitor/pricing'
 import { collectUsage } from '../../token monitor/usage'
+import { addFindings, Exchange, LocalAudit } from '../../token monitor/audit'
 import { safeInvoke } from './shared'
 
 export function registerTokenMonitorIpc(ipc: IpcMain, window: BrowserWindow): void {
   const home = getPromaHome()
   let catalog: PricingCatalog | undefined
-  const prices = () => catalog ??= new PricingCatalog(home, (url, options) =>
-    session.fromPartition('token-monitor-pricing').fetch(url, options))
+  const request = (url: string, options?: RequestInit) => session.fromPartition('token-monitor-pricing').fetch(url, options)
+  const audit = new LocalAudit(home, fetch)
+  const exchange = new Exchange(home, request)
+  let exchangeStarted = false
+  const prices = () => catalog ??= new PricingCatalog(home, request)
   const access = (event: Electron.IpcMainInvokeEvent) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) {
       throw new Error('PERMISSION_DENIED: Token 用量仅供 Bloma 主界面访问')
@@ -18,13 +22,24 @@ export function registerTokenMonitorIpc(ipc: IpcMain, window: BrowserWindow): vo
   ipc.handle(IPC_CHANNELS.TOKEN_MONITOR_READ, event => safeInvoke('token-monitor-read', async () => {
     access(event)
     const data = await collectUsage(home)
+    addFindings(home, data.rows)
     const source = prices()
     source.refreshOnce()
-    return { ...data, pricing: source.snapshot() }
+    if (!exchangeStarted) { exchangeStarted = true; void exchange.refresh() }
+    return { ...data, fx: exchange.snapshot(), pricing: source.snapshot() }
   }))
-  ipc.handle(IPC_CHANNELS.TOKEN_MONITOR_REFRESH, event => safeInvoke('token-monitor-refresh', () => {
+  ipc.handle(IPC_CHANNELS.TOKEN_MONITOR_REFRESH, event => safeInvoke('token-monitor-refresh', async () => {
     access(event)
-    return prices().refresh()
+    const [pricing] = await Promise.all([prices().refresh(), exchange.refresh()])
+    return pricing
+  }))
+  ipc.handle(IPC_CHANNELS.TOKEN_MONITOR_MODELS, event => safeInvoke('token-monitor-models', () => {
+    access(event)
+    return audit.models()
+  }))
+  ipc.handle(IPC_CHANNELS.TOKEN_MONITOR_AUDIT, (event, input: import('../../shared/token-monitor').AuditFilter) => safeInvoke('token-monitor-audit', () => {
+    access(event)
+    return audit.batch(input)
   }))
   ipc.handle(IPC_CHANNELS.TOKEN_MONITOR_OPEN_SOURCE, (event, provider: unknown) => safeInvoke('token-monitor-source', async () => {
     access(event)

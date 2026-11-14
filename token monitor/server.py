@@ -9,16 +9,20 @@ from urllib.parse import urlsplit
 
 from pricing import Catalog
 from usage import PHASES, collect
+from audit import Exchange, LocalAudit, add_findings
 
 WEB = Path(__file__).with_name("web")
 STATIC = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "text/javascript"),
+          "/review.js": ("review.js", "text/javascript"),
           "/standalone.js": ("standalone.js", "text/javascript"), "/styles.css": ("styles.css", "text/css")}
 
 
 class Handler(BaseHTTPRequestHandler):
-    def __init__(self, *args, home, catalog, **kwargs):
+    def __init__(self, *args, home, catalog, audit, exchange, **kwargs):
         self.home = home
         self.catalog = catalog
+        self.audit = audit
+        self.exchange = exchange
         super().__init__(*args, **kwargs)
 
     def valid_host(self):
@@ -42,7 +46,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.json_response({"error": "请使用服务显示的本机地址"}, 403)
         route = urlsplit(self.path).path
         if route == "/api/usage":
-            return self.json_response(collect(self.home) | {"phases": PHASES, "pricing": self.catalog.snapshot()})
+            data = collect(self.home)
+            add_findings(self.home, data["rows"])
+            return self.json_response(data | {"phases": PHASES, "pricing": self.catalog.snapshot(), "fx": self.exchange.current})
+        if route == "/api/audit/models":
+            try:
+                return self.json_response(self.audit.models())
+            except (OSError, ValueError) as error:
+                return self.json_response({"error": str(error)}, 503)
         if route == "/api/pricing":
             return self.json_response(self.catalog.snapshot())
         if route in STATIC:
@@ -58,10 +69,19 @@ class Handler(BaseHTTPRequestHandler):
         origin = f"http://127.0.0.1:{self.server.server_port}"
         if not self.valid_host() or self.headers.get("Origin") != origin:
             return self.json_response({"error": "仅接受本机页面请求"}, 403)
-        if self.path != "/api/pricing/refresh":
-            return self.json_response({"error": "页面不存在"}, 404)
-        self.catalog.refresh()
-        self.json_response(self.catalog.snapshot())
+        if self.path == "/api/pricing/refresh":
+            self.catalog.refresh()
+            self.exchange.refresh()
+            return self.json_response(self.catalog.snapshot())
+        if self.path == "/api/audit/batch":
+            try:
+                size = int(self.headers.get("Content-Length", "0"))
+                if not 0 < size <= 4096:
+                    raise ValueError("无效的审查参数")
+                return self.json_response(self.audit.batch(json.loads(self.rfile.read(size))))
+            except (OSError, ValueError, TypeError, AttributeError) as error:
+                return self.json_response({"error": str(error)}, 400)
+        return self.json_response({"error": "页面不存在"}, 404)
 
 
 def main():
@@ -73,10 +93,13 @@ def main():
     parser.add_argument("--offline", action="store_true", help="启动时使用缓存价格")
     args = parser.parse_args()
     catalog = Catalog(args.home / "token-monitor" / "pricing-cache.json")
-    with ThreadingHTTPServer(("127.0.0.1", args.port), partial(Handler, home=args.home, catalog=catalog)) as server:
+    exchange = Exchange(args.home)
+    with ThreadingHTTPServer(("127.0.0.1", args.port), partial(Handler, home=args.home, catalog=catalog,
+                                                                audit=LocalAudit(args.home), exchange=exchange)) as server:
         print(f"Bloma Token Monitor  http://127.0.0.1:{server.server_port}/", flush=True)
         if not args.offline:
             Thread(target=catalog.refresh, daemon=True).start()
+            Thread(target=exchange.refresh, daemon=True).start()
         try:
             server.serve_forever()
         except KeyboardInterrupt:

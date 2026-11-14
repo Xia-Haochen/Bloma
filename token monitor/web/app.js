@@ -1,3 +1,5 @@
+import { categories, outcomes, review } from './review.js';
+
 const labels = {uncached: "非缓存输入", read: "缓存读取", write: "缓存写入", output: "输出"};
 const keys = Object.keys(labels);
 const statuses = {completed: "已完成", error: "异常", failed: "失败", running: "未记录结束", cancelled: "已取消", unknown: "未知"};
@@ -5,7 +7,7 @@ const pageSize = 15;
 const number = new Intl.NumberFormat("zh-CN");
 const clock = new Intl.DateTimeFormat("zh-CN", {hour: "2-digit", minute: "2-digit", second: "2-digit"});
 const datetime = new Intl.DateTimeFormat("zh-CN", {year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"});
-const dollars = new Intl.NumberFormat("en-US", {style: "currency", currency: "USD", maximumFractionDigits: 8});
+const yuan = new Intl.NumberFormat("zh-CN", {style: "currency", currency: "CNY", minimumFractionDigits: 2, maximumFractionDigits: 3});
 
 function element(tag, className, value) {
   const node = document.createElement(tag);
@@ -38,6 +40,8 @@ export function mountTokenMonitor(root, transport) {
   const $ = id => root.querySelector("#" + id);
   let stopped = false;
   let timer;
+  let auditRunning = false;
+  let cancelAudit = false;
   const state = {data: null, raw: "", query: {project: "", start: -Infinity, end: Infinity}, page: 0};
   const idFor = value => JSON.stringify(value);
   const inRange = item => (!state.query.project || item.project === state.query.project) &&
@@ -75,7 +79,12 @@ export function mountTokenMonitor(root, transport) {
   }
 
   function costLabel(min, max) {
-    return min === max ? dollars.format(min) : dollars.format(min) + "–" + dollars.format(max);
+    const format = usd => {
+      const value = usd * state.data.fx.rate;
+      return value > 0 && value < 0.001 ? "<¥0.001" : yuan.format(value);
+    };
+    const low = format(min), high = format(max);
+    return low === high ? low : low + "–" + high;
   }
 
   function renderMetrics(rows) {
@@ -88,7 +97,7 @@ export function mountTokenMonitor(root, transport) {
     $("output").textContent = count(counts.output);
     $("calls").textContent = count(rows.length) + " 次模型请求";
     $("cost").textContent = priced.length ? costLabel(...amount) : "—";
-    $("cost-sub").textContent = rows.length ? "可估价 " + priced.length + " / " + rows.length + " 次请求" : "美元 · 公开文本费率";
+    $("cost-sub").textContent = rows.length ? "可估价 " + priced.length + " / " + rows.length + " 次请求" : "人民币 · 公开文本费率";
   }
 
   function localDay(at) {
@@ -100,41 +109,107 @@ export function mountTokenMonitor(root, transport) {
     if (!state.data) return;
     const view = root.querySelector("[name=view]:checked").value;
     const selected = [...$("legend").querySelectorAll("input:checked")].map(input => input.value);
+    const byResult = view === "module" && $("module-results").checked;
+    $("module-option").hidden = view !== "module";
+    $("result-legend").hidden = !byResult;
+    const plotted = byResult ? Object.keys(outcomes) : selected;
+    const legend = byResult ? outcomes : labels;
     const grouping = new Map();
     const rows = state.data.rows.filter(inRange);
     if (view === "phase") Object.values(state.data.phases).forEach(label => grouping.set(label, emptyCounts()));
-    for (const row of rows) {
-      const group = view === "phase" ? state.data.phases[row.phase] : view === "model" ? modelLabel(row) : localDay(row.at);
-      const counts = grouping.get(group) ?? emptyCounts();
-      keys.forEach(key => { counts[key] += row.counts[key] ?? 0; });
+    if (view === "outcome") Object.values(outcomes).forEach(label => grouping.set(label, emptyCounts()));
+    const groupingBy = {
+      phase: row => state.data.phases[row.phase], model: modelLabel, time: row => localDay(row.at),
+      module: row => categories[review(row).category], outcome: row => outcomes[review(row).outcome],
+    };
+    for (const row of view === "module" ? rows.filter(row => row.phase === "production") : rows) {
+      const group = groupingBy[view](row);
+      const counts = grouping.get(group) ?? (byResult ? Object.fromEntries(plotted.map(key => [key, 0])) : emptyCounts());
+      if (byResult) counts[review(row).outcome] += sum(row.counts, selected);
+      else keys.forEach(key => { counts[key] += row.counts[key] ?? 0; });
       grouping.set(group, counts);
     }
     const groups = [...grouping];
     if (view === "time") groups.sort(([left], [right]) => left.localeCompare(right));
-    if (view === "model") groups.sort(([, left], [, right]) => sum(right, selected) - sum(left, selected));
-    const max = groups.reduce((top, [, counts]) => Math.max(top, sum(counts, selected)), 1);
+    if (["model", "module"].includes(view)) groups.sort(([, left], [, right]) => sum(right, plotted) - sum(left, plotted));
+    const max = groups.reduce((top, [, counts]) => Math.max(top, sum(counts, plotted)), 1);
     $("chart-caption").textContent = {
       time: "按请求开始日期汇总 · " + groups.length + " 个有记录的日期",
       phase: "按工作流步骤汇总 · 历史记录可按角色推断",
       model: "按供应商与模型汇总 · " + groups.length + " 个模型组合",
+      module: "制作阶段按请求的实际任务细分",
+      outcome: "按每次请求的结果汇总已上报 Token",
     }[view];
     const bars = groups.map(([name, counts]) => {
       const row = element("div", "chart-row");
-      const values = selected.map(key => labels[key] + " " + count(counts[key])).join("，");
+      const values = plotted.map(key => legend[key] + " " + count(counts[key])).join("，");
       const track = element("div", "track");
       track.setAttribute("role", "img");
       track.setAttribute("aria-label", name + "，" + values);
       track.title = values;
-      for (const key of selected) {
+      for (const key of plotted) {
         const section = element("span", key);
         section.style.width = (counts[key] * 100 / max) + "%";
         track.append(section);
       }
-      row.append(element("span", "chart-name", name), track, element("strong", "chart-total", count(sum(counts, selected))));
+      row.append(element("span", "chart-name", name), track, element("strong", "chart-total", count(sum(counts, plotted))));
       return row;
     });
     const message = selected.length ? "所选项目和时间内暂无请求。" : "勾选至少一种 Token 类别以显示图表。";
     $("chart").replaceChildren(...(selected.length && bars.length ? bars : [element("p", "empty", message)]));
+  }
+
+  function requestReview(row) {
+    const data = review(row);
+    const detail = element("details", "request-audit");
+    detail.append(element("summary", "", categories[data.category] + " · " + outcomes[data.outcome]));
+    detail.append(element("p", "", "目的 · " + data.purpose), element("p", "", "结果 · " + data.result));
+    const proof = {id: "工具 ID 匹配", time: "历史时间匹配", none: "无可核对的会话关联"};
+    detail.append(element("p", "", proof[data.evidence.source]));
+    if (row.finding) detail.append(element("p", "", row.finding.model + " 评估 · " + categories[row.finding.category] + " / " + outcomes[row.finding.outcome]));
+    const list = element("ul", "audit-evidence");
+    for (const tool of data.evidence.tools) {
+      const label = {ok: "已返回", failed: "失败", unknown: "结果未知"}[tool.state];
+      list.append(element("li", "", [tool.name, tool.target, label, tool.result].filter(Boolean).join(" · ")));
+    }
+    for (const retry of row.retries ?? []) {
+      list.append(element("li", "", "传输尝试 #" + retry.index + " · " + (retry.http ? "HTTP " + retry.http + " · " : "") + (statuses[retry.status] || retry.status) + " · 无独立用量"));
+    }
+    if (list.childElementCount) detail.append(list);
+    return detail;
+  }
+
+  function renderAudit(rows) {
+    const records = rows.map(row => ({row, ...review(row)}));
+    const failures = records.filter(item => item.outcome === "failed" || item.outcome === "partial" || item.row.failed);
+    const failed = failures.filter(item => item.outcome === "failed").map(item => item.row);
+    const partial = failures.filter(item => item.outcome === "partial").map(item => item.row);
+    const retries = rows.reduce((total, row) => total + row.failed, 0);
+    const assessed = rows.filter(row => row.finding).length;
+    $("audit-summary").textContent = "失败 " + count(sum(totalCounts(failed))) + " Token · 部分完成 " + count(sum(totalCounts(partial))) +
+      " Token · 无独立用量的传输尝试 " + count(retries) + " 次 · 本地模型已审查 " + count(assessed) + " / " + count(rows.length) + " 次请求";
+    const grouped = new Map();
+    for (const item of records) {
+      if (item.row.phase !== "production") continue;
+      const group = grouped.get(item.category) ?? {total: 0, failed: 0, partial: 0, unknown: 0};
+      const tokens = sum(item.row.counts);
+      group.total += tokens;
+      if (item.outcome !== "success") group[item.outcome] += tokens;
+      grouped.set(item.category, group);
+    }
+    $("audit-breakdown").replaceChildren(...(grouped.size ? [table(["制作模块", "总 Token", "失败", "部分完成", "证据不足"],
+      [...grouped].sort(([, a], [, b]) => b.total - a.total).map(([name, total]) => [categories[name], count(total.total), count(total.failed), count(total.partial), count(total.unknown)]))] : []));
+    $("failure-title").textContent = "失败、部分完成与未计量传输 · " + count(failures.length) + " 条请求";
+    const open = new Set([...$("failure-list").querySelectorAll("details[open]")].map(item => item.dataset.request));
+    $("failure-list").replaceChildren(...failures.map(({row}) => {
+      const item = requestReview(row);
+      item.dataset.request = idFor([row.project, row.id]);
+      item.open = open.has(item.dataset.request);
+      item.querySelector("summary").append(" · " + dateLabel(row.at) + " · " + (row.missing ? "已知 " : "") + count(sum(row.counts)) + " Token");
+      const cost = pricePair(row);
+      if (cost) item.querySelector("summary").append(" · " + costLabel(...cost));
+      return item;
+    }));
   }
 
   function turnView(turn, rows, openIds) {
@@ -160,19 +235,25 @@ export function mountTokenMonitor(root, transport) {
     body.append(element("p", "", "回复摘要 · " + (turn.reply || "暂无可提取的回复")));
     if (rows.length) {
       const counts = totalCounts(rows);
+      const purposes = [...new Set(rows.map(row => categories[review(row).category]))];
+      body.append(element("p", "", "本轮任务 · " + purposes.join("、")));
+      const results = Object.keys(outcomes).map(outcome => [outcomes[outcome], rows.filter(row => review(row).outcome === outcome).length]);
+      body.append(element("p", "", "本轮结果 · " + results.filter(([, total]) => total).map(([label, total]) => label + " " + total + " 次").join(" · ")));
       if (rows.some(row => row.phase_inferred)) body.append(element("p", "", "部分历史请求的阶段按运行角色推断。"));
       body.append(element("p", "", keys.map(key => labels[key] + " " + count(counts[key])).join(" · ")));
       const wrapper = element("div", "wide-table");
-      wrapper.append(table(["请求开始", "阶段", "供应商 / 模型", ...Object.values(labels), "估算 USD", "状态"],
+      const showRequests = () => wrapper.replaceChildren(table(["请求开始", "任务与结果", "阶段", "供应商 / 模型", ...Object.values(labels), "估算人民币", "传输状态"],
         rows.slice().sort((a, b) => a.at - b.at).map(row => {
           const cost = pricePair(row);
           const status = (statuses[row.status] ?? row.status) + (row.missing ? " · 缺用量" : "") +
             (row.failed ? " · " + row.failed + " 次未成功传输" : "");
           const model = element("span", "", modelLabel(row));
           model.title = [row.host, row.channel].filter(Boolean).join(" · ");
-          return [dateLabel(row.at), state.data.phases[row.phase] + (row.phase_inferred ? "（推断）" : ""), model,
+          return [dateLabel(row.at), requestReview(row), state.data.phases[row.phase] + (row.phase_inferred ? "（历史推断）" : ""), model,
             ...keys.map(key => count(row.counts[key])), cost ? costLabel(...cost) : "—", status];
         })));
+      if (details.open) showRequests();
+      else details.addEventListener("toggle", () => { if (details.open && !wrapper.childElementCount) showRequests(); });
       body.append(wrapper);
     } else {
       body.append(element("p", "", "当前筛选范围内没有关联的请求用量。"));
@@ -183,7 +264,10 @@ export function mountTokenMonitor(root, transport) {
 
   function renderTurns(rows) {
     const byTurn = new Map();
+    const taskFilter = $("task-filter").value, outcomeFilter = $("outcome-filter").value;
     for (const row of rows) {
+      const audit = review(row);
+      if (taskFilter && audit.category !== taskFilter || outcomeFilter && audit.outcome !== outcomeFilter) continue;
       const id = idFor(row.turn);
       if (!byTurn.has(id)) byTurn.set(id, []);
       byTurn.get(id).push(row);
@@ -191,8 +275,11 @@ export function mountTokenMonitor(root, transport) {
     const query = $("search").value.trim().toLowerCase();
     const turns = state.data.turns.filter(turn => {
       const calls = byTurn.get(idFor([turn.project, turn.session, turn.id])) ?? [];
-      return (calls.length || inRange(turn)) &&
-        [turn.request, turn.reply, state.data.projects[turn.project], ...calls.map(modelLabel)].some(value => value.toLowerCase().includes(query));
+      return (calls.length || !taskFilter && !outcomeFilter && inRange(turn)) &&
+        [turn.request, turn.reply, state.data.projects[turn.project], ...calls.flatMap(row => {
+          const audit = review(row);
+          return [modelLabel(row), audit.purpose, audit.result, categories[audit.category]];
+        })].some(value => value.toLowerCase().includes(query));
     }).sort((a, b) => b.at - a.at);
     const pages = Math.ceil(turns.length / pageSize);
     state.page = Math.min(state.page, Math.max(0, pages - 1));
@@ -208,6 +295,7 @@ export function mountTokenMonitor(root, transport) {
   }
 
   function renderPrices(rows) {
+    $("exchange-rate").textContent = "参考汇率 · 1 USD = " + state.data.fx.rate.toFixed(3) + " CNY · " + state.data.fx.date;
     const catalog = state.data.pricing;
     $("price-sources").replaceChildren(...Object.entries(catalog).map(([provider, entry]) => {
       const link = element("button", "source-button", provider + " · " + (entry.state === "live" ? "官网已同步" : "缓存"));
@@ -235,7 +323,7 @@ export function mountTokenMonitor(root, transport) {
       return [modelLabel(row), ...keys.map(key => {
         const low = rate[key];
         const high = rate.peak?.[key];
-        return low == null ? "—" : high != null && high !== low ? low + "–" + high : String(low);
+        return low == null ? "—" : costLabel(low, high ?? low);
       }), (live ? "官网" : "缓存") + " · " + updated.slice(0, 10)];
     });
     $("price-table").replaceChildren(models.size ?
@@ -256,6 +344,7 @@ export function mountTokenMonitor(root, transport) {
     $("notice").textContent = notices.join(" ");
     renderMetrics(rows);
     renderChart();
+    renderAudit(rows);
     renderTurns(rows);
     if ($("prices").open) renderPrices(rows);
   }
@@ -310,8 +399,12 @@ export function mountTokenMonitor(root, transport) {
     $("filters").requestSubmit();
   });
   $("legend").addEventListener("change", renderChart);
+  $("module-results").addEventListener("change", renderChart);
   root.querySelector(".switcher").addEventListener("change", renderChart);
-  $("search").addEventListener("input", () => {
+  for (const [id, options] of [["task-filter", categories], ["outcome-filter", outcomes]]) {
+    $(id).append(...Object.entries(options).map(([value, label]) => new Option(label, value)));
+  }
+  for (const id of ["search", "task-filter", "outcome-filter"]) $(id).addEventListener(id === "search" ? "input" : "change", () => {
     state.page = 0;
     if (state.data) renderTurns(state.data.rows.filter(inRange));
   });
@@ -330,6 +423,45 @@ export function mountTokenMonitor(root, transport) {
   });
   $("prices-close").addEventListener("click", () => $("prices").close());
   $("all-models").addEventListener("change", refreshPriceView);
+  $("audit-models").addEventListener("click", async () => {
+    const button = $("audit-models");
+    button.disabled = true;
+    try {
+      const models = await transport.auditModels();
+      $("audit-model").replaceChildren(new Option("自动选择", ""), ...models.map(model => new Option(model, model)));
+      $("audit-status").textContent = models.length ? "检测到 " + models.length + " 个本地模型" : "Ollama 未安装本地模型";
+    } catch { $("audit-status").textContent = "无法连接 Ollama，请启动本机服务（127.0.0.1:11434）"; }
+    finally { button.disabled = false; }
+  });
+  $("audit-stop").addEventListener("click", () => { cancelAudit = true; });
+  $("audit-run").addEventListener("click", async () => {
+    if (auditRunning || !state.data) return;
+    auditRunning = true;
+    cancelAudit = false;
+    $("audit-run").disabled = true;
+    $("audit-stop").hidden = false;
+    const {project, start, end} = state.query;
+    const filter = {project, model: $("audit-model").value,
+      ...(Number.isFinite(start) ? {start} : {}), ...(Number.isFinite(end) ? {end} : {})};
+    let total = 0;
+    try {
+      let remaining;
+      do {
+        $("audit-status").textContent = (filter.model || "本地模型") + "审查中 · 本次已处理 " + count(total) + " 条";
+        const batch = await transport.auditBatch(filter);
+        filter.model = batch.model;
+        total += batch.processed;
+        remaining = batch.remaining;
+      } while (remaining && !stopped && !cancelAudit);
+      $("audit-status").textContent = filter.model + " · 本次处理 " + count(total) + " 条" + (remaining ? " · 待审查 " + count(remaining) + " 条" : " · 当前筛选已审查");
+    } catch (error) {
+      $("audit-status").textContent = "本地审查暂停 · " + error.message;
+    } finally {
+      auditRunning = false;
+      $("audit-run").disabled = false;
+      $("audit-stop").hidden = true;
+    }
+  });
   $("refresh-prices").addEventListener("click", async () => {
     const button = $("refresh-prices");
     button.disabled = true;
