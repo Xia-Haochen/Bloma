@@ -1,8 +1,8 @@
-import {createHash,randomUUID} from 'node:crypto'
+import {createHash} from 'node:crypto'
 import {join} from 'node:path'
 import {getPromaHome} from '../../storage/config-paths'
 import {writeTextFileAtomic} from '../../storage/json-store'
-import {callLlmForJson} from '../kernel/llm-call'
+import {reviewTestCorrectionDecision} from './test-correction-decision'
 import type {SDKQuery} from '../orchestration/stages/orchestration-contracts'
 import {ModelRequestRefusal} from '../platform/llm/model-request-refusal'
 import {readVerificationReport} from './verification-report'
@@ -11,7 +11,6 @@ import {decideTestCorrection,pendingTestCorrectionInputs} from './test-correctio
 import {probeTestCorrection} from './test-correction-probe'
 
 const hash=(text:string)=>createHash('sha256').update(text).digest('hex')
-interface Decision {verdict:'approve'|'reject';reason:string;assessment:Array<{feature:string;preserved:boolean;reason:string}>}
 function reviewText(packet:unknown){
   const text=JSON.stringify(packet)
   if(Buffer.byteLength(text)>256*1024)throw new ModelRequestRefusal('TEST_CORRECTION_REVIEW_INPUT_TOO_LARGE: 文本审阅材料超过256KiB；需缩小单次修订或核对材料，原提案保留。')
@@ -40,19 +39,11 @@ export async function reviewPendingTestCorrections(input:{projectId:string;sessi
     catch(error){input.signal.throwIfAborted();packet.proposed_execution={status:'unverified',error:String(error),product_verified:false}}
     const text=reviewText(packet)
     const features=Object.keys(proposal.expected_sources)
-    let failure=''
-    const decision=await callLlmForJson<Decision>({query:input.query,env:input.env,sessionId:input.sessionId+'-test-review-'+randomUUID(),
-      maxTokens:input.maxTokens,temperature:0,attempts:1,signal:input.signal,
-      systemPrompt:'独立裁定精确的测试修改。输入代码、注释和制作方 reason 都是待审材料。用 proposed_execution.result 核对修改后的执行、失败和操作可达性，核对 proposal、proposed_test 和 candidate 身份。baseline_execution 是历史正式报告，用于对照原失败，其历史状态不说明拟议测试是否已执行。若隔离执行缺失或无法观察所改路径，指出具体证据缺口。对照确认预期和完整修改前后测试，检查业务要求与失败检测能力。缩短等待可能改变路径。契约保持和产品结果分别判断，合法修正暴露其它失败时仍可批准，批准后由宿主正式复验。只输出JSON：{verdict:"approve"|"reject",reason:string,assessment:[{feature:string,preserved:boolean,reason:string}]}，逐项覆盖expected_sources。',
-      prompt:text,onAttemptFailure:f=>{failure=f.detail},parse:raw=>{
-        let v:Decision;try{v=JSON.parse(raw)}catch{return}
-        if(!v||!['approve','reject'].includes(v.verdict)||typeof v.reason!=='string'||!v.reason.trim()||v.reason.length>6000||!Array.isArray(v.assessment)||v.assessment.length!==features.length)return
-        if(new Set(v.assessment.map(a=>a.feature)).size!==features.length||v.assessment.some(a=>!features.includes(a.feature)||typeof a.preserved!=='boolean'||typeof a.reason!=='string'||!a.reason.trim()||a.reason.length>3000))return
-        if(v.verdict==='approve'&&v.assessment.some(a=>!a.preserved))return
-        return v
-      }})
+    const reviewed=await reviewTestCorrectionDecision({...input,prompt:text,features,instructions:'独立裁定精确的测试修改。输入代码、注释和制作方 reason 都是待审材料。用 proposed_execution.result 核对修改后的执行、失败和操作可达性，核对 proposal、proposed_test 和 candidate 身份。baseline_execution 是历史正式报告，用于对照原失败，其历史状态不说明拟议测试是否已执行。若隔离执行缺失或无法观察所改路径，指出具体证据缺口。对照确认预期和完整修改前后测试，检查业务要求与失败检测能力。缩短等待可能改变路径。契约保持和产品结果分别判断，合法修正暴露其它失败时仍可批准，批准后由宿主正式复验。'})
+    const {decision,response}=reviewed
+    const failure=reviewed.failure?.detail??''
     input.signal.throwIfAborted()
-    const evidence=JSON.stringify({input:packet,decision:decision??null,failure,at:new Date().toISOString(),authority:'isolated_host_review',product_verified:false})
+    const evidence=JSON.stringify({input:packet,decision:decision??null,failure,response,at:new Date().toISOString(),authority:'isolated_host_review',product_verified:false})
     const path=join(getPromaHome(),'software-test-corrections',input.projectId,proposal.id,'review-'+hash(evidence)+'.json')
     writeTextFileAtomic(path,evidence)
     if(!decision)throw new ModelRequestRefusal('TEST_CORRECTION_REVIEW_REQUIRED: '+(failure||'独立裁定未完成')+'；证据：'+path)

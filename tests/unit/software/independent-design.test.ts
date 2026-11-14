@@ -51,6 +51,7 @@ it.each([true,false])('recovers the recorded voice disputes only after independe
   saveQualityLedger(project.project_id,ledger)
   expect(currentIndependentSemantics(project.project_id,original).ready).toBe(false)
   const revised=structuredClone(original)
+  for(const item of revised.cases)item.basis={expected_source:item.basis!.expected_source,requirement_hash:item.basis!.requirement_hash}
   for(const item of revised.cases.filter(row=>['F-004','F-005'].includes(row.feature))){
     item.steps[0]={kind:'speech_input',control:'音频文件输入'}
     if(item.feature==='F-005') {
@@ -68,7 +69,7 @@ it.each([true,false])('recovers the recorded voice disputes only after independe
       reviews++
       expect(packet.findings.filter((row:any)=>row.claim)).toHaveLength(2)
       expect(packet.findings.filter((row:any)=>row.claim).every((row:any)=>row.checks.some((check:any)=>check.outcome==='failed'))).toBe(true)
-      yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify({approve,decisions:packet.cases_to_assess.map((case_id:string)=>({case_id,action:'correct',reason:'原用例缺少音频输入或比较了不同业务量，修订保留原需求。'}))})}]}}
+      yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify({verdict:approve?'approve':'reject',reason:'核对原要求与实际失败证据',assessment:Object.keys(packet.expected_sources).map(feature=>({feature,preserved:approve,reason:'原用例缺少音频输入或比较了不同业务量，修订保留原需求。'}))})}]}}
     }else{
       proposals++
       expect(packet.previous_design_feedback.original_contract).toEqual(original)
@@ -104,7 +105,7 @@ it('independently rejects an unsupported challenge and reopens a later distinct 
   await challengeIndependentCase(project.project_id,{case_id:'save',reason:'不希望检查保存结果',evidence:'只有制作方主张'})
   const query=sharedInput(prompt=>{
     const packet=JSON.parse(prompt)
-    return packet.cases_to_assess ? JSON.stringify({approve:true,decisions:[{case_id:'save',action:'retain',reason:'确认要求明确要求保存结果，原断言有效。'}]}) : JSON.stringify(contract)
+    return packet.cases_to_assess ? JSON.stringify({verdict:'approve',reason:'原案例有效，保留原断言',assessment:[{feature:'F-001',preserved:true,reason:'确认要求明确要求保存结果，原断言有效。'}]}) : JSON.stringify(contract)
   })
   const result=await prepareIndependentDesign({...query,redesign:true})
   expect(result.status,result.reason).toBe('frozen')

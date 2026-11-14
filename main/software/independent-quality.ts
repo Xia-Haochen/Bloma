@@ -18,6 +18,7 @@ import { join } from 'node:path'
 import { getPromaHome } from '../../storage/config-paths'
 import type { IndependentDesignRecord } from './independent-design'
 import { settleIndependentCorrection } from './independent-correction'
+import { isDeepStrictEqual } from 'node:util'
 
 export interface IndependentClarification {
   questions: string[]
@@ -152,7 +153,7 @@ export async function recordIndependentFindings(projectId: string, candidate: So
       const file=join(getPromaHome(),'software-independent-design',projectId,f.independent.design_digest+'.json')
       if(!existsSync(file))return false
       const old=JSON.parse(readFileSync(file,'utf8')) as IndependentDesignRecord
-      return old.digest===qualityHash(old.contract)&&JSON.stringify(old.contract?.cases.find(row=>row.id===observed.id))===JSON.stringify(currentCase)
+      return old.digest===qualityHash(old.contract)&&isDeepStrictEqual(old.contract?.cases.find(row=>row.id===observed.id),currentCase)
     })
     if (!finding && observed.status === 'passed') continue
     if (!finding) {
