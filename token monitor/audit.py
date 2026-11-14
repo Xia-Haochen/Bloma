@@ -31,6 +31,20 @@ def needs_audit(row):
     return not classified or not resolved
 
 
+def has_failure(row):
+    evidence = row["evidence"]
+    return bool(evidence["failure"] or any(t["state"] == "failed" for t in evidence["tools"]) or row.get("retries"))
+
+
+def readable_summary(value):
+    text = value.strip() if isinstance(value, str) else ""
+    return "" if re.search(r'[�\r\n]|^[\[{`]|"(?:exit_code|stderr|stdout)"\s*:', text) else text[:180]
+
+
+def needs_summary(row):
+    return has_failure(row) and not readable_summary(row.get("finding", {}).get("failureSummary"))
+
+
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None
@@ -120,8 +134,10 @@ class LocalAudit:
             data = collect(self.home)
             add_findings(self.home, data["rows"])
             start, end, project = filters.get("start"), filters.get("end"), filters.get("project")
-            pending = [r for r in data["rows"] if r["status"] != "running" and not r.get("finding")
-                       and (filters.get("mode") == "all" or needs_audit(r))
+            def eligible(row):
+                return needs_summary(row) or (not row.get("finding") and (filters.get("mode") == "all" or needs_audit(row)))
+
+            pending = [r for r in data["rows"] if r["status"] != "running" and eligible(r)
                        and (not project or r["project"] == project) and (start is None or r["at"] >= start)
                        and (end is None or r["at"] < end)]
             with self.lock:
@@ -138,15 +154,15 @@ class LocalAudit:
                 while pending and self.status()["state"] == "running":
                     selected, pending = pending[:8], pending[8:]
                     add_findings(self.home, selected)
-                    eligible = [row for row in selected if not row.get("finding")]
+                    candidates = [row for row in selected if eligible(row)]
                     with self.lock:
-                        self.job["remaining"] -= len(selected) - len(eligible)
-                    if not eligible:
+                        self.job["remaining"] -= len(selected) - len(candidates)
+                    if not candidates:
                         continue
-                    deferred = self.classify(eligible, model, subjects)
+                    deferred = self.classify(candidates, model, subjects)
                     with self.lock:
-                        self.job["processed"] += len(eligible) - len(deferred)
-                        self.job["remaining"] -= len(eligible) - len(deferred)
+                        self.job["processed"] += len(candidates) - len(deferred)
+                        self.job["remaining"] -= len(candidates) - len(deferred)
                     pending.extend(deferred)
             with self.lock:
                 self.job["state"] = "stopped" if self.job["remaining"] else "completed"
@@ -158,9 +174,14 @@ class LocalAudit:
         requests = []
         for i, row in enumerate(selected, 1):
             ev = row["evidence"]
+            tools = sorted(ev["tools"], key=lambda tool: tool["state"] != "failed")[:4]
             requests.append({"id": i, "phase": row["phase"], "subject": subjects.get(tuple(row["turn"])),
+                             "explainFailure": has_failure(row),
                              "observed": {"text": ev["text"], "failure": ev["failure"],
-                                          "tools": [t | {"result": t["result"][:125]} for t in ev["tools"][:4]]}})
+                                          "retries": row.get("retries", [])[:4],
+                                          "tools": [{"name": t["name"], "target": t["target"], "state": t["state"],
+                                                     "result": (t.get("diagnostic") or t["result"])[:480 if j == 0 else 120]}
+                                                    for j, t in enumerate(tools)]}})
         body = {"model": model, "stream": False, "think": False, "format": "json",
                 "options": {"temperature": 0, "num_ctx": 8192, "num_predict": 2200},
                 "messages": [{"role": "system", "content": CONFIG["system"]},
@@ -173,17 +194,22 @@ class LocalAudit:
         deferred = []
         for i, row in enumerate(selected, 1):
             item = by_id.get(str(i), {})
-            if item.get("category") not in CONFIG["categories"] or item.get("outcome") not in CONFIG["outcomes"]:
+            add_findings(self.home, [row])
+            existing = row.get("finding")
+            summary = readable_summary((existing or {}).get("failureSummary")) or readable_summary(item.get("failureSummary"))
+            if needs_summary(row) and not summary:
                 deferred.append(row)
                 continue
-            add_findings(self.home, [row])
-            if row.get("finding"):
+            if not existing and (item.get("category") not in CONFIG["categories"] or item.get("outcome") not in CONFIG["outcomes"]):
+                deferred.append(row)
                 continue
-            write_json(cache_path(self.home, row), {
-                "category": item["category"], "outcome": item["outcome"], "model": model,
-                "purpose": str(item.get("purpose") or "")[:180], "result": str(item.get("result") or "")[:180],
-                "fingerprint": fingerprint(row),
-            })
+            if not existing or needs_summary(row):
+                finding = existing or {"category": item["category"], "outcome": item["outcome"], "model": model,
+                    "purpose": str(item.get("purpose") or "")[:180], "result": str(item.get("result") or "")[:180],
+                    "fingerprint": fingerprint(row)}
+                if summary and has_failure(row):
+                    finding = finding | {"failureSummary": summary, "summaryModel": model}
+                write_json(cache_path(self.home, row), finding)
         if len(deferred) == len(selected):
             raise ValueError("本地模型没有返回有效分类，可重试或切换模型")
         return deferred

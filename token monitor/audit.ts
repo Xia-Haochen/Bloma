@@ -4,7 +4,7 @@ import { readJsonFile, writeJsonFile } from '../storage/json-store'
 import { collectUsage } from './usage'
 import type { AuditFilter, AuditFinding, AuditProgress, ExchangeRate, UsageRow, UsageSnapshot } from '../shared/token-monitor'
 import config from './audit-config.json'
-import { needsAudit } from './web/review.js'
+import { failureSummary, hasFailure, needsAudit, readableSummary } from './web/review.js'
 
 type Transport = (url: string, options?: RequestInit) => Promise<Response>
 const ollama = 'http://127.0.0.1:11434'
@@ -15,6 +15,7 @@ const fingerprint = (row: UsageRow) => createHash('sha256').update(JSON.stringif
 ])).digest('hex')
 const outcome = (value: unknown): value is AuditFinding['outcome'] => typeof value === 'string' && Object.hasOwn(config.outcomes, value)
 const category = (value: unknown): value is string => typeof value === 'string' && Object.hasOwn(config.categories, value)
+const needsSummary = (row: UsageRow) => hasFailure(row) && !failureSummary(row)
 
 export function addFindings(home: string, rows: UsageRow[]): void {
   for (const row of rows) {
@@ -61,8 +62,8 @@ export class LocalAudit {
     try {
       const { rows, turns } = await collectUsage(this.home)
       addFindings(this.home, rows)
-      const pending = rows.filter(row => row.status !== 'running' && !row.finding
-        && (filter.mode === 'all' || needsAudit(row))
+      const eligible = (row: UsageRow) => needsSummary(row) || (!row.finding && (filter.mode === 'all' || needsAudit(row)))
+      const pending = rows.filter(row => row.status !== 'running' && eligible(row)
         && (!filter.project || filter.project === row.project)
         && (filter.start === undefined || row.at >= filter.start) && (filter.end === undefined || row.at < filter.end))
       job.remaining = pending.length
@@ -76,12 +77,12 @@ export class LocalAudit {
           const selected = pending.splice(0, 8)
           // The standalone monitor shares this cache and may have written a result.
           addFindings(this.home, selected)
-          const eligible = selected.filter(row => !row.finding)
-          job.remaining -= selected.length - eligible.length
-          if (!eligible.length) continue
-          const deferred = await this.classify(eligible, model, subjects)
-          job.processed += eligible.length - deferred.length
-          job.remaining -= eligible.length - deferred.length
+          const candidates = selected.filter(eligible)
+          job.remaining -= selected.length - candidates.length
+          if (!candidates.length) continue
+          const deferred = await this.classify(candidates, model, subjects)
+          job.processed += candidates.length - deferred.length
+          job.remaining -= candidates.length - deferred.length
           pending.push(...deferred)
         }
       }
@@ -95,8 +96,10 @@ export class LocalAudit {
   private async classify(selected: UsageRow[], model: string, subjects: Map<string, string>): Promise<UsageRow[]> {
     const input = selected.map((row, index) => ({
       id: index + 1, phase: row.phase, subject: subjects.get(JSON.stringify(row.turn)),
-      observed: { text: row.evidence.text, failure: row.evidence.failure,
-        tools: row.evidence.tools.slice(0, 4).map(tool => ({ ...tool, result: tool.result.slice(0, 125) })) },
+      explainFailure: hasFailure(row),
+      observed: { text: row.evidence.text, failure: row.evidence.failure, retries: row.retries?.slice(0, 4),
+        tools: [...row.evidence.tools.filter(tool => tool.state === 'failed'), ...row.evidence.tools.filter(tool => tool.state !== 'failed')]
+          .slice(0, 4).map(({ diagnostic, ...tool }, position) => ({ ...tool, result: (diagnostic || tool.result).slice(0, position === 0 ? 480 : 120) })) },
     }))
     const response = await this.request(ollama + '/api/chat', {
       method: 'POST', redirect: 'error', signal: AbortSignal.timeout(180_000),
@@ -114,11 +117,18 @@ export class LocalAudit {
     const deferred: UsageRow[] = []
     for (const [index, row] of selected.entries()) {
       const item = byId.get(index + 1)
-      if (!item || !category(item.category) || !outcome(item.outcome)) { deferred.push(row); continue }
+      if (!item) { deferred.push(row); continue }
       const trim = (value: unknown) => typeof value === 'string' ? value.slice(0, 180) : ''
       addFindings(this.home, [row])
-      if (!row.finding) writeJsonFile(cachePath(this.home, row), { category: item.category, outcome: item.outcome,
-        purpose: trim(item.purpose), result: trim(item.result), model, fingerprint: fingerprint(row) })
+      const summary = failureSummary(row) || readableSummary(item.failureSummary)
+      if (needsSummary(row) && !summary) { deferred.push(row); continue }
+      const finding = row.finding ?? (category(item.category) && outcome(item.outcome) ? {
+        category: item.category, outcome: item.outcome, purpose: trim(item.purpose), result: trim(item.result), model, fingerprint: fingerprint(row),
+      } : undefined)
+      if (!finding) { deferred.push(row); continue }
+      if (!row.finding || needsSummary(row)) writeJsonFile(cachePath(this.home, row), {
+        ...finding, ...(hasFailure(row) && summary ? { failureSummary: summary, summaryModel: model } : {}),
+      })
     }
     if (deferred.length === selected.length) throw new Error('本地模型没有返回有效分类，可重试或切换模型')
     return deferred

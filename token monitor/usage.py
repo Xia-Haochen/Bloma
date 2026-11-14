@@ -150,7 +150,8 @@ def evidence(end, item, transcript):
             target = " ".join(part for part in target if isinstance(part, str))
         summary = excerpt((result or {}).get("content"), 180)
         state = "unknown" if not result or "执行结果未知" in summary else "failed" if result.get("is_error") is True else "ok"
-        tools.append({"name": call.get("name") or "工具调用", "target": excerpt(target, 180), "result": summary, "state": state})
+        tools.append({"name": call.get("name") or "工具调用", "target": excerpt(target, 180), "result": summary, "state": state,
+                      **({"diagnostic": excerpt(result.get("content"), 560)} if state == "failed" else {})})
     failure = ""
     if end.get("stop_reason") in ("max_tokens", "length"):
         failure = "触及输出上限，响应被截断"

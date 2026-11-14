@@ -63,6 +63,7 @@ export interface ToolAttempt {
   name: string
   target: string
   result: string
+  diagnostic?: string
   state: 'ok' | 'failed' | 'unknown'
 }
 
@@ -80,6 +81,8 @@ export interface AuditFinding {
   result: string
   model: string
   fingerprint: string
+  failureSummary?: string
+  summaryModel?: string
 }
 export interface ExchangeRate { rate: number; date: string }
 export interface AuditProgress {

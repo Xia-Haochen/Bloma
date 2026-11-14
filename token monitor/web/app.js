@@ -1,4 +1,4 @@
-import { categories, outcomes, review } from './review.js';
+import { categories, outcomes, review, hasFailure, failureSummary, observedFailure, readableOutput, readableSummary } from './review.js';
 
 const labels = {uncached: "非缓存输入", read: "缓存读取", write: "缓存写入", output: "输出"};
 const keys = Object.keys(labels);
@@ -164,19 +164,29 @@ export function mountTokenMonitor(root, transport) {
     const data = review(row);
     const detail = element("details", "request-audit");
     detail.append(element("summary", "", categories[data.category] + " · " + outcomes[data.outcome]));
-    detail.append(element("p", "", "目的 · " + data.purpose), element("p", "", "结果 · " + data.result));
+    const failed = hasFailure(row);
+    const summary = failed ? failureSummary(row) : "";
+    detail.append(element("p", "", "目的 · " + (failed ? readableSummary(row.finding?.purpose) || "详见技术详情" : data.purpose)));
+    detail.append(element("p", "", (failed ? "失败原因 · " : "结果 · ") +
+      (failed ? summary || observedFailure(row) : readableOutput(data.result) || "未记录可读的结果")));
+    const technical = element("details", "audit-technical");
+    technical.append(element("summary", "", "技术详情"));
     const proof = {id: "工具 ID 匹配", time: "历史时间匹配", none: "无可核对的会话关联"};
-    detail.append(element("p", "", proof[data.evidence.source]));
-    if (row.finding) detail.append(element("p", "", row.finding.model + " 评估 · " + categories[row.finding.category] + " / " + outcomes[row.finding.outcome]));
+    technical.append(element("p", "", proof[data.evidence.source]));
+    if (row.finding) technical.append(element("p", "", row.finding.model + " 评估 · " + categories[row.finding.category] + " / " + outcomes[row.finding.outcome]));
+    if (summary && row.finding.summaryModel) technical.append(element("p", "", "摘要模型 · " + row.finding.summaryModel));
+    const feedback = readableOutput(data.evidence.text);
+    if (feedback) detail.append(element("p", "", "原回复 · " + feedback));
     const list = element("ul", "audit-evidence");
     for (const tool of data.evidence.tools) {
       const label = {ok: "已返回", failed: "失败", unknown: "结果未知"}[tool.state];
-      list.append(element("li", "", [tool.name, tool.target, label, tool.result].filter(Boolean).join(" · ")));
+      list.append(element("li", "", [tool.name, readableOutput(tool.target), label, readableOutput(tool.diagnostic || tool.result)].filter(Boolean).join(" · ")));
     }
     for (const retry of row.retries ?? []) {
       list.append(element("li", "", "传输尝试 #" + retry.index + " · " + (retry.http ? "HTTP " + retry.http + " · " : "") + (statuses[retry.status] || retry.status) + " · 无独立用量"));
     }
-    if (list.childElementCount) detail.append(list);
+    if (list.childElementCount) technical.append(list);
+    detail.append(technical);
     return detail;
   }
 
@@ -238,7 +248,7 @@ export function mountTokenMonitor(root, transport) {
     summary.append(subject, grouping, element("strong", "number", rows.some(row => !row.missing || sum(row.counts)) ? count(sum(totalCounts(rows))) : "—"));
     const body = element("div", "turn-detail");
     body.append(element("p", "", "用户摘要 · " + turn.request));
-    body.append(element("p", "", "回复摘要 · " + (turn.reply || "暂无可提取的回复")));
+    body.append(element("p", "", "回复摘要 · " + (readableOutput(turn.reply || "") || "暂无可提取的回复")));
     if (rows.length) {
       const counts = totalCounts(rows);
       const purposes = [...new Set(rows.map(row => categories[review(row).category]))];

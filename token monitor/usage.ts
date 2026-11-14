@@ -122,6 +122,7 @@ function evidence(query: Query, transcript?: Transcript): AuditEvidence {
     const command = Array.isArray(args.command) ? args.command.filter(part => typeof part === 'string').join(' ') : args.command
     const target = extract(args.path ?? args.file_path ?? args.file ?? args.topic ?? command ?? args.pattern ?? args.goal, 180)
     return { name: string(tool.name) || '工具调用', target, result: summary,
+      ...(result?.is_error === true ? { diagnostic: extract(result.content, 560) } : {}),
       state: !result || summary.includes('执行结果未知') ? 'unknown' : result.is_error === true ? 'failed' : 'ok' }
   })
   const stop = string(query.end?.stop_reason)

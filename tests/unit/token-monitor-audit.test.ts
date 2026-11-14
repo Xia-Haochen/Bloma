@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -41,20 +41,26 @@ describe('token request audit', () => {
         if (url.endsWith('/api/tags')) return Response.json({ models: [{ name: 'qwen3.5:9b' }, { name: 'qwen3:4b' }, { name: 'qwen3.5:cloud' }] })
         expect(options?.redirect).toBe('error')
         return Response.json({ message: { content: JSON.stringify({ items: [
-          { id: 1, category: 'frontend', outcome: 'failed', purpose: '修复页面', result: '目标片段不存在' },
+          { id: 1, category: 'frontend', outcome: 'failed', purpose: '修复页面', result: '修改失败', failureSummary: '目标片段不存在' },
         ] }) } })
       })
       const audit = new LocalAudit(home, request)
-      audit.start({ project: 'p1' })
+      audit.start({ project: 'p1', start: Date.parse(finished) + 1000 })
       await vi.waitFor(() => expect(audit.status()).toMatchObject({ state: 'completed', processed: 0 }))
       expect(request).not.toHaveBeenCalled()
-      audit.start({ project: 'p1', mode: 'all' })
+      audit.start({ project: 'p1' })
       await vi.waitFor(() => expect(audit.status()).toEqual({ state: 'completed', model: 'qwen3.5:9b', processed: 1, remaining: 0 }))
       addFindings(home, data.rows)
-      expect(data.rows[0].finding).toMatchObject({ category: 'frontend', outcome: 'failed' })
+      expect(data.rows[0].finding).toMatchObject({ category: 'frontend', outcome: 'failed', failureSummary: '目标片段不存在' })
       audit.start({ project: 'p1', model: 'qwen3:4b', mode: 'all' })
       await vi.waitFor(() => expect(audit.status()).toMatchObject({ state: 'completed', processed: 0 }))
       expect(request.mock.calls.filter(([url]) => url.endsWith('/api/chat'))).toHaveLength(1)
+      const cached = join(home, 'token-monitor', 'audit-v1', 'p1', 'q1.json')
+      const { failureSummary: _summary, summaryModel: _summaryModel, ...oldFinding } = JSON.parse(await readFile(cached, 'utf8'))
+      await writeFile(cached, JSON.stringify(oldFinding))
+      audit.start({ project: 'p1', model: 'qwen3:4b' })
+      await vi.waitFor(() => expect(audit.status()).toMatchObject({ state: 'completed', processed: 1 }))
+      expect(JSON.parse(await readFile(cached, 'utf8'))).toEqual({ ...oldFinding, failureSummary: '目标片段不存在', summaryModel: 'qwen3:4b' })
     } finally {
       await rm(home, { recursive: true, force: true })
     }

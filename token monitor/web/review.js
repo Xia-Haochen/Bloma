@@ -47,3 +47,32 @@ export function needsAudit(row) {
   const { category, outcome } = review(row);
   return category === "unknown" || outcome === "unknown";
 }
+
+export function hasFailure(row) {
+  return Boolean(row.evidence.failure || row.evidence.tools.some(tool => tool.state === "failed") || row.retries?.length);
+}
+
+export function readableSummary(value) {
+  if (typeof value !== "string") return "";
+  const text = value.trim();
+  return /[�\r\n]|^\s*[\[{]|^\s*`|"(?:exit_code|stderr|stdout)"\s*:/.test(text) ? "" : text.slice(0, 180);
+}
+
+export function failureSummary(row) {
+  return readableSummary(row.finding?.failureSummary);
+}
+
+export function readableOutput(value) {
+  return value.split(/\r?\n|\\r\\n|\\n/).filter(line => !line.includes("�")).join("\n").trim();
+}
+
+export function observedFailure(row) {
+  const tool = row.evidence.tools.find(tool => tool.state === "failed");
+  const output = tool?.diagnostic || tool?.result || "";
+  const code = /"exit_code"\s*:\s*(-?\d+)/.exec(output)?.[1];
+  const retry = row.retries?.find(item => item.http >= 400);
+  if (row.evidence.failure) return row.evidence.failure + "。";
+  if (code) return `命令执行失败（退出码 ${code}）。${output.includes("�") ? "错误输出有乱码，具体原因无法确认。" : "具体原因可在技术详情中核对。"}`;
+  if (tool) return "工具执行失败。" + (output.includes("�") ? "错误输出有乱码，具体原因无法确认。" : "具体原因可在技术详情中核对。");
+  return retry ? `一次传输尝试失败（HTTP ${retry.http}）。` : "有传输尝试失败，日志未记录具体原因。";
+}
