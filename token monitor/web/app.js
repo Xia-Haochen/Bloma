@@ -183,23 +183,28 @@ export function mountTokenMonitor(root, transport) {
   function renderAudit(rows) {
     const records = rows.map(row => ({row, ...review(row)}));
     const failures = records.filter(item => item.outcome === "failed" || item.outcome === "partial" || item.row.failed);
+    const completed = records.filter(item => item.outcome === "success").map(item => item.row);
     const failed = failures.filter(item => item.outcome === "failed").map(item => item.row);
     const partial = failures.filter(item => item.outcome === "partial").map(item => item.row);
     const retries = rows.reduce((total, row) => total + row.failed, 0);
     const assessed = rows.filter(row => row.finding).length;
-    $("audit-summary").textContent = "失败 " + count(sum(totalCounts(failed))) + " Token · 部分完成 " + count(sum(totalCounts(partial))) +
+    $("audit-summary").textContent = "已完成 " + count(sum(totalCounts(completed))) + " Token · 失败 " + count(sum(totalCounts(failed))) +
+      " Token · 部分完成 " + count(sum(totalCounts(partial))) +
       " Token · 无独立用量的传输尝试 " + count(retries) + " 次 · 本地模型已审查 " + count(assessed) + " / " + count(rows.length) + " 次请求";
     const grouped = new Map();
     for (const item of records) {
       if (item.row.phase !== "production") continue;
-      const group = grouped.get(item.category) ?? {total: 0, failed: 0, partial: 0, unknown: 0};
+      const group = grouped.get(item.category) ?? {total: 0, success: 0, failed: 0, partial: 0, unknown: 0};
       const tokens = sum(item.row.counts);
       group.total += tokens;
-      if (item.outcome !== "success") group[item.outcome] += tokens;
+      group[item.outcome] += tokens;
       grouped.set(item.category, group);
     }
-    $("audit-breakdown").replaceChildren(...(grouped.size ? [table(["制作模块", "总 Token", "失败", "部分完成", "证据不足"],
-      [...grouped].sort(([, a], [, b]) => b.total - a.total).map(([name, total]) => [categories[name], count(total.total), count(total.failed), count(total.partial), count(total.unknown)]))] : []));
+    const resultKeys = ["success", "failed", "partial", "unknown"].filter(key =>
+      key !== "partial" || [...grouped.values()].some(group => group.partial > 0));
+    $("audit-breakdown").replaceChildren(...(grouped.size ? [table(["制作模块", "总 Token", ...resultKeys.map(key => outcomes[key])],
+      [...grouped].sort(([, a], [, b]) => b.total - a.total).map(([name, total]) =>
+        [categories[name], count(total.total), ...resultKeys.map(key => count(total[key]))]))] : []));
     $("failure-title").textContent = "失败、部分完成与未计量传输 · " + count(failures.length) + " 条请求";
     const open = new Set([...$("failure-list").querySelectorAll("details[open]")].map(item => item.dataset.request));
     $("failure-list").replaceChildren(...failures.map(({row}) => {

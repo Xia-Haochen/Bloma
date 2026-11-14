@@ -6,7 +6,7 @@ export const categories = {
   debug: "排查与修复", delivery: "打包与交付", communication: "沟通与总结",
   mixed: "跨模块", unknown: "证据不足",
 };
-export const outcomes = { success: "有成果", failed: "失败", partial: "部分完成", unknown: "证据不足" };
+export const outcomes = config.outcomes;
 const specific = new Set(["design", "frontend", "backend", "debug", "testing", "delivery", "setup"]);
 
 const rules = Object.entries(config.rules).map(([category, [name, target]]) =>

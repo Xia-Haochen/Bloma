@@ -13,7 +13,7 @@
     "unknown": "证据不足"
   },
   "outcomes": {
-    "success": "有成果",
+    "success": "已完成",
     "failed": "失败",
     "partial": "部分完成",
     "unknown": "证据不足"
