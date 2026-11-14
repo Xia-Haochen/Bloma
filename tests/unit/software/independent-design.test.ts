@@ -71,14 +71,22 @@ it.each([true,false])('recovers the recorded voice disputes only after independe
       yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify({approve,decisions:packet.cases_to_assess.map((case_id:string)=>({case_id,action:'correct',reason:'原用例缺少音频输入或比较了不同业务量，修订保留原需求。'}))})}]}}
     }else{
       proposals++
-      expect(packet.previous_design_feedback.contract).toEqual(original)
+      expect(packet.previous_design_feedback.original_contract).toEqual(original)
+      if(proposals===1)expect(packet.previous_design_feedback.contract).toEqual(original)
       expect(packet.previous_design_feedback.cases.map((row:any)=>row.id)).toEqual(expect.arrayContaining(fixture.challenges.map((row:any)=>row.case_id)))
-      yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify(revised)}]}}
+      const attempt=structuredClone(revised)
+      if(approve&&proposals===1){
+        const steps=attempt.cases[4].steps
+        if(steps[2].kind==='expect')steps[2].oracle={kind:'observed',step:0}
+        if(steps[5].kind==='expect')steps[5].oracle={kind:'observed',step:2}
+      }
+      if(proposals===2)expect(packet.previous_design_feedback.review_issue).toContain(approve?'INDEPENDENT_CORRECTION_INVALID':'INDEPENDENT_CORRECTION_REVIEW_REQUIRED')
+      yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify(attempt)}]}}
     }
   }
   await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'recover-real-record',content:'继续',maxTokens:8192,signal:controller.signal},
     query,options.primaryEnv,{publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
-  expect(proposals).toBe(1);expect(reviews).toBe(1);expect(maker).toBe(approve?1:0)
+  expect(proposals).toBe(2);expect(reviews).toBe(approve?1:2);expect(maker).toBe(approve?1:0)
   const current=readIndependentDesign(project.project_id)!
   expect(current.contract).toEqual(approve?revised:original)
   expect(JSON.parse(readFileSync(join(home,'software-independent-design',project.project_id,frozen.digest+'.json'),'utf8')).contract).toEqual(original)

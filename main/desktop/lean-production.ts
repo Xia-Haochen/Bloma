@@ -268,8 +268,12 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     if (attemptedIndependentRepairs.has(key)) return false
     attemptedIndependentRepairs.add(key)
     emit('message_delta',{text:'验收用例出现争议，正在依据原要求和执行记录独立核对、更正，再继续复验。'})
-    const repaired = await prepareIndependentDesign({projectId:input.projectId,sessionId:input.sessionId,
+    let repaired = await prepareIndependentDesign({projectId:input.projectId,sessionId:input.sessionId,
       query:input.query,primaryEnv:input.env,maxTokens:input.maxTokens,signal,redesign:true})
+    if(/^Error: INDEPENDENT_CORRECTION_(INVALID|REVIEW_REQUIRED):/.test(repaired.reason??'')) {
+      repaired=await prepareIndependentDesign({projectId:input.projectId,sessionId:input.sessionId,
+        query:input.query,primaryEnv:input.env,maxTokens:input.maxTokens,signal,redesign:true,previousFailure:repaired})
+    }
     if(repaired.status!=='frozen'||!repaired.contract) {
       emit('message_delta',{text:repaired.reason??'独立用例更正尚未完成。'})
       return false
@@ -317,7 +321,8 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     // within this request, charged to the existing budget, and stop on no progress.
     for (let repair = 0; shared && repair < 2; repair++) {
       const formatFailure = /INDEPENDENT_(?:JSON_INVALID|CASES_(?:INVALID|TOO_LARGE)|CASE_INVALID|BASIS_INVALID|RELATED_INVALID|COVERAGE(?:_NOTES)?_INVALID|STEP_INVALID|ORACLE_INVALID)/.test(design.reason ?? '')
-      const semantics = design.contract && currentIndependentSemantics(input.projectId, design.contract)
+      const semantics = design.contract && (design.status==='frozen'||/^Error: INDEPENDENT_CORRECTION_(INVALID|REVIEW_REQUIRED):/.test(design.reason??''))
+        && currentIndependentSemantics(input.projectId, design.contract)
       const designGap = semantics && !semantics.ready
         && !independentClarification(input.projectId, design.contract!, semantics).questions.length
       if (!formatFailure && !designGap) break

@@ -64,6 +64,7 @@ export async function prepareIndependentDesign(input:{projectId:string;sessionId
   let timer:ReturnType<typeof setTimeout>|undefined
   let attempted=false,authorizationHash:string|undefined
   let redesigning = false
+  let proposed:IndependentCases|undefined
   try{
     input.signal.throwIfAborted()
     const policy=readIndependentPolicy(input.projectId)
@@ -128,7 +129,8 @@ export async function prepareIndependentDesign(input:{projectId:string;sessionId
       confirmed_design:ux?.html_path?readFileSync(join(project.root_path,ux.html_path),'utf8'):null,
       ...(previousFormatIssue ? { previous_format_issue: previousFormatIssue } : {}),
       ...(repair ? { previous_design_feedback: {
-        contract: current!.contract,
+        contract: input.previousFailure?.contract ?? current!.contract,
+        original_contract: current!.contract,
         ...(input.previousFailure?.reason ? {review_issue:input.previousFailure.reason.slice(0,7000)} : {}),
         cases: repair.cases.filter(row => row.status === 'disputed').slice(0, 12).map(({ id, feature, issues }) => ({ id, feature, issues })),
         coverage: repair.coverage.filter(row => ['unresolved','missing'].includes(row.status)).slice(0, 24).map(({ feature, category, status }) => ({ feature, category, status })),
@@ -191,7 +193,9 @@ export async function prepareIndependentDesign(input:{projectId:string;sessionId
       ||(findProject(input.projectId).lean_operation_id??'initial')!==operation||sha(readIndependentPolicy(input.projectId))!==sha(policy))throw Error('INDEPENDENT_SCOPE_CHANGED')
     let correction:IndependentCorrection|undefined
     if (repair && findings.some(row => row.challenge || row.checks.length)) {
-      if (!assessIndependentCases(brief,result).ready) throw Error('INDEPENDENT_CORRECTION_INVALID: 修改后案例仍缺少业务依据')
+      proposed=result
+      const revised=assessIndependentCases(brief,result)
+      if (!revised.ready) throw Error('INDEPENDENT_CORRECTION_INVALID: '+JSON.stringify({cases:revised.cases.filter(row=>row.status==='disputed'),coverage:revised.coverage.filter(row=>['missing','unresolved'].includes(row.status))}))
       correction = await reviewIndependentCorrection({projectId:input.projectId,sessionId:input.sessionId,
         before:current!.contract!,after:result,from:current!.digest!,findings,requirements:data.requirements,
         query:leanBudget(input.projectId,'acceptance-design').wrap(async function*(prompt,options){
@@ -209,7 +213,7 @@ export async function prepareIndependentDesign(input:{projectId:string;sessionId
     settleIndependentCorrection(input.projectId,saved)
     return saved
   }catch(error){
-    const failure={...base,status:'blocked' as const,reason:String(error),attempted,authorization_hash:authorizationHash}
+    const failure={...base,status:'blocked' as const,reason:String(error),attempted,authorization_hash:authorizationHash,...(redesigning&&proposed?{contract:proposed}:{})}
     if(/INDEPENDENT_(?:RECORD_INVALID|FROZEN_BYTES_CHANGED)/.test(String(error)))return failure
     const previous=readIndependentDesign(input.projectId)
     if(previous?.attempted&&previous.scope===scope&&previous.operation===operation&&!attempted){failure.attempted=true;failure.authorization_hash=previous.authorization_hash}
