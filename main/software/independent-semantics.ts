@@ -116,6 +116,9 @@ export function parseIndependentCases(textValue: string, features: string[]): In
   if (!value || !keys(value, ['cases', 'coverage_notes']) || !Array.isArray(value.cases) || !value.cases.length || value.cases.length > 12
     || new Set(value.cases.map(c => c?.id)).size !== value.cases.length) throw new IndependentCaseFormatError('INDEPENDENT_CASES_INVALID: cases')
   const identifier = (input: unknown) => typeof input === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(input)
+  // These names are lookup keys, never executable selectors or filesystem paths.
+  const logicalName = (input: unknown) => typeof input === 'string' && input.trim().length > 0
+    && input.length <= 128 && !/[\u0000-\u001f\u007f]/.test(input)
   for (const [caseIndex, item] of value.cases.entries()) {
     const path = `cases[${caseIndex}]`
     if (!item || !keys(item, ['id', 'feature', 'steps', 'basis', 'coverage', 'related']) || !identifier(item.id) || !features.includes(item.feature)) {
@@ -133,11 +136,11 @@ export function parseIndependentCases(textValue: string, features: string[]): In
       if (!step) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}`)
       const allowed = step.kind === 'fill' ? ['kind', 'control', 'value', 'subject'] : step.kind === 'expect' ? ['kind', 'control', 'equals', 'oracle', 'property', 'subject'] : step.kind === 'click' ? ['kind', 'control', 'subject', 'intent'] : step.kind === 'restart' || speechProbe && step.kind === 'speech_probe' ? ['kind'] : []
       if (!allowed.length || !keys(step, allowed)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}`)
-      if ('control' in step ? !identifier(step.control) : step.kind !== 'restart' && step.kind !== 'speech_probe') throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.control`)
+      if ('control' in step ? !logicalName(step.control) : step.kind !== 'restart' && step.kind !== 'speech_probe') throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.control 须为非空逻辑控件名，最多128字符，可用中文或空格，不含换行等控制字符`)
       if (step.kind === 'fill' && !text(step.value, 2000)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.value`)
       if (step.kind === 'expect' && !text(step.equals)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.equals`)
       if (step.kind === 'expect' && step.property !== undefined && !['text', 'value'].includes(step.property)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.property`)
-      if (step.subject !== undefined && !identifier(step.subject)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.subject`)
+      if (step.subject !== undefined && !logicalName(step.subject)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.subject 须为非空对象名，最多128字符，不含控制字符`)
       if (step.kind === 'click' && step.intent !== undefined && !['submit', 'cancel'].includes(step.intent)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.intent`)
       if (step.kind === 'expect' && step.oracle !== undefined) {
         validateOracle(step.oracle, `${stepPath}.oracle`)
@@ -242,7 +245,7 @@ export const INDEPENDENT_SEMANTICS_INSTRUCTIONS = [
   '{"kind":"expect","control":"result","equals":"5","oracle":{"kind":"derived","version":1,"rule_id":"BR-001","steps":[0,1]}}',
   'derived 仅引用确认资料中带 verification.operation 的规则。version 为数字 1，rule_id 为确认的规则编号，steps 是之前同对象 fill 的从 0 开始且互不重复的整数序号。equals 须等于按该规则对这些输入的确定性计算结果。',
   '{"kind":"expect","control":"result","equals":"","oracle":{"kind":"unresolved","question":"输入“嗯，我下午三点到”时，清理后的完整文本应是什么？"}}',
-  '缺少可确认的预期值或规则时，用 unresolved。equals 填空字符串，question 给出一个具体输入并询问应观察到的结果。该步骤供用户澄清，不能作为通过依据。示例内容不属于当前任务，不能直接照搬。',
-  '每需求有 normal。多对象、异常、取消和重开仅在该需求明确要求时才设计对应案例，不必为未要求的行为补问题或固定文案。coverage_notes 如需填写，source 逐字复制该需求的 expected。多对象须不同 subject 及不同值并各自断言。取消操作标 intent:cancel 且其后断言，重开后必须断言。',
+  '精确文案未规定时，优先用输入回读或先观察再比较的关系断言。只有无法设计有依据的业务断言时才用 unresolved 并写明缺口；用户澄清仅适用于带 decision 的真实业务选择。示例内容不属于当前任务。',
+  '每需求有 normal。多对象、异常、取消和重开仅在该需求明确要求时才设计对应案例，不必为未要求的行为补问题或固定文案。coverage_notes 如需填写，source 逐字复制该需求的 expected。multi_object 用于数据隔离：两个 subject 分别 fill 不同值、分别 expect，再修改其中一个并检查另一个保持；仅选择预置角色可放在 normal 中，先观察角色项的实际文本再用 observed 比较打开后的标题。取消操作标 intent:cancel 且其后断言，重开后必须断言。',
   'related 可引用本批其他需求的 {feature,requirement_hash,expected_source} 作为跨模块规则依据，引用必须逐字对应确认资料。关联引用本身不计入该需求覆盖，仍须其自己的正常案例。最多 12 案例，每案例 32 步，不得返回 PASS 或修改目标。',
 ].join('\n')

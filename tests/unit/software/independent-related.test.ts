@@ -9,6 +9,20 @@ const brief=bindAcceptance({project_id:'p',name:'器材',positioning:'借还维�
 const contract=()=>({cases:[{id:'borrow',feature:'F-001',basis:{requirement_hash:requirementEvidenceHash(brief,brief.requirements[0]),expected_source:brief.acceptance['F-001']},
   related:[{feature:'F-002',requirement_hash:requirementEvidenceHash(brief,brief.requirements[1]),expected_source:brief.acceptance['F-002']}],coverage:['normal'],
   steps:[{kind:'click',control:'borrow'},{kind:'expect',control:'result',equals:'不可借用',oracle:{kind:'literal',quote:'不可借用'}}]}]})
+
+it('checks preset role selection through observed identity without inventing confirmed names', () => {
+  const task = bindAcceptance({...brief, requirements:[{id:'F-002',description:'选择AI角色',priority:'P0'}],
+    acceptance:{'F-002':'能进入某个AI角色的聊天界面，角色信息在界面中可见'}})
+  const proposal = {cases:[{id:'role',feature:'F-002',coverage:['normal'],
+    basis:{requirement_hash:requirementEvidenceHash(task,task.requirements[0]),expected_source:task.acceptance['F-002']},
+    steps:[{kind:'expect',control:'角色 名称',equals:'',oracle:{kind:'nonempty',quote:'AI角色'}},
+      {kind:'click',control:'选择角色'},
+      {kind:'expect',control:'聊天标题',equals:'',oracle:{kind:'observed',step:0}}]}]}
+  const parse = () => parseIndependentCases(JSON.stringify(proposal),['F-002'])
+  expect(assessIndependentCases(task,parse()).ready).toBe(true)
+  proposal.cases[0].steps[2] = {kind:'expect',control:'聊天标题',equals:'林间',oracle:{kind:'literal',quote:'林间'}}
+  expect(assessIndependentCases(task,parse()).cases[0].issues).toContain('固定预期不是确认资料中逐字引用的业务值')
+})
 it('grounds a cross-feature oracle but never counts a context reference as coverage',()=>{
   const parsed=parseIndependentCases(JSON.stringify(contract()),['F-001','F-002'])
   const result=assessIndependentCases(brief,parsed)

@@ -294,15 +294,18 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     const policy = readIndependentPolicy(input.projectId)
     const shared = !!policy?.enabled && 'funding' in policy
     let design = await prepareIndependentDesign({projectId:input.projectId,sessionId:input.sessionId,query:input.query,primaryEnv:input.env,maxTokens:input.maxTokens,signal,redesign:input.redesignIndependentCases})
-    // One bounded engineering correction before returning control. Every request
-    // uses the same project accounting and cancellation signal.
-    const formatFailure = /INDEPENDENT_(?:JSON_INVALID|CASES_(?:INVALID|TOO_LARGE)|CASE_INVALID|BASIS_INVALID|RELATED_INVALID|COVERAGE(?:_NOTES)?_INVALID|STEP_INVALID|ORACLE_INVALID)/.test(design.reason ?? '')
-    const semantics = design.contract && currentIndependentSemantics(input.projectId, design.contract)
-    const designGap = semantics && !semantics.ready
-      && !independentClarification(input.projectId, design.contract!, semantics).questions.length
-    if (shared && (formatFailure || designGap)) {
+    // Format and business semantics can fail successively. Keep both repairs
+    // within this request, charged to the existing budget, and stop on no progress.
+    for (let repair = 0; shared && repair < 2; repair++) {
+      const formatFailure = /INDEPENDENT_(?:JSON_INVALID|CASES_(?:INVALID|TOO_LARGE)|CASE_INVALID|BASIS_INVALID|RELATED_INVALID|COVERAGE(?:_NOTES)?_INVALID|STEP_INVALID|ORACLE_INVALID)/.test(design.reason ?? '')
+      const semantics = design.contract && currentIndependentSemantics(input.projectId, design.contract)
+      const designGap = semantics && !semantics.ready
+        && !independentClarification(input.projectId, design.contract!, semantics).questions.length
+      if (!formatFailure && !designGap) break
       emit('message_delta', {text:'独立测试设计需要修正，我正在根据具体检查结果调整案例。'})
-      design = await prepareIndependentDesign({projectId:input.projectId,sessionId:input.sessionId,query:input.query,primaryEnv:input.env,maxTokens:input.maxTokens,signal,redesign:input.redesignIndependentCases || !!designGap})
+      const previous = design
+      design = await prepareIndependentDesign({projectId:input.projectId,sessionId:input.sessionId,query:input.query,primaryEnv:input.env,maxTokens:input.maxTokens,signal,redesign:input.redesignIndependentCases || !!designGap || !!readIndependentDesign(input.projectId)?.contract,previousFailure:previous,})
+      if (design.status === 'frozen' && design.digest === previous.digest) break
     }
     if (design.status === 'blocked') {
       if (input.redesignIndependentCases && !signal.aborted) {

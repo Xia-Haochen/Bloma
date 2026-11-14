@@ -160,7 +160,7 @@ it('retains a safe field diagnostic for invalid B output and freezes only a vali
   const invalid = structuredClone(contract)
   const step = invalid.cases[0].steps[1]
   if (step.kind !== 'click') throw Error('fixture')
-  step.control = 'invalid control with private text'
+  step.control = 'invalid\ncontrol with private text'
   const failure = await prepareIndependentDesign(sharedInput(() => JSON.stringify(invalid)))
   expect(failure).toMatchObject({status:'blocked', reason:expect.stringContaining('cases[0].steps[1].control')})
   expect(failure.contract).toBeUndefined()
@@ -320,12 +320,59 @@ it('repairs engineering-only B gaps within the production request without questi
   expect(messages.join('')).not.toContain('完整提示文案')
 })
 
-it('compares generated observations across restart and detects corrupted persisted output', async () => {
+it('stops unchanged semantic proposals after one repair without starting implementation', async () => {
+  const options = sharedInput()
+  let designCalls = 0, makerCalls = 0
+  const proposal = structuredClone(contract), step = proposal.cases[0].steps[2]
+  if (step.kind !== 'expect') throw Error('fixture')
+  step.oracle = {kind:'unresolved',question:'保存后的完整提示文案是什么？'}
+  const model: SDKQuery = async function*(_prompt, settings) {
+    if (settings.accounting?.role !== 'acceptance_designer') { makerCalls++; return }
+    designCalls++
+    yield {type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify(proposal)}]}}
+  }
+  await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'no-progress',content:'继续',maxTokens:8192,signal:AbortSignal.timeout(30000)},
+    model,options.primaryEnv,{publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
+  expect(designCalls).toBe(2)
+  expect(makerCalls).toBe(0)
+})
+
+it.each(['format-first', 'semantics-first'])('repairs successive format and semantic failures in one production request (%s)', async order => {
+  const options = sharedInput(), controller = new AbortController()
+  let designCalls = 0, makerCalls = 0
+  const model: SDKQuery = async function*(prompt, settings) {
+    if (settings.accounting?.role !== 'acceptance_designer') { makerCalls++; controller.abort(); return }
+    designCalls++
+    const proposal = structuredClone(contract), data = JSON.parse(prompt)
+    const formatAt = order === 'format-first' ? 1 : 2
+    if (designCalls === formatAt + 1) expect(data.previous_format_issue).toContain('.control')
+    if (designCalls > (order === 'format-first' ? 2 : 1)) {
+      expect(data.previous_design_feedback.contract.cases[0].steps[2].oracle.kind).toBe('unresolved')
+    }
+    if (designCalls < 3) {
+      if (designCalls === formatAt) {
+        const step = proposal.cases[0].steps[0]
+        if (step.kind === 'fill') step.control = ''
+      } else {
+        const step = proposal.cases[0].steps[2]
+        if (step.kind === 'expect') step.oracle = {kind:'unresolved',question:'保存后的完整提示文案是什么？'}
+      }
+    }
+    yield {type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify(proposal)}]}}
+  }
+  await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'successive-repair',content:'继续',maxTokens:8192,signal:controller.signal},
+    model,options.primaryEnv,{publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
+  expect(designCalls).toBe(3)
+  expect(makerCalls).toBe(1)
+  expect(readIndependentDesign(project.project_id)?.contract).toEqual(contract)
+})
+
+it('executes Chinese control names across restart and detects corrupted persisted output', async () => {
   const proposal = structuredClone(contract), first = proposal.cases[0]
-  first.steps = [{kind:'click',control:'save'},
-    {kind:'expect',control:'result',equals:'',oracle:{kind:'nonempty',quote:first.basis!.expected_source}},
+  first.steps = [{kind:'click',control:'保存 按钮'},
+    {kind:'expect',control:'实际结果',equals:'',oracle:{kind:'nonempty',quote:first.basis!.expected_source}},
     {kind:'restart'},
-    {kind:'expect',control:'result',equals:'',oracle:{kind:'observed',step:1}}]
+    {kind:'expect',control:'实际结果',equals:'',oracle:{kind:'observed',step:1}}]
   const design = await prepareIndependentDesign(sharedInput(() => JSON.stringify(proposal)))
   expect(design.status,design.reason).toBe('frozen')
   const server = createServer()
@@ -337,7 +384,7 @@ it('compares generated observations across restart and detects corrupted persist
   const html=`<button id="save">Create</button><output id="result"></output><script>const r=document.querySelector('#result'); r.textContent=localStorage.getItem('reply')||'';document.querySelector('#save').onclick=()=>{const reply='generated-'+Math.random();r.textContent=reply;localStorage.setItem('reply',reply)}</script>`
   writeFileSync(join(root,'index.html'),html)
   writeFileSync(join(root,'LAUNCH.json'),JSON.stringify({schema_version:2,ui:'browser',command:['node','server.cjs'],url:`http://127.0.0.1:${address.port}`}))
-  writeFileSync(join(root,'INDEPENDENT_ADAPTER.json'),JSON.stringify({version:1,design_digest:design.digest,controls:{save:'#save',result:'#result'}}))
+  writeFileSync(join(root,'INDEPENDENT_ADAPTER.json'),JSON.stringify({version:1,design_digest:design.digest,controls:{'保存 按钮':'#save','实际结果':'#result'}}))
   const checked = await verifyIndependentDesign(project.project_id,await prepareSoftwareRelease(project.project_id,root),AbortSignal.timeout(35000))
   expect(checked.status,JSON.stringify(checked)).toBe('passed')
   expect(checked.case_results![0].steps.find(s=>s.id==='save-1')!.actual)
