@@ -247,8 +247,8 @@ export async function runAgent(input: AgentSendMessageInput): Promise<AgentSendM
         },
         {
           publish: (_target, type, payload) => publishForRun(makeEvent(input, type, payload)),
-          persistAssistant,
-          persistSystem,
+          persistAssistant: (_sessionId, text) => persistAssistant(text),
+          persistSystem: (_sessionId, text) => persistSystem(text),
           complete: (sessionId, _projectId, outcome) => {
             if (outcome === 'incomplete') receiptOutcome = 'failed'
             persistTerminalMessage(sessionId, outcome === 'incomplete' ? 'incomplete' : 'completed',
