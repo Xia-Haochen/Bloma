@@ -57,7 +57,7 @@ import { importedProjectContext } from '../software/import-project'
 import { saveSoftwareRunState, readSoftwareRunState, recordSoftwareRepair, type SoftwareRunStatus } from '../software/run-state'
 import { quoteMonetaryWork, monetaryStopMessage, monetaryInputBlocked } from '../platform/llm/monetary-budget'
 import { trialFeedbackText } from '../software/trial'
-import { prepareIndependentDesign, readIndependentDesign } from '../software/independent-design'
+import { prepareIndependentDesign, readIndependentDesign, readIndependentPolicy } from '../software/independent-design'
 import { currentIndependentSemantics, independentClarification, independentClarificationText, recordIndependentDisputes } from '../software/independent-quality'
 import { recordEvaluationEvent, activatePendingEvaluation } from '../software/harness-evaluation'
 import { isLongtermSoftware, ensureLongtermState, stageLongtermMilestone, longtermPendingDecision } from '../software/longterm-state'
@@ -242,8 +242,9 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     const design = readIndependentDesign(input.projectId)
     await recordIndependentDisputes(input.projectId, assessment, signal)
     if (!design?.contract) throw Error('INDEPENDENT_CURRENT_DESIGN_REQUIRED')
-    const text = independentClarificationText(independentClarification(input.projectId, design.contract, assessment))
-    blocked(heading ? `${heading}\n\n${text}` : text, true)
+    const clarification = independentClarification(input.projectId, design.contract, assessment)
+    const text = independentClarificationText(clarification)
+    blocked(heading ? `${heading}\n\n${text}` : text, clarification.questions.length > 0)
   }
   const blockQualityGap = async (reason: string) => {
     if (reason.startsWith('QUALITY_INDEPENDENT_SEMANTICS_UNRESOLVED')) {
@@ -279,7 +280,19 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     }
   }
   if ((!initialBudgetStop)) {
-    const design = await prepareIndependentDesign({projectId:input.projectId,sessionId:input.sessionId,query:input.query,primaryEnv:input.env,maxTokens:input.maxTokens,signal,redesign:input.redesignIndependentCases})
+    const policy = readIndependentPolicy(input.projectId)
+    const shared = !!policy?.enabled && 'funding' in policy
+    let design = await prepareIndependentDesign({projectId:input.projectId,sessionId:input.sessionId,query:input.query,primaryEnv:input.env,maxTokens:input.maxTokens,signal,redesign:input.redesignIndependentCases})
+    // One bounded engineering correction before returning control. Every request
+    // uses the same project accounting and cancellation signal.
+    const formatFailure = /INDEPENDENT_(?:JSON_INVALID|CASES_(?:INVALID|TOO_LARGE)|CASE_INVALID|BASIS_INVALID|RELATED_INVALID|COVERAGE(?:_NOTES)?_INVALID|STEP_INVALID|ORACLE_INVALID)/.test(design.reason ?? '')
+    const semantics = design.contract && currentIndependentSemantics(input.projectId, design.contract)
+    const designGap = semantics && !semantics.ready
+      && !independentClarification(input.projectId, design.contract!, semantics).questions.length
+    if (shared && (formatFailure || designGap)) {
+      emit('message_delta', {text:'独立测试设计需要修正，我正在根据具体检查结果调整案例。'})
+      design = await prepareIndependentDesign({projectId:input.projectId,sessionId:input.sessionId,query:input.query,primaryEnv:input.env,maxTokens:input.maxTokens,signal,redesign:input.redesignIndependentCases || !!designGap})
+    }
     if (design.status === 'blocked') {
       if (input.redesignIndependentCases && !signal.aborted) {
         const prior = readIndependentDesign(input.projectId)

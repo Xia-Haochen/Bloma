@@ -54,7 +54,8 @@ export function independentSuite(projectId:string,root:string,caseIds?:string[])
     const selector=adapter.controls[step.control]
     if(step.kind==='fill')return{id,kind:'fill' as const,selector,value:step.value}
     if(step.kind==='click')return{id,kind:'click' as const,selector}
-    return{id,kind:'expect' as const,selector,equals:step.equals,property:step.property}
+    return{id,kind:'expect' as const,selector,property:step.property,
+      ...(['nonempty','observed'].includes(step.oracle?.kind ?? '') ? {nonempty:true as const} : {equals:step.equals})}
   }))}
 }
 export async function verifyIndependentDesign(projectId:string,candidate:SoftwareRelease,signal?:AbortSignal,
@@ -99,14 +100,21 @@ export async function verifyIndependentDesign(projectId:string,candidate:Softwar
       const suite=independentSuite(projectId,candidate.root,[item.id]),base=join(directory,String(cases.length)),temporary=mkdtempSync(join(tmpdir(),'bloma-b-'))
       // Each case gets fresh data; restart segments within the case retain it.
       let observed:Awaited<ReturnType<typeof observeSoftwareGui>>
-      try{observed=await observeSoftwareGui({projectId,root:candidate.root,launch:candidate.launch,suite,temporary,screenshotDir:join(base,'evidence'),signal,purpose:'acceptance'})}
+      const comparisons = Object.fromEntries(item.steps.flatMap((step, index) =>
+        step.kind === 'expect' && step.oracle?.kind === 'observed' ? [[`${item.id}-${index}`, `${item.id}-${step.oracle.step}`]] : []))
+      try{observed=await observeSoftwareGui({projectId,root:candidate.root,launch:candidate.launch,suite,temporary,screenshotDir:join(base,'evidence'),signal,purpose:'acceptance',comparisons})}
       finally{const target=realpathSync(temporary);if(dirname(target)!==realpathSync(tmpdir())||!basename(target).startsWith('bloma-b-'))throw Error('INDEPENDENT_CLEANUP_PATH_INVALID');rmSync(target,{recursive:true,force:true,maxRetries:5,retryDelay:100})}
       const failed=observed.steps.find(s=>!s.passed),step=suite.steps.find(s=>s.id===failed?.id)
       const assertion=observed.status==='failed'&&step?.kind==='expect'&&observed.error?.startsWith(`GUI_ASSERTION_FAILED:${step.id}`)
       const runtime=observed.failure_kind==='runtime'
       const status=observed.status==='passed'?'passed':assertion||runtime?'failed':'unverified'
       cases.push({id:item.id,feature:item.feature,status,kind:status==='passed'?'none':runtime?'product_runtime':assertion?'product_assertion':failed?'adapter':'environment',steps:observed.steps,error:observed.error,evidence_warnings:observed.evidence_warnings,expected_source:trustedAcceptance(brief,requirement)})
-      if(failed&&!diagnostic)diagnostic={id:failed.id,expected:step?.kind==='expect'?(step.equals??'冻结的独立业务预期'):'冻结的独立业务步骤',actual:failed.actual}
+      if (failed && !diagnostic) {
+        const source = comparisons[failed.id]
+        const expected = source ? observed.steps.find(row => row.id === source && row.passed)?.actual
+          : step?.kind === 'expect' ? step.equals ?? '非空输出' : '冻结的独立业务步骤'
+        diagnostic = {id:failed.id,expected:String(expected ?? '缺少先前有效观察'),actual:failed.actual}
+      }
     }catch(error){signal?.throwIfAborted();cases.push({id:item.id,feature:item.feature,status:'unverified',kind:'adapter',steps:[],error:String(error),expected_source:trustedAcceptance(brief,requirement)})}
     progress()
   }

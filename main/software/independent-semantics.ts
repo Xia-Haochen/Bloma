@@ -6,7 +6,9 @@ import { requirementCapabilities } from '../model/requirement-capabilities'
 
 export const INDEPENDENT_CATEGORIES = ['normal', 'multi_object', 'exception', 'cancel', 'reopen'] as const
 export type IndependentCategory = typeof INDEPENDENT_CATEGORIES[number]
-export type IndependentOracle = { kind: 'derived'; version: 1; rule_id: string; steps: number[] } | { kind: 'input'; step: number } | { kind: 'literal'; quote: string; feature?: string } | { kind: 'unresolved'; question: string }
+export type IndependentOracle = { kind: 'derived'; version: 1; rule_id: string; steps: number[] } | { kind: 'input'; step: number } | { kind: 'literal'; quote: string; feature?: string }
+  | { kind: 'nonempty'; quote: string } | { kind: 'observed'; step: number }
+  | { kind: 'unresolved'; question: string; decision?: { source: string; options: string[] } }
 export type IndependentStep = ({ kind: 'fill'; control: string; value: string } | { kind: 'click'; control: string; intent?: 'submit' | 'cancel' }
   | { kind: 'expect'; control: string; equals: string; property?: 'text' | 'value'; oracle?: IndependentOracle }
   | { kind: 'restart' } | { kind: 'speech_probe' }) & { subject?: string }
@@ -57,6 +59,7 @@ function validateOracle(value: unknown, path: string): void {
 
   switch (oracle.kind) {
     case 'input':
+    case 'observed':
       fields(['step'])
       if (!stepNumber(oracle.step)) fail('.step', '须为从 0 开始的整数步骤序号')
       return
@@ -66,6 +69,10 @@ function validateOracle(value: unknown, path: string): void {
       if (Object.hasOwn(oracle, 'feature') && (typeof oracle.feature !== 'string' || !/^F-\d{3,}$/.test(oracle.feature))) {
         fail('.feature', '须为确认任务单中的功能编号，如 F-001')
       }
+      return
+    case 'nonempty':
+      fields(['quote'])
+      nonblank('quote')
       return
     case 'derived': {
       fields(['version', 'rule_id', 'steps'])
@@ -78,8 +85,16 @@ function validateOracle(value: unknown, path: string): void {
       return
     }
     case 'unresolved':
-      fields(['question'])
+      fields(['question'], ['decision'])
       nonblank('question')
+      if (oracle.decision !== undefined) {
+        const decision = oracle.decision as {source?: unknown; options?: unknown}
+        if (!decision || typeof decision !== 'object' || !keys(decision, ['source','options'])
+          || !text(decision.source) || !decision.source.trim() || !Array.isArray(decision.options)
+          || decision.options.length < 2 || decision.options.length > 4 || decision.options.some(option => !text(option) || !option.trim())) {
+          fail('.decision', '须给出确认资料的逐字来源和 2 至 4 个具有不同业务后果的选项')
+        }
+      }
       return
     default:
       fail('.kind', Object.hasOwn(oracle, 'kind')
@@ -162,6 +177,15 @@ export function assessIndependentCases(brief: PrdBackplane, contract: Independen
         const sources = oracle.feature ? [cited ? trustedAcceptance(brief, cited) : undefined]
           : [expected, ...(item.related ?? []).map(row => row.expected_source)]
         if (!sources.some(source => source?.includes(oracle.quote)) || step.equals !== oracle.quote) issues.push('固定预期不是确认资料中逐字引用的业务值')
+      } else if (oracle.kind === 'nonempty') {
+        if (!expected?.includes(oracle.quote)) issues.push('输出存在性检查缺少当前确认需求依据')
+      } else if (oracle.kind === 'observed') {
+        const source = item.steps[oracle.step]
+        if (oracle.step >= index || source?.kind !== 'expect' || !source.oracle
+          || ['unresolved','observed'].includes(source.oracle.kind)
+          || source.control === step.control && !item.steps.slice(oracle.step + 1, index).some(s => ['restart','click','fill'].includes(s.kind))) {
+          issues.push('结果一致性须引用之前已检查的实际输出，并跨操作或不同控件比较')
+        }
       } else if (oracle.kind === 'derived') {
         const rule = brief.requirements_model?.rules.find(r => r.id === oracle.rule_id)
         const inputs = oracle.steps.map(n => item.steps[n])
@@ -204,6 +228,10 @@ export const INDEPENDENT_SEMANTICS_INSTRUCTIONS = [
   '普通 GUI 案例的 steps 必须同时有 click 或 fill 操作，以及 expect 断言。即使预期需要澄清，也请保留触发该行为的操作，并在 expect 中用 unresolved。步骤用 kind 指定类型，control 是逻辑控件名。fill 携带 value，click 可带 intent: submit 或 cancel，expect 携带 equals 和 oracle，可用 restart 测试重新打开后的结果。',
   '完整的普通步骤数组示例：[{"kind":"fill","control":"name","value":"Alice"},{"kind":"click","control":"save"},{"kind":"expect","control":"result","equals":"Alice","oracle":{"kind":"input","step":0}}]。',
   '每个 expect 的 oracle 是一个 JSON 对象，必须含 kind。以下每行是完整步骤示例。只使用对应 oracle 示例中的字段，值须根据当前确认资料填写。',
+  'B 负责设计测试输入、夹具、观察和断言。用户只决定产品目标与真正冲突的业务规则。提示文案、掩码、动态模型回复和历史内容不要求用户逐字提供；按已授权的工程默认值和实际数据关系验证。',
+  '动态回复先检查已确认需求要求的输出存在，再记录实际结果。例：{"kind":"expect","control":"reply","equals":"","oracle":{"kind":"nonempty","quote":"AI角色的回复文本"}}，quote 必须来自该项 expected。此检查只证明有输出，语义质量仍由独立评审与实际效果证据承担。',
+  '随后验证复制、历史或重开的一致性：{"kind":"expect","control":"history_reply","equals":"","oracle":{"kind":"observed","step":2}}。step 指向本案例先前已检查输出的步骤，从 0 开始。平台比较两次实际值，禁止要求用户预言随机回复。',
+  'unresolved 默认表示 B 的测试设计缺口，由 B 修正。只有确实需要用户选择、且现有授权和默认值无法解决时，附 decision:{source:"确认资料的逐字原文",options:["选择一及业务后果","选择二及业务后果"]}。已授权工程决定的细节、测试能力不足、服务凭据与设备不可用均不能归为业务决定。',
   '{"kind":"expect","control":"result","equals":"Alice","oracle":{"kind":"input","step":0}}',
   'input 引用同对象之前的 fill。step 是从 0 开始的整数步骤序号，equals 等于该输入原值。',
   '{"kind":"expect","control":"result","equals":"已保存","oracle":{"kind":"literal","quote":"已保存"}}',

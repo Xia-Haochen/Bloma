@@ -118,6 +118,7 @@ export async function prepareIndependentDesign(input:{projectId:string;sessionId
       ? previous.reason?.slice(0, 500) : undefined
     const data={goal:brief.positioning,requirements:brief.requirements.map(item=>({id:item.id,description:item.description,expected:trustedAcceptance(brief,item),requirement_hash:requirementEvidenceHash(brief,item),behavior_assertions:item.behavior_assertions,capabilities:[...requirementCapabilities(item)]})),
       intent:brief.requirements_model,constraints:brief.constraints,assumptions:brief.assumptions,out_of_scope:brief.out_of_scope,design_aids:COUNTEREXAMPLE_GUIDANCE,
+      user_instructions:brief.lean_brief?.intent_sources,
       confirmed_design:ux?.html_path?readFileSync(join(project.root_path,ux.html_path),'utf8'):null,
       ...(previousFormatIssue ? { previous_format_issue: previousFormatIssue } : {}),
       ...(repair ? { previous_design_feedback: {

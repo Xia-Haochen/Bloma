@@ -137,7 +137,9 @@ it('wrong or unknown business expectations remain disputes, are not executed and
   expect(readQualityLedger(project.project_id).findings[0].disposition).toBe('disputed')
   const model = vi.fn(async function* () { throw Error('A must not implement disputed expectations') })
   await enterDesktopLine({ projectId: project.project_id, sessionId: 's', requestId: 'new', content: '继续', maxTokens: 4096, signal: ctx().signal }, model, { ANTHROPIC_MODEL: 'model-a' }, { publish: () => {}, persistAssistant: () => {}, persistSystem: () => {}, complete: () => {} })
-  expect(model).not.toHaveBeenCalled(); expect(calls).toBe(1); expect(findProject(project.project_id).current_stage).toBe('blocked_for_user_decision')
+  expect(model).not.toHaveBeenCalled(); expect(calls).toBe(1)
+  expect(findProject(project.project_id).current_stage).toBe('generating_mvp')
+  expect(findProject(project.project_id).desktop_blocked?.note).toContain('工程处理阶段')
   expect(prdScopeFingerprint(readPrdBackplane(project.project_id))).toBe(briefHash)
 }, 90000)
 it('missing static adapter controls are unverified harness findings, not reproduced product defects', async () => {

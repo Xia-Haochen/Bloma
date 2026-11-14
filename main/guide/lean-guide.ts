@@ -63,6 +63,11 @@ export async function handleLeanGuide(input: AgentSendMessageInput, publish: (ev
   }
   if (clarification) {
     const action = input.content.trim().replace(/[。！!]+$/, '')
+    if (!clarification.questions.length && clarification.canRedesign && /^(?:继续|继续制作|恢复|确认|按这份做)$/.test(action)
+      && input.metadata?.source !== 'system_resume') {
+      await enterProduction(true)
+      return
+    }
     if (input.metadata?.source === 'system_resume' || /^(?:继续|继续制作|恢复|查看进度|查看结果|查看任务单|确认|按这份做)$/.test(action)) {
       say(independentClarificationText(clarification))
       return

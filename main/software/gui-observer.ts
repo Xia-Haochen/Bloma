@@ -116,7 +116,7 @@ export async function observeGuiStep(page: Page, step: GuiAcceptanceSuite['steps
 
 /** DOM actions are host-owned and run against the normal application. No product
  * self-test mode, injected business assertions or self-reported PASS scripts. */
-export async function observeSoftwareGui(input: { projectId: string; root: string; launch: LaunchDeclaration; suite: GuiAcceptanceSuite; temporary: string; signal?: AbortSignal; screenshotDir?: string; purpose?:'acceptance'|'development' }): Promise<Pick<GuiAcceptanceResult, 'status' | 'steps' | 'error' | 'failure_kind' | 'evidence_warnings'>> {
+export async function observeSoftwareGui(input: { projectId: string; root: string; launch: LaunchDeclaration; suite: GuiAcceptanceSuite; temporary: string; signal?: AbortSignal; screenshotDir?: string; purpose?:'acceptance'|'development'; comparisons?: Record<string,string> }): Promise<Pick<GuiAcceptanceResult, 'status' | 'steps' | 'error' | 'failure_kind' | 'evidence_warnings'>> {
   const { _electron, chromium } = await import('playwright')
   const result: Pick<GuiAcceptanceResult, 'status' | 'steps' | 'error' | 'failure_kind' | 'evidence_warnings'> = { status: 'unverified', steps: [], evidence_warnings: [] }
   const data = join(input.temporary, 'data'), userData = join(input.temporary, 'user-data'), screenshotDir = input.screenshotDir ?? join(input.temporary, 'evidence')
@@ -162,7 +162,19 @@ export async function observeSoftwareGui(input: { projectId: string; root: strin
       }
       for (const step of steps) {
         input.signal?.throwIfAborted()
-        try { await checkRuntime(); const actual = await observeGuiStep(page, step, { data, fixtures: input.suite.fixtures, nativeProcessRoot: child?.pid, signal: input.signal }); await checkRuntime(); result.steps.push({ id: step.id, passed: true, actual }) }
+        try {
+          await checkRuntime()
+          let executable = step
+          const reference = input.comparisons?.[step.id]
+          if (reference) {
+            const source = result.steps.find(row => row.id === reference && row.passed)
+            if (step.kind !== 'expect' || typeof source?.actual !== 'string' || !source.actual.trim()) throw Error('GUI_OBSERVATION_REFERENCE_UNAVAILABLE')
+            executable = { ...step, equals:source.actual, nonempty:undefined }
+          }
+          const actual = await observeGuiStep(page, executable, { data, fixtures: input.suite.fixtures, nativeProcessRoot: child?.pid, signal: input.signal })
+          await checkRuntime()
+          result.steps.push({ id: step.id, passed: true, actual })
+        }
         catch (error) {
           result.steps.push({ id: step.id, passed: false, actual: (error as { actual?: unknown }).actual ?? String(error) })
           result.error = error instanceof Error ? error.message : String(error)

@@ -201,7 +201,8 @@ it('resumes the same project from a concise B question through task confirmation
  const last=unresolved.cases[0].steps.at(-1)!
  if(last.kind!=='expect')throw Error('fixture')
  last.equals=''
- last.oracle={kind:'unresolved',question:'输入“嗯，我下午三点到”时，清理后的完整文本应是什么？'}
+ last.oracle={kind:'unresolved',question:'输入“嗯，我下午三点到”时，清理后的完整文本应是什么？',
+   decision:{source:'保存Alice显示Alice',options:['保留用户原话用于归档','清理语气词用于发布']}}
  unresolved.cases.push({ ...structuredClone(unresolved.cases[0]), id: 'unrequested', coverage: ['cancel'],
    steps: [{kind:'click',control:'cancel',intent:'cancel'}, {kind:'expect',control:'result',equals:'',
      oracle:{kind:'unresolved',question:'是否要增加取消功能？'}}] })
@@ -227,7 +228,9 @@ it('resumes the same project from a concise B question through task confirmation
    if (settings.accounting?.role === 'brief') {
      const data = JSON.parse(prompt)
      guideCalls++
-     expect(data.guide_context.acceptance_questions).toEqual([last.oracle!.kind === 'unresolved' && last.oracle!.question])
+     expect(data.guide_context.acceptance_questions).toHaveLength(1)
+     expect(data.guide_context.acceptance_questions[0]).toContain(last.oracle!.kind === 'unresolved' && last.oracle!.question)
+     expect(data.guide_context.acceptance_questions[0]).toContain('保留用户原话用于归档')
      yield {type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify({
        action:'brief',goal:'保存姓名',ui:'required',delivery:'browser',
        requirements:[{id:'F-001',description:'保存姓名',expected:'保存Alice显示Alice。输入“嗯，我下午三点到”时显示“我下午三点到”。'}],
@@ -295,6 +298,54 @@ it('keeps legacy projects without an explicit policy in their existing mode',asy
  updateProject(project.project_id,{independent_design_default:undefined})
  expect((await prepareIndependentDesign(input())).status).toBe('disabled');expect(calls).toBe(0)
 })
+it('repairs engineering-only B gaps within the production request without questioning the user', async () => {
+  const options = sharedInput(), controller = new AbortController(), messages: string[] = []
+  let designCalls = 0, makerCalls = 0
+  const model: SDKQuery = async function*(prompt, settings) {
+    if (settings.accounting?.role === 'acceptance_designer') {
+      designCalls++
+      const proposal = structuredClone(contract)
+      if (designCalls === 1) {
+        const step = proposal.cases[0].steps[2]
+        if (step.kind !== 'expect') throw Error('fixture')
+        step.oracle = {kind:'unresolved',question:'保存后的完整提示文案是什么？'}
+      } else expect(JSON.parse(prompt).previous_design_feedback.cases).toHaveLength(1)
+      yield {type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify(proposal)}]}}
+    } else { makerCalls++; controller.abort() }
+  }
+  await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'auto-repair',content:'继续',maxTokens:8192,signal:controller.signal},
+    model,options.primaryEnv,{publish:()=>{},persistAssistant:(_s,text)=>messages.push(text),persistSystem:()=>{},complete:()=>{}})
+  expect(designCalls).toBe(2)
+  expect(makerCalls).toBe(1)
+  expect(messages.join('')).not.toContain('完整提示文案')
+})
+
+it('compares generated observations across restart and detects corrupted persisted output', async () => {
+  const proposal = structuredClone(contract), first = proposal.cases[0]
+  first.steps = [{kind:'click',control:'save'},
+    {kind:'expect',control:'result',equals:'',oracle:{kind:'nonempty',quote:first.basis!.expected_source}},
+    {kind:'restart'},
+    {kind:'expect',control:'result',equals:'',oracle:{kind:'observed',step:1}}]
+  const design = await prepareIndependentDesign(sharedInput(() => JSON.stringify(proposal)))
+  expect(design.status,design.reason).toBe('frozen')
+  const server = createServer()
+  await new Promise<void>(done=>server.listen(0,'127.0.0.1',done))
+  const address=server.address(); if(!address||typeof address==='string') throw Error('port')
+  await new Promise<void>(done=>server.close(()=>done()))
+  const root=project.root_path
+  writeFileSync(join(root,'server.cjs'),`require('http').createServer((q,s)=>{s.setHeader('Content-Type','text/html');s.end(require('fs').readFileSync('index.html'))}).listen(${address.port},'127.0.0.1')`)
+  const html=`<button id="save">Create</button><output id="result"></output><script>const r=document.querySelector('#result'); r.textContent=localStorage.getItem('reply')||'';document.querySelector('#save').onclick=()=>{const reply='generated-'+Math.random();r.textContent=reply;localStorage.setItem('reply',reply)}</script>`
+  writeFileSync(join(root,'index.html'),html)
+  writeFileSync(join(root,'LAUNCH.json'),JSON.stringify({schema_version:2,ui:'browser',command:['node','server.cjs'],url:`http://127.0.0.1:${address.port}`}))
+  writeFileSync(join(root,'INDEPENDENT_ADAPTER.json'),JSON.stringify({version:1,design_digest:design.digest,controls:{save:'#save',result:'#result'}}))
+  const checked = await verifyIndependentDesign(project.project_id,await prepareSoftwareRelease(project.project_id,root),AbortSignal.timeout(35000))
+  expect(checked.status,JSON.stringify(checked)).toBe('passed')
+  expect(checked.case_results![0].steps.find(s=>s.id==='save-1')!.actual)
+    .toBe(checked.case_results![0].steps.find(s=>s.id==='save-3')!.actual)
+  writeFileSync(join(root,'index.html'),html.replace("localStorage.getItem('reply')||''","'corrupt'"))
+  const bad = await verifyIndependentDesign(project.project_id,await prepareSoftwareRelease(project.project_id,root),AbortSignal.timeout(35000))
+  expect(bad.status).toBe('failed')
+},90000)
 it('leaves command-only projects on their supported CLI verification path',async()=>{
  const parsed=parseLeanBrief(JSON.stringify({action:'brief',goal:'输出文本',ui:'none',delivery:'command',requirements:[{description:'输出文本',expected:'输出hello'}]}),{projectId:project.project_id,sessionId:'s',source:'输出hello',previous:readPrdBackplane(project.project_id),software:true})!
  if(parsed.action!=='brief')throw Error('fixture')

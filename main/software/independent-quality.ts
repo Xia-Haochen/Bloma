@@ -33,16 +33,20 @@ export function independentClarification(projectId: string, contract: Independen
     if (requirement && item.coverage?.length === 1 && item.coverage[0] === 'normal' && requirementCapabilities(requirement).has('speech')) continue
     for (const step of item.steps) {
       if (step.kind !== 'expect' || step.oracle?.kind !== 'unresolved') continue
+      const decision = step.oracle.decision
+      if (!decision || !requirement || !trustedAcceptance(brief, requirement)?.includes(decision.source)) continue
       const question = redactSoftwareOutput(step.oracle.question).replace(/\s+/g, ' ').trim().slice(0, 280)
-      if (question && !questions.includes(question)) questions.push(question)
+      const choices = decision.options.map(option => redactSoftwareOutput(option).replace(/\s+/g, ' ').trim().slice(0, 160))
+      const prompt = question + '\n可选方案：' + choices.join('；')
+      if (question && !questions.includes(prompt)) questions.push(prompt)
     }
   }
   return { questions, canRedesign: !!policy?.enabled && 'funding' in policy }
 }
 
 export function independentClarificationText({ questions, canRedesign }: IndependentClarification): string {
-  if (!questions.length) return '独立验收案例需要重新设计。部分断言或覆盖要求无法从已确认的需求得到。'
-    + (canRedesign ? '回复「重新设计验收」，让 B 按当前任务单重做案例。也可以直接补充一条例子，说明输入和期望结果。' : '你可以在这里补充具体输入和期望结果，再核对独立验收的配置与授权。')
+  if (!questions.length) return '平台尚未完成独立测试设计，当前停在工程处理阶段。已有需求与工程默认值将用于修正案例。'
+    + (canRedesign ? '继续时平台会带上具体失败原因重新处理。' : '当前独立模型配置需要检查运行条件。')
   const visible = questions.slice(0, 3)
   return ['开工前需要确认以下验收预期。请直接在这里回复，我会整理成任务单请你确认。',
     ...visible.map((question, index) => `${index + 1}. ${question}`),
