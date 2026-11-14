@@ -11,7 +11,7 @@ import { readSoftwareRunState } from './run-state'
 import { activeSoftwareCommands, redactSoftwareOutput } from './process-manager'
 import { acceptanceScopeNote } from '../desktop/acceptance-evidence'
 import { assistantDisplayText } from '../../shared/message-presentation'
-import { awaitingUserChecks } from './verification'
+import { awaitingAssistedAcceptance } from './verification'
 
 /** Presentation facts only. A historical PASS is never a fresh delivery
  * credential; launch/promotion keep their existing independent gates. */
@@ -34,7 +34,7 @@ export function softwareStatusView(projectId: string, busy: boolean): SoftwareSt
     else {
       if (receipt.state !== 'complete' || !receipt.result || createHash('sha256').update(JSON.stringify(receipt.result)).digest('hex') !== receipt.result_hash) throw Error('invalid receipt')
       const status = receipt.result.status
-      userCheckPending=awaitingUserChecks(receipt.result.core)&&receipt.result.security?.passed===true&&receipt.result.independent?.status!=='failed'
+      userCheckPending=awaitingAssistedAcceptance(receipt.result)
       verification = { status: status === 'passed' ? 'last_passed' : status === 'failed' ? 'last_failed' : 'last_unverified',
         label: status === 'passed' ? '最近检查通过（对应记录版本）' : status === 'failed' ? '最近检查未通过' : '最近检查尚未验证', at,
         scope_note:acceptanceScopeNote(receipt.result.core?.acceptance_evidence) }

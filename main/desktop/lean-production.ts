@@ -52,7 +52,7 @@ import { stopSoftwareSession, settleSoftwareCommands,redactSoftwareOutput } from
 import { closeDebugSessions, retainedDebugVersion } from '../software/debug-sessions'
 import { prepareSoftwareRelease, promoteSoftwareRelease, sealSoftwareRelease, verifyReleaseSource } from '../software/release-store'
 import { saveSoftwareRegressionBaseline } from '../software/regression-baseline'
-import { verifySoftwareCandidate, recentSoftwareVerification, awaitingUserChecks } from '../software/verification'
+import { verifySoftwareCandidate, recentSoftwareVerification, awaitingAssistedAcceptance } from '../software/verification'
 import { verificationResponse, verificationToolFeedback } from '../software/verification-report'
 import { importedProjectContext } from '../software/import-project'
 import { saveSoftwareRunState, readSoftwareRunState, recordSoftwareRepair, type SoftwareRunStatus } from '../software/run-state'
@@ -595,9 +595,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
         // attempt invalidates earlier receipts, including failures at closure.
         checkpoint('verifying', { source: softwareVerificationFingerprint(project.root_path) })
         const checked = await verifySoftwareCandidate(input.projectId, input.requestId, runSignal)
-        if (awaitingUserChecks(checked.core) && checked.security?.passed && checked.candidate
-          && checked.independent?.status!=='failed'
-          && !checked.independent?.case_results?.some(row=>row.status==='failed')) {
+        if (awaitingAssistedAcceptance(checked) && checked.candidate) {
           checkpoint('waiting_user',{candidateId:checked.candidate.id,source:checked.candidate.source.digest,
             error:'请在“继续验收”中完成实体麦克风实测。'})
           updateProject(input.projectId,{current_stage:'testing',desktop_phase:'desktop-verify'})

@@ -353,6 +353,23 @@ it('leaves command-only projects on their supported CLI verification path',async
  markPrdUserConfirmed(project.project_id)
  expect((await prepareIndependentDesign(input())).status).toBe('disabled');expect(calls).toBe(0)
 })
+it('reports missing service preparation as an environment prerequisite before any frozen business step executes',async()=>{
+  const proposal=structuredClone(contract)
+  proposal.cases[0].steps=[{kind:'fill',control:'name',value:'Alice'},{kind:'click',control:'save'},
+    {kind:'expect',control:'result',equals:'',oracle:{kind:'nonempty',quote:proposal.cases[0].basis!.expected_source}}]
+  const design=await prepareIndependentDesign(sharedInput(()=>JSON.stringify(proposal)))
+  const root=project.root_path
+  writeFileSync(join(root,'CORE_CHECK.json'),JSON.stringify({llm:{runtime:'node',protocol:'openai-chat',covers:['F-001']}}))
+  writeFileSync(join(root,'server.cjs'),'throw Error("BUSINESS_EXECUTION_MUST_NOT_START")')
+  writeFileSync(join(root,'LAUNCH.json'),JSON.stringify({schema_version:2,ui:'browser',command:['node','server.cjs'],url:'http://127.0.0.1:47891'}))
+  writeFileSync(join(root,'INDEPENDENT_ADAPTER.json'),JSON.stringify({version:1,design_digest:design.digest,controls:{name:'#name',save:'#save',result:'#result'}}))
+  const result=await verifyIndependentDesign(project.project_id,await prepareSoftwareRelease(project.project_id,root),AbortSignal.timeout(30000))
+  expect(result.status).toBe('unverified')
+  expect(result.case_results?.[0]).toMatchObject({kind:'environment',status:'unverified',steps:[]})
+  expect(result.error).toContain('SETTINGS_REQUIRED')
+  expect(result.external_model_effects).toBe('unverified')
+  expect(readIndependentDesign(project.project_id)?.digest).toBe(design.digest)
+})
 it('blocks the real production entry before implementer calls when required B capability is missing',async()=>{
   configureIndependentPolicy(project.project_id,policy);const model=vi.fn(async function*(){throw Error('must not call implementer')})
   stageEvaluationRun(project.project_id,createEvaluationProtocol([{id:'names',goal:'保存姓名',delivery:'browser',requirements:[{description:'保存姓名',expected:'保存Alice显示Alice'}],constraints:[],out_of_scope:[]}]),'names','independent','production-staged')

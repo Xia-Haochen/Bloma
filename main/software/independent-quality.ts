@@ -130,7 +130,16 @@ export async function recordIndependentFindings(projectId: string, candidate: So
     if(!requirement||trustedAcceptance(brief,requirement)!==finding.expected_source){finding.disposition = 'superseded'; finding.unknowns = '确认需求已移除或预期已改变；旧意见保留，不计为修复关闭。'}
   }
   for (const observed of result.case_results) {
-    let finding = ledger.findings.find(f => f.independent?.design_version === result.design_version && f.independent?.case_id === observed.id)
+    const mode=observed.environment?.mode??'isolated_local'
+    // Keep independently reproduced environments in separate findings. A mode
+    // change must neither erase an older failure nor make the new one unclosable.
+    const sameEnvironment=(finding:QualityFinding)=>finding.checks.filter(c=>c.outcome==='failed').every(check=>{
+      try {
+        const environment=JSON.parse(check.observation??'{}').case?.environment
+        return (environment?.mode??'isolated_local')===mode && (mode!=='controlled_service'||environment.configuration_digest===observed.environment?.configuration_digest)
+      } catch {return false}
+    })
+    let finding = ledger.findings.find(f => f.independent?.design_version === result.design_version && f.independent?.case_id === observed.id && sameEnvironment(f))
     if (!finding && observed.status === 'passed') continue
     if (!finding) {
       finding = { id: randomUUID(), review: `independent:${result.design_digest}:${observed.id}`, identity, requirement: observed.feature,
@@ -143,7 +152,7 @@ export async function recordIndependentFindings(projectId: string, candidate: So
     const outcome = independentCaseOutcome(observed)
     const baseline = finding.checks.some(c => c.outcome === 'failed')
     finding.checks.push({ at: new Date().toISOString(), identity, case_name: observed.id, rules: result.design_version, outcome, report: result.report_path, candidate: candidate.id,
-      observation: serializeRedactedJson({ case: observed, overall_passed: canClose, scope: 'frozen_independent_business_case' },redactSoftwareOutput) })
+      observation: serializeRedactedJson({ case: observed, overall_passed: canClose, scope: mode==='controlled_service'?'frozen_independent_case_with_controlled_service':'frozen_independent_business_case' },redactSoftwareOutput) })
     if (outcome === 'failed') finding.disposition = 'confirmed'
     else if (outcome === 'passed' && baseline && canClose) finding.disposition = 'closed'
     else if (!baseline) finding.disposition = observed.kind === 'semantic' ? 'disputed' : outcome === 'passed' ? 'not_reproduced' : 'suspected'

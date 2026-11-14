@@ -169,3 +169,22 @@ it('a changed B design cannot discharge an old reproduced defect while its confi
   await recordIndependentFindings(project.project_id,{source:{digest:identity.source}} as never,{status:'passed',case_results:[],design_version:independentDesignVersion(project.project_id),design_digest:'new'},true)
   expect(readQualityLedger(project.project_id).findings[0].disposition).toBe('confirmed')
 })
+it.each(['isolated_local','controlled_service'])('does not close a failure from %s with a different service configuration',async mode=>{
+  const identity=await qualityIdentity(project.project_id),version=independentDesignVersion(project.project_id)
+  const prior:QualityFinding={id:'prior-service',review:'B',identity,requirement:'F-001',expected_source:expected,category:'independent_behavior',severity:'high',location:'B:normal',trigger:'same case',evidence:'prior failure',reproduction:'normal',unknowns:'',disposition:'confirmed',independent:{design_version:version,design_digest:'design',case_id:'normal'},checks:[{at:new Date().toISOString(),identity,case_name:'normal',rules:version,outcome:'failed',observation:JSON.stringify({case:{status:'failed',...(mode==='controlled_service'?{environment:{mode,configuration_digest:'previous-config'}}:{})}})}]}
+  saveQualityLedger(project.project_id,{version:1,reviews:[],findings:[prior]})
+  const row={id:'normal',feature:'F-001',status:'passed',kind:'none',steps:[{id:'step',passed:true}],environment:{version:1,mode:'controlled_service',configuration_digest:'config',readiness:'ready',external_model_effects:'unverified',requests:[]}}
+  const result={status:'passed',design_version:version,design_digest:'design',case_results:[row]}
+  await recordIndependentFindings(project.project_id,{source:{digest:identity.source}} as never,result as never,true)
+  expect(readQualityLedger(project.project_id).findings[0].disposition).toBe('confirmed')
+  expect(readQualityLedger(project.project_id).findings[0].checks).toHaveLength(1)
+  await recordIndependentFindings(project.project_id,{source:{digest:identity.source}} as never,
+    {...result,status:'failed',case_results:[{...row,status:'failed',kind:'product_assertion',steps:[{id:'step',passed:false}]}]} as never,false)
+  expect(readQualityLedger(project.project_id).findings).toHaveLength(2)
+  await recordIndependentFindings(project.project_id,{source:{digest:identity.source}} as never,result as never,true)
+  expect(readQualityLedger(project.project_id).findings.map(f=>f.disposition)).toEqual(['confirmed','closed'])
+  if(mode==='controlled_service')row.environment.configuration_digest='previous-config'
+  else delete (row as {environment?:unknown}).environment
+  await recordIndependentFindings(project.project_id,{source:{digest:identity.source}} as never,result as never,true)
+  expect(readQualityLedger(project.project_id).findings[0].disposition).toBe('closed')
+})

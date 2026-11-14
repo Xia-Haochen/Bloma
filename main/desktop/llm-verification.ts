@@ -6,7 +6,7 @@ import { mainRootDir } from '../platform/paths'
 import { buildDriverEnv, execFileDriverSpawn, resolveDriverVenvCommand, type DriverSpawn } from './process-driver'
 import { verificationFingerprint, declaredVerificationPolicy } from './verification-fingerprint'
 
-export interface LlmVerificationSpec { runtime?: 'node'; module: string; factory: string; method: string; covers: string[]; input?:'vision'; protocol?:'openai-chat'|'anthropic-messages' }
+export interface LlmVerificationSpec { runtime?: 'node'; module: string; factory: string; method: string; covers: string[]; input?:'vision'; protocol?:'openai-chat'|'anthropic-messages'; settings?: import('../software/acceptance-environment').LlmSettingsBinding }
 export interface LlmVerificationResult {
   probe_version: number
   input_kind?:'vision'

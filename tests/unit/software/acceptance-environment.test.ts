@@ -1,0 +1,108 @@
+import { createServer } from 'node:net'
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { beforeEach, afterEach, it, expect } from 'vitest'
+import { createProject } from '../../../main/project/project-service'
+import { prepareAcceptanceEnvironment } from '../../../main/software/acceptance-environment'
+import { observeSoftwareGui } from '../../../main/software/gui-observer'
+import type { GuiAcceptanceSuite } from '../../../main/desktop/gui-acceptance'
+import { verificationFailure } from '../../../main/software/verification-diagnostics'
+import type { Page } from 'playwright'
+
+let home:string,previous:string|undefined,project:ReturnType<typeof createProject>,port:number
+const settings={endpoint:'#service',model:'#model',api_key:'#key',save:'#configure',ready:{selector:'#ready',contains:'saved'}}
+const spec=(protocol='openai-chat')=>({runtime:'node',module:'client.cjs',factory:'Client',method:'run',protocol,covers:['F-001'],settings})
+beforeEach(async()=>{
+  previous=process.env.PROMA_HOME;home=mkdtempSync(join(tmpdir(),'bloma-acceptance-env-'));process.env.PROMA_HOME=home
+  project=createProject({request_id:'c',mode:'quick'},{workflowVersion:'software-v1'})
+  const server=createServer();await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));port=(server.address() as {port:number}).port;await new Promise<void>(r=>server.close(()=>r()))
+  writeFileSync(join(project.root_path,'CORE_CHECK.json'),JSON.stringify({llm:spec()}))
+  writeFileSync(join(project.root_path,'server.cjs'),`
+const http=require('node:http'),fs=require('node:fs'),path=require('node:path');
+const file=path.join(process.env.APP_DATA_DIR,'settings.json');fs.mkdirSync(process.env.APP_DATA_DIR,{recursive:true});
+let config=fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):null;
+http.createServer(async(req,res)=>{let body='';for await(const chunk of req)body+=chunk;
+try{
+ if(req.url==='/configure'){config=JSON.parse(body);fs.writeFileSync(file,body);res.end('{}');return}
+ if(req.url==='/reply'){const value=JSON.parse(body);const r=await fetch(config.endpoint+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+config.key},body:JSON.stringify({model:config.model,messages:[{role:'user',content:value.text}]})});res.end(JSON.stringify(await r.json()));return}
+ res.setHeader('Content-Type','text/html');res.end(fs.readFileSync('index.html'));
+}catch{res.statusCode=400;res.end('{}')}}).listen(${port},'127.0.0.1');`)
+  writeFileSync(join(project.root_path,'index.html'),`<input id="service"><input id="model"><input id="key" type="password"><button id="configure">Configure</button><p id="ready"></p><input id="say"><button id="send">Send</button><output id="reply"></output><script>
+const el=id=>document.getElementById(id);el('reply').textContent=localStorage.getItem('reply')||'';
+el('configure').onclick=async()=>{await fetch('/configure',{method:'POST',body:JSON.stringify({endpoint:el('service').value,model:el('model').value,key:el('key').value})});el('ready').textContent='saved'};
+el('send').onclick=async()=>{const r=await(await fetch('/reply',{method:'POST',body:JSON.stringify({text:el('say').value})})).json();el('reply').textContent=r.choices?.[0]?.message.content||'missing';localStorage.setItem('reply',el('reply').textContent)};</script>`)
+})
+afterEach(()=>{if(previous===undefined)delete process.env.PROMA_HOME;else process.env.PROMA_HOME=previous;rmSync(home,{recursive:true,force:true,maxRetries:5,retryDelay:100})})
+const prepare=(signal?:AbortSignal)=>prepareAcceptanceEnvironment({root:project.root_path,features:['F-001'],requiresLlm:true,supportsControlledOutput:true,signal})
+const suite=():GuiAcceptanceSuite=>({version:1,scope_hash:'a'.repeat(64),covers:['F-001'],steps:[
+  {id:'input',kind:'fill',selector:'#say',value:'first input'}, {id:'send',kind:'click',selector:'#send'},
+  {id:'reply',kind:'expect',selector:'#reply',nonempty:true},
+]})
+const observe=(environment:Awaited<ReturnType<typeof prepare>>,rules=suite(),signal?:AbortSignal)=>observeSoftwareGui({projectId:project.project_id,root:project.root_path,
+  launch:{schema_version:2,ui:'browser',command:['node','server.cjs'],url:'http://127.0.0.1:'+port},suite:rules,temporary:join(home,'case'),environment,signal:signal??AbortSignal.timeout(30000),purpose:'acceptance',comparisons:{reopened:'reply'}})
+
+it('prepares through normal settings, keeps settings/data through restart, records actual traffic and closes its endpoint',async()=>{
+  const env=await prepare(),rules=suite();rules.steps.push({id:'restart',kind:'restart'},{id:'reopened',kind:'expect',selector:'#reply',nonempty:true},
+    {id:'second-input',kind:'fill',selector:'#say',value:'second input'},{id:'second-send',kind:'click',selector:'#send'},{id:'second-reply',kind:'expect',selector:'#reply',nonempty:true})
+  let endpoint=''
+  try{
+    const result=await observe(env,rules);expect(result.status,JSON.stringify(result)).toBe('passed')
+    const evidence=env.evidence();expect(evidence).toMatchObject({mode:'controlled_service',readiness:'ready',external_model_effects:'unverified'})
+    expect(evidence.requests.filter(row=>row.phase==='case'&&row.valid)).toHaveLength(2)
+    const config=JSON.parse(readFileSync(join(home,'case/data/settings.json'),'utf8'));endpoint=config.endpoint
+    expect(JSON.stringify(evidence)).not.toContain(config.key)
+    expect(JSON.stringify(evidence)).not.toContain('first input')
+    expect(result.steps.find(row=>row.id==='reopened')?.actual).toBe(result.steps.find(row=>row.id==='reply')?.actual)
+  } finally {await env.close();await env.close()}
+  await expect(fetch(endpoint)).rejects.toThrow()
+},45000)
+it('does not accept a static nonempty reply without actually calling the prepared service',async()=>{
+  const html=readFileSync(join(project.root_path,'index.html'),'utf8')
+  writeFileSync(join(project.root_path,'index.html'),html.replace("const r=await(await fetch('/reply',{method:'POST',body:JSON.stringify({text:el('say').value})})).json();", "const r={choices:[{message:{content:'fabricated reply'}}]};"))
+  const env=await prepare()
+  try{const result=await observe(env);expect(result.status).toBe('unverified');expect(result.error).toContain('REQUEST_NOT_OBSERVED')}finally{await env.close()}
+},35000)
+it('blocks missing settings or unsupported model-content expectations before executing a business case',async()=>{
+  const llm=spec();delete (llm as {settings?:unknown}).settings;writeFileSync(join(project.root_path,'CORE_CHECK.json'),JSON.stringify({llm}))
+  await expect(prepare()).rejects.toThrow('SETTINGS_REQUIRED')
+  await expect(prepareAcceptanceEnvironment({root:project.root_path,features:['F-001'],requiresLlm:true,supportsControlledOutput:false})).rejects.toThrow('EXTERNAL_ORACLE_REQUIRED')
+  const diagnosis=verificationFailure({status:'unverified',summary:'environment',independent:{status:'unverified',case_results:[{id:'case',status:'unverified',kind:'environment',steps:[],error:'ACCEPTANCE_ENVIRONMENT_SETTINGS_REQUIRED'}]}} as never)
+  expect(diagnosis?.category).toBe('environment');expect(diagnosis?.code).toBe('ACCEPTANCE_ENVIRONMENT_SETTINGS_REQUIRED')
+  expect(diagnosis?.next_action).toEqual({tool:'read_production_context',arguments:{topic:'ai-service'}})
+})
+it('marks failed setup as unverified without running frozen assertions or creating service observations',async()=>{
+  writeFileSync(join(project.root_path,'CORE_CHECK.json'),JSON.stringify({llm:{...spec(),settings:{...settings,save:'#does-not-exist'}}}))
+  const env=await prepare()
+  try{const result=await observe(env);expect(result.status).toBe('unverified');expect(result.error).toContain('SETUP_FAILED');expect(result.steps).toEqual([]);expect(env.evidence().readiness).toBe('blocked')}finally{await env.close()}
+},35000)
+it('cancellation tears down the service lease and cannot produce passed evidence',async()=>{
+  const controller=new AbortController(),env=await prepare(controller.signal)
+  const result=observe(env,suite(),controller.signal);setTimeout(()=>controller.abort(),100)
+  await expect(result).rejects.toThrow();await env.close()
+  expect(env.evidence().requests).toEqual([])
+},35000)
+it.each(['openai-chat','anthropic-messages'])('isolates service credentials and teardown for %s leases',async protocol=>{
+  writeFileSync(join(project.root_path,'CORE_CHECK.json'),JSON.stringify({llm:spec(protocol)}))
+  const first=await prepare(),second=await prepare()
+  const configure=async(env:typeof first)=>{
+    const fields:Record<string,string>={}
+    await env.prepare({locator:(selector:string)=>({isVisible:async()=>true,fill:async(value:string)=>{fields[selector]=value},click:async()=>{},filter:()=>({waitFor:async()=>{}})})} as unknown as Page,0)
+    return fields
+  }
+  try{
+    const a=await configure(first),b=await configure(second)
+    expect(a['#service']).not.toBe(b['#service']);expect(a['#key']).not.toBe(b['#key'])
+    expect(first.evidence().instance_id).not.toBe(second.evidence().instance_id)
+    const send=(fields:Record<string,string>,key=fields['#key'])=>fetch(fields['#service']+(protocol==='openai-chat'?'/chat/completions':'/messages'),{
+      method:'POST',headers:{'Content-Type':'application/json',...(protocol==='openai-chat'?{Authorization:'Bearer '+key}:{'x-api-key':key,'anthropic-version':'2023-06-01'})},
+      body:JSON.stringify({model:fields['#model'],messages:[{role:'user',content:'hello'}]})})
+    expect((await send(b,a['#key'])).status).toBe(400)
+    const response=await(await send(a)).json() as any
+    first.assess([protocol==='openai-chat'?response.choices[0].message.content:response.content[0].text])
+    await first.close()
+    expect((await send(b)).status).toBe(200)
+    expect(JSON.stringify(second.evidence())).not.toContain(b['#key'])
+    expect(()=>second.assess(['fabricated'])).toThrow('REQUEST_INVALID')
+  } finally {await first.close();await second.close()}
+})

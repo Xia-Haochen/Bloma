@@ -56,6 +56,13 @@ export function awaitingUserChecks(core?: CoreVerificationResult): boolean {
       || row.verification === 'unverified' && pending.has(row.id)) === true
     && core.distribution?.status === 'passed' && (!core.llm || core.llm.status === 'passed')
 }
+/** User action is next only after independent checks have finished successfully.
+ * Missing service setup is engineering work, not a reason to ask for more audio. */
+export function awaitingAssistedAcceptance(result:SoftwareVerification|undefined):boolean {
+  return !!result?.candidate && awaitingUserChecks(result.core) && result.security?.passed===true
+    && (!result.independent||['passed','disabled'].includes(result.independent.status))
+    && !result.independent?.case_results?.some(row=>row.status==='failed')
+}
 const poisoned = new Set<string>()
 function receiptPath(projectId: string) {
   if (!/^[A-Za-z0-9_-]+$/.test(projectId)) throw Error('SOFTWARE_VERIFY_PROJECT_INVALID')
@@ -169,7 +176,9 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
       result.status = independent.status
       result.summary = independent.semantics?.ready === false ? '独立案例的预期或覆盖仍需核对。'
         : independent.status === 'failed' ? '独立验收发现实际行为未达到预期。'
-        : '独立验收未完成，请查看执行记录。'
+        : independent.case_results?.some(row=>row.kind==='environment')
+          ? '独立验收环境尚未就绪：'+(independent.error??'请准备声明的服务依赖。')
+          : '独立验收未完成，请查看执行记录。'
       if(independent.status==='failed')return result
     }
     const launch = result.launch = await runLaunchSmoke(candidate.root, { signal, allowCleanExit: candidate.launch.mode === 'command',projectId })

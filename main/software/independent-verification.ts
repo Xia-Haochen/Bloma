@@ -17,9 +17,14 @@ import { currentIndependentSemantics, independentChallengeVersion } from './inde
 import { qualityHash } from './quality-ledger'
 import { runHostSpeechProbe, type SpeechVerificationSpec } from '../desktop/speech-verification'
 import { CORE_MANIFEST_REL, type CoreVerificationResult } from '../desktop/core-verification'
+import { prepareAcceptanceEnvironment, AcceptanceEnvironmentError, type AcceptanceEnvironment, type AcceptanceEnvironmentEvidence } from './acceptance-environment'
+import { requirementCapabilities } from '../model/requirement-capabilities'
+import { isStaticGuiSelector } from './gui-selectors'
 
-export interface IndependentCaseResult { id: string; feature: string; status: 'passed' | 'failed' | 'unverified' | 'not_run'; kind: 'product_assertion' | 'product_runtime' | 'semantic' | 'adapter' | 'environment' | 'none'; expected_source?: string; issues?: string[]; steps: Array<{ id: string; passed: boolean; actual?: unknown }>; error?: string; evidence_warnings?:string[] }
+export interface IndependentCaseResult { id: string; feature: string; status: 'passed' | 'failed' | 'unverified' | 'not_run'; kind: 'product_assertion' | 'product_runtime' | 'semantic' | 'adapter' | 'environment' | 'none'; expected_source?: string; issues?: string[]; steps: Array<{ id: string; passed: boolean; actual?: unknown }>; error?: string; evidence_warnings?:string[]; environment?: AcceptanceEnvironmentEvidence }
 export interface IndependentVerification { status: 'disabled' | 'passed' | 'failed' | 'unverified'; semantics?: IndependentSemantics; case_results?: IndependentCaseResult[]; design_version?: string; design_digest?: string
+  execution_scope?: 'registered_cases'|'registered_cases_with_controlled_service'
+  external_model_effects?: 'not_required'|'unverified'
   error?: string; diagnostic?: { id: string; expected: string; actual: unknown }; report_path?: string }
 
 export function independentAdapterVersion(root:string){
@@ -45,8 +50,7 @@ export function independentSuite(projectId:string,root:string,caseIds?:string[])
   if(adapter.version!==1||adapter.design_digest!==record.digest||Object.keys(adapter).some(key=>!['version','design_digest','controls'].includes(key))||!adapter.controls||Array.isArray(adapter.controls))throw Error('INDEPENDENT_ADAPTER_INVALID')
   const allowed=new Set(record.contract.cases.flatMap(item=>item.steps.flatMap(step=>'control'in step?[step.control]:[])))
   const controls=new Set(selected.flatMap(item=>item.steps.flatMap(step=>'control'in step?[step.control]:[])))
-  if(Object.keys(adapter.controls).some(key=>!allowed.has(key))||[...controls].some(key=>typeof adapter.controls[key]!=='string'||!adapter.controls[key]||adapter.controls[key].length>512
-    ||/>>|(?:javascript|xpath|internal|text)\s*=|:has-text\(|\{|\}/i.test(adapter.controls[key])))throw Error('INDEPENDENT_ADAPTER_STATIC_CSS_REQUIRED')
+  if(Object.keys(adapter.controls).some(key=>!allowed.has(key))||[...controls].some(key=>!isStaticGuiSelector(adapter.controls[key])))throw Error('INDEPENDENT_ADAPTER_STATIC_CSS_REQUIRED')
   return {version:1,scope_hash:record.scope,design_hash:record.design_hash,covers:[...new Set(selected.map(item=>item.feature))],steps:selected.flatMap(item=>item.steps.map((step,index)=>{
     const id=`${item.id}-${index}`
     if(step.kind==='restart')return{id,kind:'restart' as const}
@@ -102,25 +106,42 @@ export async function verifyIndependentDesign(projectId:string,candidate:Softwar
       let observed:Awaited<ReturnType<typeof observeSoftwareGui>>
       const comparisons = Object.fromEntries(item.steps.flatMap((step, index) =>
         step.kind === 'expect' && step.oracle?.kind === 'observed' ? [[`${item.id}-${index}`, `${item.id}-${step.oracle.step}`]] : []))
-      try{observed=await observeSoftwareGui({projectId,root:candidate.root,launch:candidate.launch,suite,temporary,screenshotDir:join(base,'evidence'),signal,purpose:'acceptance',comparisons})}
-      finally{const target=realpathSync(temporary);if(dirname(target)!==realpathSync(tmpdir())||!basename(target).startsWith('bloma-b-'))throw Error('INDEPENDENT_CLEANUP_PATH_INVALID');rmSync(target,{recursive:true,force:true,maxRetries:5,retryDelay:100})}
+      let environment:AcceptanceEnvironment|undefined,environmentEvidence:AcceptanceEnvironmentEvidence|undefined
+      try {
+        const features=[item.feature,...(item.related??[]).map(row=>row.feature)]
+        environment=await prepareAcceptanceEnvironment({root:candidate.root,features,signal,
+          requiresLlm:brief.requirements.some(row=>features.includes(row.id)&&requirementCapabilities(row).has('llm')),
+          supportsControlledOutput:item.steps.every(step=>step.kind!=='expect'||['nonempty','observed'].includes(step.oracle?.kind??''))})
+        observed=await observeSoftwareGui({projectId,root:candidate.root,launch:candidate.launch,suite,temporary,screenshotDir:join(base,'evidence'),signal,purpose:'acceptance',comparisons,environment})
+        environmentEvidence=environment.evidence()
+      } finally {
+        try { await environment?.close() } finally {
+          const target=realpathSync(temporary);if(dirname(target)!==realpathSync(tmpdir())||!basename(target).startsWith('bloma-b-'))throw Error('INDEPENDENT_CLEANUP_PATH_INVALID');rmSync(target,{recursive:true,force:true,maxRetries:5,retryDelay:100})
+        }
+      }
       const failed=observed.steps.find(s=>!s.passed),step=suite.steps.find(s=>s.id===failed?.id)
       const assertion=observed.status==='failed'&&step?.kind==='expect'&&observed.error?.startsWith(`GUI_ASSERTION_FAILED:${step.id}`)
       const runtime=observed.failure_kind==='runtime'
+      const environmentBlocked=observed.error?.startsWith('ACCEPTANCE_ENVIRONMENT_')===true
       const status=observed.status==='passed'?'passed':assertion||runtime?'failed':'unverified'
-      cases.push({id:item.id,feature:item.feature,status,kind:status==='passed'?'none':runtime?'product_runtime':assertion?'product_assertion':failed?'adapter':'environment',steps:observed.steps,error:observed.error,evidence_warnings:observed.evidence_warnings,expected_source:trustedAcceptance(brief,requirement)})
+      cases.push({id:item.id,feature:item.feature,status,kind:status==='passed'?'none':environmentBlocked?'environment':runtime?'product_runtime':assertion?'product_assertion':failed?'adapter':'environment',steps:observed.steps,error:observed.error,evidence_warnings:observed.evidence_warnings,expected_source:trustedAcceptance(brief,requirement),environment:environmentEvidence})
       if (failed && !diagnostic) {
         const source = comparisons[failed.id]
         const expected = source ? observed.steps.find(row => row.id === source && row.passed)?.actual
           : step?.kind === 'expect' ? step.equals ?? '非空输出' : '冻结的独立业务步骤'
         diagnostic = {id:failed.id,expected:String(expected ?? '缺少先前有效观察'),actual:failed.actual}
       }
-    }catch(error){signal?.throwIfAborted();cases.push({id:item.id,feature:item.feature,status:'unverified',kind:'adapter',steps:[],error:String(error),expected_source:trustedAcceptance(brief,requirement)})}
+    }catch(error){signal?.throwIfAborted();cases.push({id:item.id,feature:item.feature,status:'unverified',kind:error instanceof AcceptanceEnvironmentError?'environment':'adapter',steps:[],error:String(error),expected_source:trustedAcceptance(brief,requirement)})}
     progress()
   }
   const result:IndependentVerification={status:cases.some(c=>c.status==='failed')?'failed':semantics.ready&&cases.every(c=>c.status==='passed')?'passed':'unverified',semantics,case_results:cases,design_digest:record.digest,design_version:designVersion,diagnostic,report_path:join(directory,'report.json')}
+  const controlled=cases.some(row=>row.environment?.mode==='controlled_service')
+  result.execution_scope=controlled?'registered_cases_with_controlled_service':'registered_cases'
+  result.external_model_effects=controlled||brief.requirements.some(row=>requirementCapabilities(row).has('llm'))
+    ||cases.some(row=>row.error?.includes('ACCEPTANCE_ENVIRONMENT_'))?'unverified':'not_required'
   if(independentAdapterVersion(candidate.root)!==version||independentDesignVersion(projectId)!==designVersion||independentChallengeVersion(projectId)!==challengeVersion||prdScopeFingerprint(readPrdBackplane(projectId))!==record.scope)throw Error('INDEPENDENT_INPUT_CHANGED')
-  if(result.status==='unverified')result.error=!semantics.ready?'INDEPENDENT_SEMANTICS_UNRESOLVED: 预期或覆盖声明有争议，不是已确认产品缺陷':'INDEPENDENT_EXECUTION_UNVERIFIED: 检查适配器或执行环境'
+  if(result.status==='unverified')result.error=!semantics.ready?'INDEPENDENT_SEMANTICS_UNRESOLVED: 预期或覆盖声明有争议，不是已确认产品缺陷'
+    :cases.find(row=>row.kind==='environment')?.error??'INDEPENDENT_EXECUTION_UNVERIFIED: 检查适配器或执行环境'
   writeTextFileAtomic(result.report_path!,JSON.stringify({state:'complete',result,candidate_id:candidate.id,candidate_source:candidate.source.digest,adapter:version,contract_hash:qualityHash(record.contract),at:new Date().toISOString()}))
   return result
 }

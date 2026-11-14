@@ -114,6 +114,7 @@ export function buildProductionContextTool(projectId: string): AgentLoopTool {
         }
         if(input.topic==='independent-design')return{output:JSON.stringify({enabled:readIndependentPolicy(projectId)?.enabled??false,design:readIndependentDesign(projectId)??{status:'disabled',reason:'未启用第二模型验收设计；当前为单模型验收。'},
           semantics:readIndependentDesign(projectId)?.contract?currentIndependentSemantics(projectId,readIndependentDesign(projectId)!.contract!):undefined,
+          environment:'依赖模型的GUI案例先由宿主准备隔离受控服务。CORE_CHECK.llm.settings绑定正常设置入口，字段契约见read_production_context(ai-service)；配置不就绪属于环境未验证，不让用户补验收标准。冻结案例不含配置步骤，重开不重新配置，受控服务结果不证明真实供应商或模型效果。',
           adapter:'启用时，在项目根INDEPENDENT_ADAPTER.json提供{version:1,design_digest:冻结设计digest,controls:{逻辑控件名:静态CSS选择器}}。不得包含输入、预期或脚本；宿主按冻结业务设计编排并执行，B的文字不能签发PASS。'})}
         if(input.topic==='verification-speech'&&isSoftwareProject(projectId))return{output:JSON.stringify({protocol:SPEECH_VERIFICATION_BRIEF,
           prepare:'先inspect_software_capabilities；准备用prepare_software_capability({capability:"speech"})，缺资源可显式download_models:true下载固定公开资产；普通pip不会物化平台组件。',

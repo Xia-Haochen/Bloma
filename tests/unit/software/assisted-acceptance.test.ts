@@ -59,9 +59,9 @@ afterEach(async()=>{
 })
 const start=()=>assistedAcceptanceAction({request_id:'start',project_id:id,action:'start',candidate_id:candidate.id})
 const pass={status:'passed',microphone:{status:'passed',rms:.1},real_decode_calls:4}
-it('does not offer user recording when independent acceptance has a failed business observation',async()=>{
+it.each(['failed','unverified'] as const)('does not offer user recording when independent acceptance is %s',async status=>{
   const file=join(home,'software-verification',id+'.json'),saved=JSON.parse(readFileSync(file,'utf8'))
-  saved.result.independent={status:'failed',case_results:[{status:'failed'}]}
+  saved.result.independent={status,case_results:[{status}]}
   saved.result_hash=createHash('sha256').update(JSON.stringify(saved.result)).digest('hex')
   writeFileSync(file,JSON.stringify(saved))
   expect(assistedAcceptanceView(id)).toBeNull()

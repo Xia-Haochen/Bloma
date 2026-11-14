@@ -10,7 +10,7 @@ import { prdScopeFingerprint } from '../project/requirement-contract'
 import type { SpeechVerificationResult } from '../desktop/speech-verification'
 import { microphoneAcceptance } from './microphone-acceptance'
 import { readSoftwareCandidate, verifyReleaseSource, promoteSoftwareRelease, type SoftwareRelease } from './release-store'
-import { verifySoftwareCandidate, verificationInputs, awaitingUserChecks, type SoftwareVerification } from './verification'
+import { verifySoftwareCandidate, verificationInputs, awaitingUserChecks, awaitingAssistedAcceptance as offersUserCheck, type SoftwareVerification } from './verification'
 import { deliveryQualityGate } from './delivery-qualification'
 import { saveSoftwareRunState } from './run-state'
 import { isLongtermSoftware, stageLongtermMilestone } from './longterm-state'
@@ -90,10 +90,6 @@ function startOwned(attempt:Attempt,work:(signal:AbortSignal)=>Promise<void>) {
       } finally {live.delete(id);unregisterBackgroundRun(owner,backgroundId)}
     }
   })().catch(error=>console.error('[assisted-acceptance] result persistence failed',String(error)))
-}
-function offersUserCheck(report:SoftwareVerification|undefined):boolean {
-  return !!report?.candidate && awaitingUserChecks(report.core) && report.security?.passed===true
-    && report.independent?.status!=='failed' && !report.independent?.case_results?.some(row=>row.status==='failed')
 }
 export async function pendingAssistedCandidate(id:string, requestId?:string) {
   const report=receipt(id)

@@ -15,6 +15,7 @@ import type { ChildProcess } from 'node:child_process'
 import { captureDiagnosticScreenshot } from './ui-observation'
 
 import { electronEntry } from './electron-entry'
+import type { AcceptanceEnvironment } from './acceptance-environment'
 export { electronEntry } from './electron-entry'
 
 async function selectGuiOption(locator: Locator, choice: { value?: string; label?: string }, allowLabelFallback = false): Promise<string> {
@@ -116,7 +117,7 @@ export async function observeGuiStep(page: Page, step: GuiAcceptanceSuite['steps
 
 /** DOM actions are host-owned and run against the normal application. No product
  * self-test mode, injected business assertions or self-reported PASS scripts. */
-export async function observeSoftwareGui(input: { projectId: string; root: string; launch: LaunchDeclaration; suite: GuiAcceptanceSuite; temporary: string; signal?: AbortSignal; screenshotDir?: string; purpose?:'acceptance'|'development'; comparisons?: Record<string,string> }): Promise<Pick<GuiAcceptanceResult, 'status' | 'steps' | 'error' | 'failure_kind' | 'evidence_warnings'>> {
+export async function observeSoftwareGui(input: { projectId: string; root: string; launch: LaunchDeclaration; suite: GuiAcceptanceSuite; temporary: string; signal?: AbortSignal; screenshotDir?: string; purpose?:'acceptance'|'development'; comparisons?: Record<string,string>; environment?: AcceptanceEnvironment }): Promise<Pick<GuiAcceptanceResult, 'status' | 'steps' | 'error' | 'failure_kind' | 'evidence_warnings'>> {
   const { _electron, chromium } = await import('playwright')
   const result: Pick<GuiAcceptanceResult, 'status' | 'steps' | 'error' | 'failure_kind' | 'evidence_warnings'> = { status: 'unverified', steps: [], evidence_warnings: [] }
   const data = join(input.temporary, 'data'), userData = join(input.temporary, 'user-data'), screenshotDir = input.screenshotDir ?? join(input.temporary, 'evidence')
@@ -149,6 +150,9 @@ export async function observeSoftwareGui(input: { projectId: string; root: strin
         await page.goto(input.launch.url, { waitUntil: 'domcontentloaded', timeout: 15000 })
       } else throw new Error('SOFTWARE_GUI_ADAPTER_UNSUPPORTED')
       page.setDefaultTimeout(4000)
+      // Dependency setup precedes frozen business steps and never contributes
+      // synthetic assertion results. The caller owns the lease across restarts.
+      await input.environment?.prepare(page,index)
       const checkRuntime = async () => {
         const errors = await page.pageErrors()
         if (errors.length) {
@@ -191,6 +195,10 @@ export async function observeSoftwareGui(input: { projectId: string; root: strin
       if (input.signal?.aborted) throw error
       result.status = result.failure_kind==='runtime'?'failed':'unverified'; result.error = error instanceof Error ? error.message : String(error); return result
     } finally { input.signal?.removeEventListener('abort', abort); await close() }
+  }
+  if (result.status === 'passed') {
+    try { input.environment?.assess(result.steps.filter(step=>step.passed).map(step=>step.actual)) }
+    catch(error) { input.signal?.throwIfAborted(); result.status='unverified';result.error=error instanceof Error?error.message:String(error) }
   }
   return result
 }
