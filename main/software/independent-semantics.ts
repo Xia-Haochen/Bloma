@@ -107,9 +107,8 @@ export function parseIndependentCases(textValue: string, features: string[]): In
       throw new IndependentCaseFormatError(`INDEPENDENT_CASE_INVALID: ${path} 的 id、feature 或字段不合法`)
     }
     const speechProbe = Array.isArray(item.steps) && item.steps.length === 1 && item.steps[0]?.kind === 'speech_probe'
-    if (!Array.isArray(item.steps) || !item.steps.length || item.steps.length > 32 || !speechProbe &&
-      (!item.steps.some(s => s?.kind === 'expect') || !item.steps.some(s => s?.kind === 'click' || s?.kind === 'fill'))) {
-      throw new IndependentCaseFormatError(`INDEPENDENT_CASE_INVALID: ${path}.steps 须包含操作和断言`)
+    if (!Array.isArray(item.steps) || !item.steps.length || item.steps.length > 32) {
+      throw new IndependentCaseFormatError(`INDEPENDENT_CASE_INVALID: ${path}.steps 须为含 1 至 32 个步骤的数组`)
     }
     if (item.basis !== undefined && (!item.basis || !keys(item.basis, ['requirement_hash', 'expected_source']) || !text(item.basis.requirement_hash, 64) || !text(item.basis.expected_source))) throw new IndependentCaseFormatError(`INDEPENDENT_BASIS_INVALID: ${path}.basis`)
     if(item.related!==undefined&&(!Array.isArray(item.related)||item.related.length>8||new Set(item.related.map(r=>r?.feature)).size!==item.related.length||item.related.some(r=>!r||!keys(r,['feature','requirement_hash','expected_source'])||r.feature===item.feature||!features.includes(r.feature)||!text(r.requirement_hash,64)||!text(r.expected_source))))throw new IndependentCaseFormatError(`INDEPENDENT_RELATED_INVALID: ${path}.related`)
@@ -127,6 +126,14 @@ export function parseIndependentCases(textValue: string, features: string[]): In
       if (step.kind === 'click' && step.intent !== undefined && !['submit', 'cancel'].includes(step.intent)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.intent`)
       if (step.kind === 'expect' && step.oracle !== undefined) {
         validateOracle(step.oracle, `${stepPath}.oracle`)
+      }
+    }
+    if (!speechProbe) {
+      if (!item.steps.some(step => step.kind === 'click' || step.kind === 'fill')) {
+        throw new IndependentCaseFormatError(`INDEPENDENT_CASE_INVALID: ${path}.steps 缺少操作，至少提供一个 kind 为 click 或 fill 的步骤`)
+      }
+      if (!item.steps.some(step => step.kind === 'expect')) {
+        throw new IndependentCaseFormatError(`INDEPENDENT_CASE_INVALID: ${path}.steps 缺少断言，至少提供一个 kind 为 expect 的步骤`)
       }
     }
   }
@@ -194,7 +201,8 @@ export function assessIndependentCases(brief: PrdBackplane, contract: Independen
 }
 export const INDEPENDENT_SEMANTICS_INSTRUCTIONS = [
   '返回严格 JSON {cases:[{id,feature,basis:{requirement_hash,expected_source},coverage:[normal|multi_object|exception|cancel|reopen],steps}],coverage_notes:[{feature,category,disposition:not_applicable|unresolved,reason,source}]}。basis 逐字引用确认 expected 与 requirement_hash。',
-  '步骤仅支持 fill（control、value、可选 subject）、click（control、可选 subject、可选 intent: submit 或 cancel）、expect（control、equals、可选 subject、oracle）、restart。每个步骤用 kind 指定类型。control 是逻辑控件名，不是选择器。',
+  '普通 GUI 案例的 steps 必须同时有 click 或 fill 操作，以及 expect 断言。即使预期需要澄清，也请保留触发该行为的操作，并在 expect 中用 unresolved。步骤用 kind 指定类型，control 是逻辑控件名。fill 携带 value，click 可带 intent: submit 或 cancel，expect 携带 equals 和 oracle，可用 restart 测试重新打开后的结果。',
+  '完整的普通步骤数组示例：[{"kind":"fill","control":"name","value":"Alice"},{"kind":"click","control":"save"},{"kind":"expect","control":"result","equals":"Alice","oracle":{"kind":"input","step":0}}]。',
   '每个 expect 的 oracle 是一个 JSON 对象，必须含 kind。以下每行是完整步骤示例。只使用对应 oracle 示例中的字段，值须根据当前确认资料填写。',
   '{"kind":"expect","control":"result","equals":"Alice","oracle":{"kind":"input","step":0}}',
   'input 引用同对象之前的 fill。step 是从 0 开始的整数步骤序号，equals 等于该输入原值。',

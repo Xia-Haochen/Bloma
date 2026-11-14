@@ -36,13 +36,13 @@ const query:SDKQuery=async function*(prompt,options){calls++;expect(prompt).not.
   yield{type:'result',subtype:'success',usage:{input_tokens:100,output_tokens:100}}
 }
 function input(q=query){return{projectId:project.project_id,sessionId:'s',query:q,primaryEnv:{ANTHROPIC_MODEL:'model-a'},signal:new AbortController().signal,resolveRoute:route}}
-function sharedInput(response = () => JSON.stringify(contract)){
+function sharedInput(response = (_prompt: string) => JSON.stringify(contract)){
  const sharedQuery:SDKQuery=async function*(prompt,options){
   calls++;expect(prompt).not.toContain('IMPLEMENTATION_SENTINEL');expect(options.tools).toBeUndefined()
   expect(options.env.ANTHROPIC_MODEL).toBe('model-a');expect(options.monetaryPolicyPath).toBeUndefined()
   expect(options.maxTokens).toBe(8192)
   options.requestGuard?.({url:'https://a.invalid/v1/messages',body:JSON.stringify({model:'model-a'})})
-  yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:response()}]}}
+  yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:response(prompt)}]}}
   yield{type:'result',subtype:'success',usage:{input_tokens:100,output_tokens:100}}
  }
  return {...input(sharedQuery),primaryEnv:{ANTHROPIC_MODEL:'model-a',ANTHROPIC_BASE_URL:'https://a.invalid'},maxTokens:8192}
@@ -166,7 +166,11 @@ it('retains a safe field diagnostic for invalid B output and freezes only a vali
   expect(failure.contract).toBeUndefined()
   expect(readIndependentDesign(project.project_id)?.reason).not.toContain(step.control)
   expect(calls).toBe(1)
-  const resumed = await prepareIndependentDesign(sharedInput())
+  const resumed = await prepareIndependentDesign(sharedInput(prompt => {
+    expect(JSON.parse(prompt).previous_format_issue).toContain('cases[0].steps[1].control')
+    expect(prompt).not.toContain(step.control)
+    return JSON.stringify(contract)
+  }))
   expect(resumed).toMatchObject({status:'frozen', contract})
   expect(calls).toBe(2)
 })
