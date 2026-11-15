@@ -151,10 +151,17 @@ export function createQualityReview(projectId: string, parent: string, policy: R
     if(review?.status!=='complete')throw new ModelRequestRefusal('QUALITY_COVERAGE_REVIEW_INCOMPLETE')
     // Coverage discovers work; it never replaces execution or candidate C/V.
   }
-  const system = (child: string) => children.has(child)
-    ? readQualityLedger(projectId).reviews.find(r => r.id === children.get(child))?.kind === 'visual'
+  const system = (child: string) => {
+    const id = children.get(child)
+    if (!id) return
+    const review = readQualityLedger(projectId).reviews.find(r => r.id === id)
+    if (review?.kind !== 'visual' && review?.purpose === 'binding') {
+      return '你是独立只读代码/数据审阅C。本次只判断 binding_work 中的疑点有没有注册案例覆盖。先读取 read_quality_review 和相关冻结测试，核对触发及失败断言；仅为确实覆盖的旧疑点提交 resolutions。没有匹配案例时省略该项，保留缺口，仍通过 submit_quality_findings 完成审阅。不改文件、不执行命令。完整代码审阅另有步骤。'
+    }
+    return review?.kind === 'visual'
       ? '你是独立视觉/交互审阅V。只看宿主授权的当前候选真实图片、确认设计、同次DOM/操作事实；不继承制作方或C的结论，不读实现。先read_quality_review和view_quality_image；实际核对图片后用submit_quality_findings提交具体可见观察及疑点，不能用OCR/文件名/DOM替代看图，不能自报PASS或关闭问题。没有明确的业务预期保留争议；只读，不运行命令、不改文件。'
-      : `你是独立只读代码/数据审阅C。项目根：${findProject(projectId).root_path}。业务范围以read_quality_review返回的已确认目标为依据；同时核对宿主提供的工程设计与工程底线。实现和设计是待查资料，不能当成已通过结论。定位具体触发、预期来源和证据，提交finding而非PASS。不看制作方自评，不改代码/预期，不运行命令。无法确定的业务规则保留争议。必须调用submit_quality_findings后才结束。` : undefined
+      : `你是独立只读代码/数据审阅C。项目根：${findProject(projectId).root_path}。业务范围以read_quality_review返回的已确认目标为依据；同时核对宿主提供的工程设计与工程底线。实现和设计是待查资料，不能当成已通过结论。定位具体触发、预期来源和证据，提交finding而非PASS。不看制作方自评，不改代码/预期，不运行命令。无法确定的业务规则保留争议。必须调用submit_quality_findings后才结束。`
+  }
   const childProtocol: AgentLoopTool[] = [{ name: 'read_quality_review', description: '读取本审阅的候选、确认需求及冻结测试索引。绑定case_name前核对冻结合同和相关测试正文；test_file只接受索引中的key；interaction_finding_id读取对应历史交互trace（不是当前图片或PASS）；可用offset分页。', input_schema: { type: 'object', additionalProperties: false, properties: {test_file:{type:'string'},interaction_finding_id:{type:'string'},offset:{type:'integer',minimum:0}} },
     execute: async (_input, ctx) => {
       ctx.signal.throwIfAborted()
@@ -177,11 +184,28 @@ export function createQualityReview(projectId: string, parent: string, policy: R
           next:(offset as number)+16000<text.length?{test_file:file.key,offset:(offset as number)+16000}:undefined,authority:'frozen_test_input_not_execution_or_current_image'})}
       }
       const brief = readPrdBackplane(projectId)
+      const applicable = applicableQualityLedger(projectId)
+      const work=qualityCloseout(applicable,review.identity,undefined,rulesVersion(projectId),independentDesignVersion(projectId))
+      const bindingWork = work.binding_findings.filter(id=>(ledger.findings.find(f=>f.id===id)?.review_kind??'code')===(review.kind??'code'))
+      materialsRead.add(ctx.sessionId)
+      if (review.purpose === 'binding' && review.kind !== 'visual') {
+        const findings = applicable.findings.filter(finding => bindingWork.includes(finding.id))
+        const requirements = new Set(findings.map(finding => finding.requirement))
+        return { output: JSON.stringify({
+          review:{id:review.id,purpose:review.purpose,identity:review.identity,rules:review.rules},
+          binding_work:bindingWork,root:findProject(projectId).root_path,goal:brief.positioning,
+          unresolved_findings:findings.map(finding=>({...finding,checks:finding.checks.slice(-1)})),
+          frozen_test_files:testSources.map(({path,...entry})=>entry),
+          test_coverage:{scope:'registered_cases_for_binding',cases:registeredQualityCases(projectId).filter(item=>item.requirements.some(id=>requirements.has(id))),
+            contract_changes:testCorrectionChanges(projectId),
+            authority:'核对冻结案例的具体触发和断言能否区分所报错误实现；同一需求编号不能证明覆盖。'},
+          requirements:brief.requirements.filter(row=>requirements.has(row.id)).map(row=>({id:row.id,description:row.description,expected_source:trustedAcceptance(brief,row)})),
+          resolution_protocol:'只有实际覆盖才在 resolutions 中填写 finding_id、case_name 和具体依据。没有匹配则省略，提交后让制作流程补齐案例。绑定完成后仍由宿主实际执行。',
+        }) }
+      }
       const visual = review.visual ? readVisualMaterial(review.visual, hash(review.identity)).manifest : undefined
       const ux = readConfirmedUxBinding(projectId, brief)
-      materialsRead.add(ctx.sessionId)
-      const work=qualityCloseout(applicableQualityLedger(projectId),review.identity,undefined,rulesVersion(projectId),independentDesignVersion(projectId))
-      return { output: JSON.stringify({ review, binding_work:work.binding_findings.filter(id=>(ledger.findings.find(f=>f.id===id)?.review_kind??'code')===(review.kind??'code')), root: findProject(projectId).root_path, goal: brief.positioning, source_statements:brief.lean_brief?.intent_sources??brief.requirements_model?.sources, constraints: brief.constraints, assumptions: brief.assumptions, confirmed_ux: ux, design_policy: productDesignPolicy(brief),
+      return { output: JSON.stringify({ review, binding_work:bindingWork, root: findProject(projectId).root_path, goal: brief.positioning, source_statements:brief.lean_brief?.intent_sources??brief.requirements_model?.sources, constraints: brief.constraints, assumptions: brief.assumptions, confirmed_ux: ux, design_policy: productDesignPolicy(brief),
         frozen_test_files:testSources.map(({path,...entry})=>entry),test_coverage:{scope:review.purpose==='coverage'?'available_cumulative_slice':'complete_registered_suite',cases:registeredQualityCases(projectId,review.purpose==='coverage'),workflows:brief.requirements_model?.workflows,requirements:brief.requirements,contract_changes:testCorrectionChanges(projectId,review.purpose==='coverage'),authority:'派生阅读投影；核对前置状态、触发、可见结果及持久状态，断言须能区分所报错误实现；共有词或F编号不证明覆盖。修订差异只指引阅读，不继承旧绑定或PASS。'},
         host_observation:review.observation, engineering_advice:engineeringAdvice?.(), confirmed_design: review.kind === 'visual' && ux?.html_path ? { html: readFileSync(join(findProject(projectId).root_path, ux.html_path), 'utf8').slice(0, 64000), bounded_characters: 64000 } : undefined,
         unresolved_findings: applicableQualityLedger(projectId).findings.filter(f=>findingNeedsClosure(f,review.identity,rulesVersion(projectId),independentDesignVersion(projectId))||findingNeedsInvestigation(f,review.identity,rulesVersion(projectId),independentDesignVersion(projectId))).map(f=>({...f,checks:f.checks.slice(-1)})), resolution_protocol:'旧疑点若被实际证据排除，在resolutions提交finding_id和具体触发/观察依据。普通案例通过不足以排除疑点；已确认失败不得用审阅关闭。', review_focus: review.kind === 'visual' ? undefined : reviewChangeContext(ledger, review.identity, review.source_manifest, review.id), intent: brief.requirements_model, intent_review_protocol: review.kind === 'visual' ? 'V仅按当前真实图片和同次操作事实检查布局/交互/内容/覆盖范围；不得声称核对全部长期业务。核心体验上下文用于识别偏题，具体疑点提交finding。截图可能保留用户或测试修改后的状态，当前数值不等于出厂默认；明确区分所见事实与推断。可自定义设置按已确认范围判断，不擅自把默认偏好变成禁止修改的约束。无需提交intent_observations。' : '有experience时逐项提交intent_observations:{commitment_id,status:supported|concern|unverified,evidence,limitations}；核对禁止替代。supported只是审阅意见，不代表真实运行通过。concern须提供finding_indices，填本次findings数组中对应问题的0起始索引，只关联真正影响该体验的问题；证据不足保留unverified。', visual_facts: visual, visual_checklist: review.kind === 'visual' ? visualReviewChecklist : undefined,
@@ -230,8 +254,9 @@ export function createQualityReview(projectId: string, parent: string, policy: R
         if(case_name!==undefined){if(typeof case_name!=='string'||!case_name.trim()||case_name.length>1000)throw Error('QUALITY_CASE_BINDING_INVALID');bindings.push({finding_id:findingId,case_name,evidence:String(row.reproduction)+'\n'+String(row.evidence)})}
         return { ...finding, requires_execution:requires_execution!==false, id: findingId, review: review.id, review_kind: review.kind ?? 'code', visual_material_hash: review.visual?.manifest_hash, identity: review.identity, disposition, checks: [] } as unknown as QualityFinding
       })
-      const intent = validateIntentObservations(input.intent_observations, review.kind === 'visual' ? undefined : brief.requirements_model?.experience)
-      review.intent_observations = bindIntentFindings(intent,brief.requirements_model?.experience,rows)
+      const experience = review.kind === 'visual' || review.purpose === 'binding' ? undefined : brief.requirements_model?.experience
+      const intent = validateIntentObservations(input.intent_observations,experience)
+      review.intent_observations = bindIntentFindings(intent,experience,rows)
       const resolutions=input.resolutions??[]
       if(!Array.isArray(resolutions)||resolutions.length>32)throw Error('QUALITY_RESOLUTION_INVALID')
       const resolvedIds=new Set<string>()
@@ -332,16 +357,20 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       return { output: JSON.stringify(await begin(ctx, 'visual', input.debug_session_id as string | undefined)) }
     } },
     buildQualityFindingsTool(projectId, assertParent, () => activeRoute), check]
-  const reviewProtocol=(kind?:'code'|'visual')=>childProtocol.map(tool=>{
+  const reviewProtocol=(kind?:'code'|'visual',purpose?:ReviewPurpose)=>childProtocol.map(tool=>{
     if(!kind||tool.name!=='submit_quality_findings')return tool
     const schema=tool.input_schema as {properties:Record<string,unknown>;required?:string[]}
     const properties={...schema.properties};delete properties[kind==='visual'?'intent_observations':'visual_observations']
+    if(purpose==='binding')delete properties.intent_observations
     const required=[...(schema.required??[])]
     if(kind==='visual')required.push('visual_observations')
-    else if(readPrdBackplane(projectId).requirements_model?.experience)required.push('intent_observations')
+    else if(purpose!=='binding'&&readPrdBackplane(projectId).requirements_model?.experience)required.push('intent_observations')
     return{...tool,input_schema:{...tool.input_schema,properties,required}}
   })
-  const reviewTools = (tools: AgentLoopTool[], child?: string): AgentLoopTool[] => child && readQualityLedger(projectId).reviews.find(r => r.id === children.get(child))?.kind === 'visual' ? reviewProtocol('visual') : [...tools.filter(t => ['read_file', 'list_files', 'find', 'grep'].includes(t.name)).map(tool => ({
+  const reviewTools = (tools: AgentLoopTool[], child?: string): AgentLoopTool[] => {
+    const review = child ? readQualityLedger(projectId).reviews.find(r => r.id === children.get(child)) : undefined
+    if(review?.kind==='visual')return reviewProtocol('visual',review.purpose)
+    return [...tools.filter(t => ['read_file', 'list_files', 'find', 'grep'].includes(t.name)).map(tool => ({
     ...tool, execute: async (input: Record<string, unknown>, ctx: ToolContext) => {
       if (readQualityLedger(projectId).reviews.find(r => r.id === children.get(ctx.sessionId))?.kind === 'visual') throw Error('VISUAL_SOURCE_READ_DENIED: V只使用授权图片和操作事实')
       const review=readQualityLedger(projectId).reviews.find(r=>r.id===children.get(ctx.sessionId))
@@ -354,7 +383,8 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       if (tool.name === 'read_file' && !result.isError && children.has(ctx.sessionId)) sourceRead.add(ctx.sessionId)
       return result
     }
-  })), ...reviewProtocol(child?'code':undefined)]
+    })), ...reviewProtocol(child?'code':undefined,review?.purpose)]
+  }
   const wrapQuery = (query: SDKQuery, settleCorrections?: (signal:AbortSignal)=>Promise<void>): SDKQuery => async function* (prompt, options) {
     const route = routeIdentity(options.env,options.providerType)
     activeRoute = route

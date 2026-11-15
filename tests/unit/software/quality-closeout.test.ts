@@ -88,6 +88,15 @@ it('a later interrupted review prevents an older completion from directing the m
  expect(qualityCloseout(facts,identity,{code:'investigation',message:'仍需审阅'},'rules').next_tool).toBe('start_quality_review')
 })
 
+it('keeps a completed code binding review current when only live observations change',()=>{
+ const facts=ledger([finding()])
+ facts.reviews.push({id:'binding',kind:'code',purpose:'binding',rules:'rules',identity,status:'complete',at:'',
+  observation:{digest:'old observation',ui:{},steps:[],logs:[]}})
+ const block={code:'investigation' as const,message:'需要补足对应案例'}
+ expect(qualityCloseout(facts,identity,block,'rules',undefined,'new observation').next_tool).toBe('inspect_app')
+ expect(qualityCloseout(facts,{...identity,source:'changed'},block,'rules',undefined,'new observation').next_tool).toBe('start_quality_review')
+})
+
 it('never treats legacy prose as runtime evidence and exposes the missing case obligation',()=>{
  const f=finding({reviewed:{identity,review:'r',evidence:'code changed'}})
  const facts=ledger([f]);facts.reviews.push({id:'r',kind:'code',purpose:'binding',identity,status:'complete',at:''})

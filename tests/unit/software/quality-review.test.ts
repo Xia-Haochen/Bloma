@@ -559,6 +559,8 @@ it('one current binding review settles several same-case suspicions but cannot c
  register(async function*(_prompt,options){
   const packet=JSON.parse((await quality.childProtocol.find(t=>t.name==='read_quality_review')!.execute({},ctx(options.sessionId))).output)
   expect(packet.binding_work).toEqual(ids)
+  expect(packet.unresolved_findings.map((item:{id:string})=>item.id)).toEqual(ids)
+  expect(packet).not.toHaveProperty('engineering')
   expect(packet.test_coverage.authority).toContain('错误实现')
   expect(packet.test_coverage.contract_changes).toEqual([])
   const contract=JSON.parse((await quality.childProtocol[0].execute({test_file:'cli'},ctx(options.sessionId))).output)
