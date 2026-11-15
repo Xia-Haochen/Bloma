@@ -19,8 +19,9 @@ export function withFundedExecutionWindow<T>(window:()=>FundedExecutionWindow, w
 export function currentFundedExecutionWindow(){return admittedWindow.getStore()?.()}
 export function executionWindowFacts(now=Date.now()) {
   const window=currentFundedExecutionWindow()
-  if(!window)return{available:false as const}
-  return{available:true as const,remaining_requests:window.remainingRequests,admission_remaining_rmb:window.remainingRmb,
+  if(!window)return{scope:'standard_platform_guards' as const,
+    note:'当前使用平台常规准入。此处没有附加共享窗口的遥测。判断工具能否执行，查看本轮的工具回执、请求准入或取消结果。'}
+  return{scope:'funded_execution_window' as const,remaining_requests:window.remainingRequests,admission_remaining_rmb:window.remainingRmb,
     ...(Number.isFinite(window.deadlineAt)?{deadline_at:new Date(window.deadlineAt!).toISOString(),remaining_ms:Math.max(0,window.deadlineAt!-now)}:{}),
     note:'共享执行窗口的实时准入余量，不是账户余额或新增授权；未知费用责任仍占用额度。'}
 }

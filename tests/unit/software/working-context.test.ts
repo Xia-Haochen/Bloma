@@ -100,10 +100,12 @@ it('discovers metadata first and serves only the requested capability protocol',
 it('exposes an outer deadline and monetary admission facts without treating them as new authorization',()=>{
   const deadlineAt=Date.now()+60000
   const facts=withFundedExecutionWindow(()=>({remainingRequests:8,remainingRmb:2.5,outputRmbPerMillion:8,deadlineAt}),()=>softwareWorkingContext(project.project_id))
-  expect(facts.execution_window).toMatchObject({available:true,remaining_requests:8,admission_remaining_rmb:2.5,deadline_at:new Date(deadlineAt).toISOString()})
+  expect(facts.execution_window).toMatchObject({scope:'funded_execution_window',remaining_requests:8,admission_remaining_rmb:2.5,deadline_at:new Date(deadlineAt).toISOString()})
   const rendered=JSON.parse(renderWorkingFacts(facts).split('\n').slice(1).join('\n'))
   expect(rendered.execution_window.remaining_ms).toBeGreaterThan(0)
-  expect(softwareWorkingContext(project.project_id).execution_window).toEqual({available:false})
+  const standard = softwareWorkingContext(project.project_id).execution_window
+  expect(standard).toMatchObject({scope:'standard_platform_guards',note:expect.stringContaining('工具回执')})
+  expect(standard).not.toHaveProperty('available')
 })
 
 it('reports declared runtime compatibility before executing a final acceptance suite',()=>{
