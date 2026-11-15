@@ -241,9 +241,18 @@ export function createQualityReview(projectId: string, parent: string, policy: R
         resolvedIds.add(item.finding_id)
         const f=ledger.findings.find(f=>f.id===item.finding_id)
         const baseline=f?qualityFailureBaseline(f):undefined
-        if(!item.case_name&&(!item.basis||f?.requires_execution!==false))throw Error('QUALITY_RUNTIME_EXECUTION_REQUIRED')
-        if(!f||f.independent||(baseline?item.case_name!==baseline.case_name:!['suspected','not_reproduced','confirmed','closed'].includes(f.disposition))
+        if(!f||f.independent||(!baseline&&!['suspected','not_reproduced','confirmed','closed'].includes(f.disposition))
           ||(f.review_kind??'code')!==(review.kind??'code')||typeof item.evidence!=='string'||!item.evidence.trim()||item.evidence.length>4000)throw Error('QUALITY_RESOLUTION_INVALID')
+        if (!item.case_name && (baseline || !item.basis || f.requires_execution !== false)) {
+          const cases = registeredQualityCases(projectId).filter(c => c.requirements.includes(f.requirement))
+          return { isError: true, output: JSON.stringify({
+            code: 'QUALITY_RUNTIME_EXECUTION_REQUIRED', finding_id: f.id,
+            field: `resolutions[${resolvedIds.size - 1}].case_name`,
+            trigger: f.trigger, registered_cases: cases.map(c => c.name), required_case: baseline?.case_name,
+            next: '核对冻结案例是否覆盖这条旧疑点的具体触发与预期。覆盖才在同一条 resolutions 记录中填 case_name；没有匹配就省略这条 resolution，保留为待调查。按原提交修正这一处后重试。',
+          }) }
+        }
+        if (baseline && item.case_name !== baseline.case_name) throw Error('QUALITY_RESOLUTION_INVALID')
       }
       for(const item of [...resolutions,...bindings]){
         if(!item.case_name)continue

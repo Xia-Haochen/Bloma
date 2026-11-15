@@ -462,6 +462,41 @@ it('binding review plus host execution settles a new suspicion but never replace
  expect(await quality.gate()).toBeUndefined()
 },120000)
 
+it('points the reviewer at the exact missing old finding binding without accepting the opinion', async () => {
+  writeFileSync(join(project.root_path,'app.cjs'),'console.log(5)')
+  const { case_name: _case, ...unbound } = finding
+  await review([unbound],undefined,undefined,undefined,'coverage')
+  const old = readQualityLedger(project.project_id).findings[0]
+  let calls = 0
+  register(async function* (_prompt, options) {
+    const resolution = { finding_id:old.id, evidence:'核对冻结案例覆盖了原触发。' }
+    if (++calls === 1) {
+      yield {type:'assistant',message:{role:'assistant',content:[
+        {type:'tool_use',id:'materials',name:'read_quality_review',input:{}},
+        {type:'tool_use',id:'source',name:'read_file',input:{path:'app.cjs'}},
+        {type:'tool_use',id:'wrong',name:'submit_quality_findings',input:{findings:[],resolutions:[{...resolution,basis:'static_misread'}]}},
+      ]}}
+    } else {
+      const output = JSON.stringify(options.messages)
+      expect(output).toContain('resolutions[0].case_name')
+      expect(output).toContain(old.id)
+      expect(output).toContain('QUALITY_RUNTIME_EXECUTION_REQUIRED')
+      expect(readQualityLedger(project.project_id).reviews.at(-1)?.status).toBe('pending')
+      yield {type:'assistant',message:{role:'assistant',content:[
+        {type:'tool_use',id:'corrected',name:'submit_quality_findings',input:{findings:[],resolutions:[{...resolution,case_name:'sum'}]}},
+      ]}}
+    }
+    yield {type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
+  })
+  const child = await quality.begin(ctx(),'code',undefined,'binding')
+  await findDelegation(parent,child.delegation_id)!.completion
+  const ledger = readQualityLedger(project.project_id)
+  expect(calls).toBe(2)
+  expect(ledger.reviews.at(-1)?.status).toBe('complete')
+  expect(ledger.findings[0].retest?.case_name).toBe('sum')
+  expect(ledger.findings[0].checks).toHaveLength(0)
+})
+
 it('early coverage may inspect an unready slice but cannot grant candidate qualification',async()=>{
  writeFileSync(join(project.root_path,'unsafe.js'),'document.body.innerHTML = location.hash')
  await review([],undefined,undefined,undefined,'coverage')
