@@ -24,6 +24,26 @@ def normalized(text):
     return re.sub(r"[\s，。,.!?！？]", "", text).replace("三点", "3点")
 
 
+def record_microphone(sounddevice, device, progress):
+    sample_rate = 16000
+    seconds = 8
+    block_frames = sample_rate // 4
+    chunks = []
+    with sounddevice.InputStream(samplerate=sample_rate, channels=1, dtype="float32", device=device) as stream:
+        for frame in range(0, seconds * sample_rate, block_frames):
+            status = {"phase": "recording", "device": device, "remaining_seconds": seconds - frame // sample_rate}
+            if chunks:
+                status["level"] = float(np.sqrt(np.mean(np.square(chunks[-1], dtype=np.float64))))
+            progress(status)
+            chunk, overflowed = stream.read(block_frames)
+            if overflowed:
+                raise RuntimeError("MICROPHONE_INPUT_OVERFLOW")
+            if not np.isfinite(chunk).all():
+                raise RuntimeError("MICROPHONE_INVALID_SAMPLES")
+            chunks.append(chunk)
+    return np.concatenate(chunks)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", required=True)
@@ -93,7 +113,7 @@ def main():
                 if args.control_dir:
                     target = Path(args.control_dir) / "progress.json"
                     temporary = target.with_suffix(".tmp")
-                    temporary.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+                    temporary.write_text(json.dumps(value, ensure_ascii=False, allow_nan=False), encoding="utf-8")
                     os.replace(temporary, target)
             if args.control_dir:
                 devices = [{"id": i, "name": d["name"]} for i, d in enumerate(sounddevice.query_devices()) if d["max_input_channels"] > 0]
@@ -110,25 +130,15 @@ def main():
                 if type(device) is not int or device not in [d["id"] for d in devices]:
                     raise RuntimeError("MICROPHONE_DEVICE_CHANGED")
             print("MICROPHONE_READY: 请说：我们下周四下午三点开会。录音 8 秒。", flush=True)
-            captured = sounddevice.rec(8 * 16000, samplerate=16000, channels=1, dtype="float32", device=device)
-            # Announce readiness only after PortAudio has opened the device.
-            started = time.monotonic()
-            while args.control_dir and time.monotonic() - started < 8:
-                elapsed = time.monotonic() - started
-                end = min(len(captured), int(elapsed * 16000))
-                recent = captured[max(0, end - 4000):end]
-                level = float(np.sqrt(np.mean(recent * recent))) if len(recent) else 0
-                progress({"phase": "recording", "device": device, "remaining_seconds": max(1, 8 - int(elapsed)), "level": level})
-                time.sleep(.25)
-            sounddevice.wait()
+            captured = record_microphone(sounddevice, device, progress)
             progress({"phase": "decoding", "device": device})
             before = observed["real_decode_calls"]
             text = target(captured, 16000) if args.rate_argument else target(captured)
-            rms = float(np.sqrt(np.mean(captured * captured)))
+            rms = float(np.sqrt(np.mean(np.square(captured, dtype=np.float64))))
             mic = {"status": "passed" if rms >= .001 and normalized(str(text)) == "我们下周四下午3点开会" and observed["real_decode_calls"] > before else "failed", "rms": rms, "text": str(text), "seconds": 8,
                    "device": device, "device_name": sounddevice.query_devices(device, "input")["name"]}
         report = {"probe_version": 1, "status": "passed" if all(t["passed"] for t in tests) else "failed", "source": "host_audio_fixture", "tests": tests, "microphone": mic, **observed}
-        print(json.dumps(report, ensure_ascii=False), flush=True)
+        print(json.dumps(report, ensure_ascii=False, allow_nan=False), flush=True)
         # Process success describes a complete measurement. Microphone failure
         # remains a separate observation, not a missing fixed-fixture report.
         return 0 if report["status"] == "passed" else 1

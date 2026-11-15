@@ -61,6 +61,20 @@ afterEach(async()=>{
 })
 const start=()=>assistedAcceptanceAction({request_id:'start',project_id:id,action:'start',candidate_id:candidate.id})
 const pass={status:'passed',microphone:{status:'passed',rms:.1},real_decode_calls:4}
+it('keeps polling through an older malformed level and resumes with the next valid update', async () => {
+  const state = await start()
+  const progress = join(home, 'assisted-acceptance', id, state!.attempt_id!, 'progress.json')
+  writeFileSync(progress, '{"phase":"recording","remaining_seconds":8,"level":NaN}')
+  const query = () => assistedAcceptanceAction({ request_id:'query', project_id:id, action:'query' })
+  await expect(query()).resolves.toMatchObject({ phase:'preparing', attempt_id:state!.attempt_id })
+  writeFileSync(progress, '{"phase":"recording","remaining_seconds":7,"level":1e999}')
+  await expect(query()).resolves.toMatchObject({ phase:'recording', level:undefined, remaining_seconds:7 })
+  writeFileSync(progress, JSON.stringify({ phase:'recording', remaining_seconds:6, level:0.25 }))
+  await expect(query()).resolves.toMatchObject({ phase:'recording', level:0.25, remaining_seconds:6 })
+  complete(pass)
+  await vi.waitFor(() => expect(assistedAcceptanceView(id)?.phase).toBe('passed'))
+})
+
 it('routes an old microphone checkpoint with a failed launch back to production', async () => {
   saveSoftwareRunState({projectId:id,sessionId:'session',runId:'run',status:'waiting_user',candidateId:candidate.id})
   expect(softwareStatusView(id,false).guidance?.action).toBe('assisted_acceptance')

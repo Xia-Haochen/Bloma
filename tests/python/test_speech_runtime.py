@@ -9,10 +9,11 @@ import threading
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "main/templates/tools"))
 from speech_runtime import normalize_audio, SpeechEngine, StreamingRecorder
+from speech_probe import record_microphone
 import speech_locator
 
 
@@ -29,6 +30,30 @@ class FakeStream:
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_probe_meters_completed_blocks_and_captures_eight_seconds(self):
+        device = MagicMock()
+        stream = device.InputStream.return_value.__enter__.return_value
+        stream.read.return_value = (np.full((4000, 1), 0.25, dtype=np.float32), False)
+        progress = []
+        pcm = record_microphone(device, 2, lambda status: progress.append(json.dumps(status, allow_nan=False)))
+
+        device.InputStream.assert_called_once_with(samplerate=16000, channels=1, dtype="float32", device=2)
+        self.assertEqual(pcm.shape, (128000, 1))
+        self.assertEqual(stream.read.call_count, 32)
+        self.assertNotIn("level", json.loads(progress[0]))
+        self.assertEqual(json.loads(progress[1])["level"], 0.25)
+        self.assertEqual(json.loads(progress[-1])["remaining_seconds"], 1)
+
+    def test_probe_rejects_invalid_or_lost_input_without_publishing_nan(self):
+        for value, overflowed, reason in [(np.nan, False, "INVALID_SAMPLES"), (np.inf, False, "INVALID_SAMPLES"), (0, True, "INPUT_OVERFLOW")]:
+            with self.subTest(reason=reason, value=value):
+                device = MagicMock()
+                context = device.InputStream.return_value
+                context.__enter__.return_value.read.return_value = (np.full((4000, 1), value, dtype=np.float32), overflowed)
+                with self.assertRaisesRegex(RuntimeError, reason):
+                    record_microphone(device, 2, lambda status: json.dumps(status, allow_nan=False))
+                context.__exit__.assert_called_once()
+
     def test_column_and_stereo_preserve_frames(self):
         values = np.full((16000, 1), .1, dtype=np.float32)
         mono = normalize_audio(values)

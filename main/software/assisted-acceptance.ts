@@ -111,16 +111,30 @@ export function assistedAcceptanceView(id:string):AssistedAcceptanceView | null 
     if(active.has(attempt.phase) && !live.has(id)) return {...attempt,phase:'interrupted',detail:'上次实测中断，可重新开始。'}
     if(live.has(id)&&attempt.phase==='preparing') {
       const progress=join(directory(id),attempt.attempt_id!,'progress.json')
-      if(existsSync(progress)) {
-        const value=JSON.parse(readFileSync(progress,'utf8'))
-        if(['ready','recording','decoding'].includes(value.phase))return {...attempt,...value,detail:value.phase==='ready'?'选择麦克风后开始录音。':value.phase==='recording'?'正在录音，请说：我们下周四下午三点开会。':'正在识别刚才的录音。'}
+      const value = readProbeProgress(progress)
+      if (value?.phase === 'ready') return { ...attempt, phase: 'ready', devices: value.devices, detail: '选择麦克风后开始录音。' }
+      if (value?.phase === 'recording') {
+        const level = typeof value.level === 'number' && Number.isFinite(value.level) && value.level >= 0 ? value.level : undefined
+        return { ...attempt, phase: 'recording', level, remaining_seconds: value.remaining_seconds, detail: '正在录音，请说：我们下周四下午三点开会。' }
       }
+      if (value?.phase === 'decoding') return { ...attempt, phase: 'decoding', detail: '正在识别刚才的录音。' }
     }
     return attempt
   }
   if(report?.candidate && offersUserCheck(report))return {candidate_id:report.candidate.id,phase:'available',detail:'需要一次实体麦克风实测。'}
   return null
 }
+
+function readProbeProgress(path: string): Partial<AssistedAcceptanceView> | undefined {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) ?? undefined
+  } catch {
+    // Live telemetry is optional. Older probes could emit non-JSON NaN levels.
+    // Keep the durable attempt readable until the next progress update or result.
+    return undefined
+  }
+}
+
 export async function assistedAcceptanceAction(input:AssistedAcceptanceInput, busy=false):Promise<AssistedAcceptanceView | null> {
   const id=input.project_id
   if(input.action==='query')return assistedAcceptanceView(id)
