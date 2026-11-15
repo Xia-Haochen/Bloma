@@ -1,7 +1,7 @@
 import type { PrdBackplane } from '../model/prd-backplane'
 import { requirementCapabilities, type RequirementCapability } from '../model/requirement-capabilities'
 import type { CoreVerificationResult, CoreVerificationStatus } from './core-verification'
-import { hasCurrentMicrophoneEvidence, runHostSpeechProbe, type SpeechVerificationSpec } from './speech-verification'
+import { hasReusableMicrophoneEvidence, runHostSpeechProbe, type SpeechVerificationSpec } from './speech-verification'
 import { runHostPrefixRenameProbe } from './file-verification'
 import { runHostLlmProbe, type LlmVerificationSpec } from './llm-verification'
 
@@ -30,11 +30,13 @@ const speechVerifier: CapabilityVerifier = { id: 'speech', async run(ctx) {
   const result = spec ? await runHostSpeechProbe({ projectId: ctx.projectId, root: ctx.root, speech: spec, signal: ctx.signal }) : undefined
   const status = result?.status ?? 'unverified', missing: string[] = []
   const pending_user_checks: NonNullable<CapabilityOutcome['pending_user_checks']> = []
+  const microphone = spec && required.some(item => requirementCapabilities(item).has('microphone'))
+    ? await hasReusableMicrophoneEvidence(ctx.projectId,ctx.root,spec,ctx.signal) : false
   if (!spec) missing.push('缺少 ASR 入口登记 speech，须登记产品实际使用的模型构造和转写方法')
   const features = Object.fromEntries(required.map(item => {
     let state: CoreVerificationStatus = status
     if (status !== 'passed') missing.push(`${item.id}: 宿主真实音频探针未通过，文本模拟不可替代${result?.error ? `（${result.error}）` : ''}`)
-    if (spec && requirementCapabilities(item).has('microphone') && !hasCurrentMicrophoneEvidence(ctx.projectId, ctx.root, spec)) {
+    if (spec && requirementCapabilities(item).has('microphone') && !microphone) {
       pending_user_checks.push({kind:'microphone',feature:item.id})
       missing.push(`${item.id}: 真实采集链路待授权实测`)
       state = combineVerification(state, 'unverified')

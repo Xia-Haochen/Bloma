@@ -7,7 +7,7 @@ import type { AssistedAcceptanceInput, AssistedAcceptanceView } from '../../shar
 import { findProject } from '../project/project-service'
 import { readPrdBackplane } from '../project/prd-store'
 import { prdScopeFingerprint } from '../project/requirement-contract'
-import type { SpeechVerificationResult } from '../desktop/speech-verification'
+import { hasReusableMicrophoneEvidence, type SpeechVerificationResult } from '../desktop/speech-verification'
 import { microphoneAcceptance } from './microphone-acceptance'
 import { readSoftwareCandidate, verifyReleaseSource, promoteSoftwareRelease, type SoftwareRelease } from './release-store'
 import { verifySoftwareCandidate, verificationInputs, awaitingUserChecks, awaitingAssistedAcceptance as offersUserCheck, type SoftwareVerification } from './verification'
@@ -96,6 +96,8 @@ export async function pendingAssistedCandidate(id:string, requestId?:string) {
   if (!report?.candidate || !offersUserCheck(report) || requestId && report.input_identity?.request_id!==requestId) return
   try {await verifyReleaseSource(report.candidate)} catch {return} // stale receipts resume the normal repair/verification route
   if(report.input_identity?.scope!==prdScopeFingerprint(readPrdBackplane(id)))return
+  const spec = microphoneAcceptance.spec(report.candidate)
+  if(spec && await hasReusableMicrophoneEvidence(id,report.candidate.root,spec))return
   return report.candidate
 }
 export function assistedAcceptanceView(id:string):AssistedAcceptanceView | null {

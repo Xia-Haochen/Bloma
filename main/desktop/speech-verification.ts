@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { getPromaHome } from '../../storage/config-paths'
 import { mainRootDir } from '../platform/paths'
 import { speechModelRoot } from '../platform/speech/model-manifest'
@@ -10,6 +10,10 @@ import { isSoftwareProject } from './workflow-policy'
 import { resolveSoftwareCommand, softwareEnvironment } from '../software/command-runtime'
 import { executionSpeechBinding } from '../software/capability-bindings'
 import { writeTextFileAtomic } from '../../storage/json-store'
+import { readSoftwareCandidate } from '../software/release-store'
+import { findProject } from '../project/project-service'
+import { readPrdBackplane } from '../project/prd-store'
+import { prdScopeFingerprint } from '../project/requirement-contract'
 
 export interface SpeechVerificationSpec { module: string; factory: string; method: string; rate_argument?: boolean; runtime?:'python' }
 export interface SpeechVerificationResult {
@@ -41,6 +45,41 @@ export function hasCurrentMicrophoneEvidence(projectId: string, root: string, sp
       && saved.result?.real_decode_calls >= 4 &&
       Date.now() - Date.parse(saved.at) >= 0 && Date.now() - Date.parse(saved.at) < 24 * 60 * 60 * 1000)
   } catch { return false }
+}
+
+/** Only the host's prepared Python capture/decode path can carry proof across a
+ * change to a Node diagnostic under scripts/. The current product still has
+ * to pass its own GUI, security, and release checks on the new bytes. */
+export async function hasReusableMicrophoneEvidence(projectId: string, root: string, speech: SpeechVerificationSpec, signal?: AbortSignal): Promise<boolean> {
+  if (hasCurrentMicrophoneEvidence(projectId, root, speech)) return true
+  if (!/^[A-Za-z0-9_-]+$/.test(projectId) || speech.module !== 'speech_runtime'
+    || speech.factory !== 'SpeechEngine' || speech.method !== 'transcribe') return false
+  try {
+    const attempt = JSON.parse(readFileSync(join(getPromaHome(), 'assisted-acceptance', projectId, 'current.json'), 'utf8'))
+    const project = findProject(projectId)
+    if (attempt.project_id !== projectId || attempt.phase !== 'passed' || attempt.operation_id !== project.lean_operation_id
+      || attempt.scope !== prdScopeFingerprint(readPrdBackplane(projectId))) return false
+    const currentId = basename(dirname(root))
+    if (!/^[a-f0-9]{64}$/.test(currentId) || currentId === attempt.candidate_id) return false
+    const previous = await readSoftwareCandidate(projectId, attempt.candidate_id, signal)
+    if (!hasCurrentMicrophoneEvidence(projectId, previous.root, speech)) return false
+    const current = await readSoftwareCandidate(projectId, currentId, signal)
+    if (resolve(current.root) !== resolve(root) || JSON.stringify(current.launch) !== JSON.stringify(previous.launch)) return false
+    if (!previous.speech_resources || JSON.stringify(current.speech_resources) !== JSON.stringify(previous.speech_resources)) return false
+    const templates = join(mainRootDir(), 'templates', 'tools')
+    const components = ['speech_runtime.py', 'speech_locator.py', 'speech_worker.py', 'speech_bridge.cjs']
+    if (!components.every(name => readFileSync(join(root, name)).equals(readFileSync(join(templates, name)))
+      && readFileSync(join(previous.root, name)).equals(readFileSync(join(templates, name))))) return false
+    // Match actual materialized runtime bytes, including models and native
+    // dependencies. Python capture never runs these Node diagnostics.
+    const diagnostic = /^scripts\/[^/]+\.(?:cjs|mjs|js)$/i
+    if (current.launch.command.some(arg => diagnostic.test(arg.replaceAll('\\', '/').replace(/^\.\//, '')))) return false
+    const inputs = (files: typeof current.runtime.files) => files.filter(file => !diagnostic.test(file.path))
+    return JSON.stringify(inputs(current.runtime.files)) === JSON.stringify(inputs(previous.runtime.files))
+  } catch (error) {
+    if (signal?.aborted) throw error
+    return false
+  }
 }
 
 function hasAcceptedSpeechComponent(root: string, speech: SpeechVerificationSpec): boolean {
