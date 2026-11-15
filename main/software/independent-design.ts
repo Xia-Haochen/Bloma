@@ -20,7 +20,7 @@ import { reviewIndependentCorrection, settleIndependentCorrection, type Independ
 
 import { readIndependentPolicy, independentDesignMatchesPolicy, type IndependentDesignPolicy } from './independent-policy'
 export { readIndependentPolicy, type IndependentDesignPolicy } from './independent-policy'
-import { assessIndependentCases, IndependentCaseFormatError, parseIndependentCases, INDEPENDENT_SEMANTICS_INSTRUCTIONS, type IndependentCases } from './independent-semantics'
+import { assessIndependentCases, independentCategoryRequested, IndependentCaseFormatError, parseIndependentCases, INDEPENDENT_CATEGORIES, INDEPENDENT_SEMANTICS_INSTRUCTIONS, type IndependentCases } from './independent-semantics'
 export { parseIndependentCases } from './independent-semantics'
 export type { IndependentCases, IndependentStep } from './independent-semantics'
 export interface IndependentDesignRecord {
@@ -123,7 +123,8 @@ export async function prepareIndependentDesign(input:{projectId:string;sessionId
       && failure.authorization_hash === authorizationHash
       && /^Error: INDEPENDENT_(?:JSON_INVALID|CASES_(?:INVALID|TOO_LARGE)|CASE_INVALID|BASIS_INVALID|RELATED_INVALID|COVERAGE(?:_NOTES)?_INVALID|STEP_INVALID|ORACLE_INVALID|BATCH_CASE_(?:ID_INVALID|DUPLICATE))\b/.test(failure.reason ?? '')
       ? failure.reason?.slice(0, 500) : undefined
-    const data={goal:brief.positioning,requirements:brief.requirements.map(item=>({id:item.id,description:item.description,expected:trustedAcceptance(brief,item),requirement_hash:requirementEvidenceHash(brief,item),behavior_assertions:item.behavior_assertions,capabilities:[...requirementCapabilities(item)]})),
+    const data={goal:brief.positioning,requirements:brief.requirements.map(item=>({id:item.id,description:item.description,expected:trustedAcceptance(brief,item),requirement_hash:requirementEvidenceHash(brief,item),behavior_assertions:item.behavior_assertions,capabilities:[...requirementCapabilities(item)],
+      required_coverage:INDEPENDENT_CATEGORIES.filter(category=>independentCategoryRequested(brief,item.id,category))})),
       intent:brief.requirements_model,constraints:brief.constraints,assumptions:brief.assumptions,out_of_scope:brief.out_of_scope,design_aids:COUNTEREXAMPLE_GUIDANCE,
       user_instructions:brief.lean_brief?.intent_sources,
       confirmed_design:ux?.html_path?readFileSync(join(project.root_path,ux.html_path),'utf8'):null,

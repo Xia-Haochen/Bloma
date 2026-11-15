@@ -12,7 +12,7 @@ import { independentDesignMatchesPolicy } from './independent-policy'
 import { observeSoftwareGui } from './gui-observer'
 import type { SoftwareRelease } from './release-store'
 import type { GuiAcceptanceSuite } from '../desktop/gui-acceptance'
-import type { IndependentSemantics } from './independent-semantics'
+import type { IndependentSemantics, IndependentStep } from './independent-semantics'
 import { currentIndependentSemantics, independentChallengeVersion } from './independent-quality'
 import { qualityHash } from './quality-ledger'
 import { runHostSpeechProbe, type SpeechVerificationSpec } from '../desktop/speech-verification'
@@ -33,6 +33,11 @@ export function independentAdapterVersion(root:string){
   const file=join(root,'INDEPENDENT_ADAPTER.json')
   return existsSync(file)?createHash('sha256').update(readFileSync(file)).digest('hex'):null
 }
+
+function stepControls(step: IndependentStep): string[] {
+  if (!('control' in step)) return []
+  return step.kind === 'expect_audio' && step.text_control ? [step.control, step.text_control] : [step.control]
+}
 /** Adapter values are selectors only. All action values, assertions and order
  * come from the host-frozen B design, never from implementer-authored code. */
 export function independentSuite(projectId:string,root:string,caseIds?:string[]):GuiAcceptanceSuite{
@@ -50,14 +55,15 @@ export function independentSuite(projectId:string,root:string,caseIds?:string[])
   const text=readFileSync(file,'utf8');if(Buffer.byteLength(text)>32*1024)throw Error('INDEPENDENT_ADAPTER_TOO_LARGE')
   const adapter=JSON.parse(text) as {version:number;design_digest:string;controls:Record<string,string>}
   if(adapter.version!==1||adapter.design_digest!==record.digest||Object.keys(adapter).some(key=>!['version','design_digest','controls'].includes(key))||!adapter.controls||Array.isArray(adapter.controls))throw Error('INDEPENDENT_ADAPTER_INVALID')
-  const allowed=new Set(record.contract.cases.flatMap(item=>item.steps.flatMap(step=>'control'in step?[step.control]:[])))
-  const controls=new Set(selected.flatMap(item=>item.steps.flatMap(step=>'control'in step?[step.control]:[])))
+  const allowed=new Set(record.contract.cases.flatMap(item=>item.steps.flatMap(stepControls)))
+  const controls=new Set(selected.flatMap(item=>item.steps.flatMap(stepControls)))
   if(Object.keys(adapter.controls).some(key=>!allowed.has(key))||[...controls].some(key=>!isStaticGuiSelector(adapter.controls[key])))throw Error('INDEPENDENT_ADAPTER_STATIC_CSS_REQUIRED')
   const suite:GuiAcceptanceSuite = {version:1,scope_hash:record.scope,design_hash:record.design_hash,covers:[...new Set(selected.map(item=>item.feature))],steps:selected.flatMap(item=>item.steps.map((step,index)=>{
     const id=`${item.id}-${index}`
     if(step.kind==='restart')return{id,kind:'restart' as const}
     if(step.kind==='speech_probe')throw Error('INDEPENDENT_SPEECH_REQUIRES_HOST_PROBE')
     const selector=adapter.controls[step.control]
+    if(step.kind==='expect_audio')return{id,kind:'expect_audio' as const,selector,text_selector:step.text_control?adapter.controls[step.text_control]:undefined}
     if(step.kind==='speech_input')return{id,kind:'upload' as const,selector,path:'input/voice-golden.wav'}
     if(step.kind==='fill')return{id,kind:'fill' as const,selector,value:step.value}
     if(step.kind==='click')return{id,kind:'click' as const,selector}
@@ -129,7 +135,7 @@ export async function verifyIndependentDesign(projectId:string,candidate:Softwar
         }
       }
       const failed=observed.steps.find(s=>!s.passed),step=suite.steps.find(s=>s.id===failed?.id)
-      const assertion=observed.status==='failed'&&step?.kind==='expect'&&observed.error?.startsWith(`GUI_ASSERTION_FAILED:${step.id}`)
+      const assertion=observed.status==='failed'&&(step?.kind==='expect'||step?.kind==='expect_audio')&&observed.error?.startsWith(`GUI_ASSERTION_FAILED:${step.id}`)
       const runtime=observed.failure_kind==='runtime'
       const environmentBlocked=observed.error?.startsWith('ACCEPTANCE_ENVIRONMENT_')===true
       const status=observed.status==='passed'?'passed':assertion||runtime?'failed':'unverified'
@@ -137,7 +143,7 @@ export async function verifyIndependentDesign(projectId:string,candidate:Softwar
       if (failed && !diagnostic) {
         const source = comparisons[failed.id]
         const expected = source ? observed.steps.find(row => row.id === source && row.passed)?.actual
-          : step?.kind === 'expect' ? step.equals ?? '非空输出' : '冻结的独立业务步骤'
+          : step?.kind === 'expect_audio' ? '非静音音频实际播放至结尾' : step?.kind === 'expect' ? step.equals ?? '非空输出' : '冻结的独立业务步骤'
         diagnostic = {id:failed.id,expected:String(expected ?? '缺少先前有效观察'),actual:failed.actual}
       }
     }catch(error){signal?.throwIfAborted();cases.push({id:item.id,feature:item.feature,status:'unverified',kind:error instanceof AcceptanceEnvironmentError?'environment':'adapter',steps:[],error:String(error),expected_source:trustedAcceptance(brief,requirement)})}

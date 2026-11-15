@@ -11,6 +11,7 @@ export type IndependentOracle = { kind: 'derived'; version: 1; rule_id: string; 
   | { kind: 'unresolved'; question: string; decision?: { source: string; options: string[] } }
 export type IndependentStep = ({ kind: 'fill'; control: string; value: string } | { kind: 'click'; control: string; intent?: 'submit' | 'cancel' }
   | { kind: 'expect'; control: string; equals: string; property?: 'text' | 'value'; oracle?: IndependentOracle }
+  | { kind: 'expect_audio'; control: string; quote: string; text_control?: string }
   | { kind: 'restart' } | { kind: 'speech_probe' } | { kind: 'speech_input'; control: string }) & { subject?: string }
 export interface IndependentCase { id: string; feature: string; steps: IndependentStep[]
   basis?: { requirement_hash: string; expected_source: string }; related?:Array<{feature:string;requirement_hash:string;expected_source:string}>; coverage?: IndependentCategory[] }
@@ -134,12 +135,17 @@ export function parseIndependentCases(textValue: string, features: string[]): In
     for (const [stepIndex, step] of item.steps.entries()) {
       const stepPath = `${path}.steps[${stepIndex}]`
       if (!step) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}`)
-      const allowed = step.kind === 'fill' ? ['kind', 'control', 'value', 'subject'] : step.kind === 'expect' ? ['kind', 'control', 'equals', 'oracle', 'property', 'subject'] : step.kind === 'click' ? ['kind', 'control', 'subject', 'intent'] : step.kind === 'speech_input' ? ['kind', 'control', 'subject'] : step.kind === 'restart' || speechProbe && step.kind === 'speech_probe' ? ['kind'] : []
+      const allowed = step.kind === 'expect_audio' ? ['kind', 'control', 'quote', 'text_control']
+        : step.kind === 'fill' ? ['kind', 'control', 'value', 'subject'] : step.kind === 'expect' ? ['kind', 'control', 'equals', 'oracle', 'property', 'subject'] : step.kind === 'click' ? ['kind', 'control', 'subject', 'intent'] : step.kind === 'speech_input' ? ['kind', 'control', 'subject'] : step.kind === 'restart' || speechProbe && step.kind === 'speech_probe' ? ['kind'] : []
       if (!allowed.length || !keys(step, allowed)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}`)
       if ('control' in step ? !logicalName(step.control) : step.kind !== 'restart' && step.kind !== 'speech_probe') throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.control 须为非空逻辑控件名，最多128字符，可用中文或空格，不含换行等控制字符`)
       if (step.kind === 'fill' && !text(step.value, 2000)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.value`)
       if (step.kind === 'expect' && !text(step.equals)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.equals`)
       if (step.kind === 'expect' && step.property !== undefined && !['text', 'value'].includes(step.property)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.property`)
+      if (step.kind === 'expect_audio' && (!text(step.quote) || !step.quote.trim() ||
+        step.text_control !== undefined && (!logicalName(step.text_control) || step.text_control === step.control))) {
+        throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath} 需要朗读原文依据及独立的可选文字控件。`)
+      }
       if (step.subject !== undefined && !logicalName(step.subject)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.subject 须为非空对象名，最多128字符，不含控制字符`)
       if (step.kind === 'click' && step.intent !== undefined && !['submit', 'cancel'].includes(step.intent)) throw new IndependentCaseFormatError(`INDEPENDENT_STEP_INVALID: ${stepPath}.intent`)
       if (step.kind === 'expect' && step.oracle !== undefined) {
@@ -150,7 +156,7 @@ export function parseIndependentCases(textValue: string, features: string[]): In
       if (!item.steps.some(step => step.kind === 'click' || step.kind === 'fill' || step.kind === 'speech_input')) {
         throw new IndependentCaseFormatError(`INDEPENDENT_CASE_INVALID: ${path}.steps 缺少操作，至少提供一个 kind 为 click 或 fill 的步骤`)
       }
-      if (!item.steps.some(step => step.kind === 'expect')) {
+      if (!item.steps.some(step => step.kind === 'expect' || step.kind === 'expect_audio')) {
         throw new IndependentCaseFormatError(`INDEPENDENT_CASE_INVALID: ${path}.steps 缺少断言，至少提供一个 kind 为 expect 的步骤`)
       }
     }
@@ -173,7 +179,11 @@ export function assessIndependentCases(brief: PrdBackplane, contract: Independen
       issues.push('宿主音频探针仅用于已确认语音识别需求的正常转写案例')
     }
     item.steps.forEach((step, index) => {
-      if (step.kind === 'restart' && !item.steps.slice(index + 1).some(s => s.kind === 'expect')) issues.push('重开后缺少实际断言')
+      if (step.kind === 'restart' && !item.steps.slice(index + 1).some(s => s.kind === 'expect' || s.kind === 'expect_audio')) issues.push('重开后缺少实际断言')
+      if (step.kind === 'expect_audio') {
+        if (!expected?.includes(step.quote) || !/语音|音频|朗读|播放|声音|听到|有声/.test(step.quote)) issues.push('音频观察缺少当前确认需求中的朗读或播放依据')
+        if (!item.steps.slice(0, index).some(s => s.kind === 'speech_input' || s.kind === 'click')) issues.push('音频观察前须有实际触发操作')
+      }
       if (step.kind !== 'expect') return
       const oracle = step.oracle
       if (!oracle || oracle.kind === 'unresolved') { issues.push(oracle?.kind === 'unresolved' ? `待澄清：${oracle.question}` : '断言未说明预期依据'); return }
@@ -244,11 +254,12 @@ export const INDEPENDENT_SEMANTICS_INSTRUCTIONS = [
   '跨功能复用已确认结果时，在 literal 中直接加来源 feature。例：{"kind":"expect","control":"target_input","property":"value","equals":"已确认的整理结果","oracle":{"kind":"literal","feature":"F-002","quote":"已确认的整理结果"}}。写入结果沿用清理样例，勿再次提问。普通文本用 property=text，输入框用 property=value。',
   '若需求的 capabilities 含 speech，正常语音转写案例用唯一一步 {"kind":"speech_probe"}，coverage 只填 ["normal"]。平台以固定音频验证产品实际识别入口，无需用户提供逐字转写。此证据仅覆盖转写算法，不能用来代替录音界面、清理或文本写入测试。',
   '语音触发后的回复、历史和多轮对话须实际提供输入：使用 {"kind":"speech_input","control":"音频文件输入"}，宿主从受保护资源把固定语音文件交给产品正常文件输入控件，之后等待新的用户发言与服务回复。该步骤证明文件语音业务链；实体麦克风仍由用户参与实测核对。点击麦克风不等于已经提供声音。observed 必须比较同一业务量，风格标识只能与先前观察到的风格标识比较，不能引用回复正文；每轮回复都须有本轮输入。',
+  '若确认要求朗读或音频播放，在触发后用 {"kind":"expect_audio","control":"回复播放器","quote":"从本项 expected 逐字引用的朗读或播放要求"}。宿主检查实际 HTML audio 有非静音内容、播放推进且到达结尾；同时显示文字时加 text_control 指向回复文字控件，宿主在播放时取样。逻辑控件由实现者绑定，不要求用户指定播放状态文案。用 normal 表达连续多轮；multi_object 只用于不同对象修改后互不影响。',
   '整段需求描述不能为自选的输出值背书。不要把自选状态文案、生成式文本样例或界面草图上的文案当作已确认的精确预期。',
   '{"kind":"expect","control":"result","equals":"5","oracle":{"kind":"derived","version":1,"rule_id":"BR-001","steps":[0,1]}}',
   'derived 仅引用确认资料中带 verification.operation 的规则。version 为数字 1，rule_id 为确认的规则编号，steps 是之前同对象 fill 的从 0 开始且互不重复的整数序号。equals 须等于按该规则对这些输入的确定性计算结果。',
   '{"kind":"expect","control":"result","equals":"","oracle":{"kind":"unresolved","question":"输入“嗯，我下午三点到”时，清理后的完整文本应是什么？"}}',
   '精确文案未规定时，优先用输入回读或先观察再比较的关系断言。只有无法设计有依据的业务断言时才用 unresolved 并写明缺口；用户澄清仅适用于带 decision 的真实业务选择。示例内容不属于当前任务。',
-  '每需求有 normal。多对象、异常、取消和重开仅在该需求明确要求时才设计对应案例，不必为未要求的行为补问题或固定文案。coverage_notes 如需填写，source 逐字复制该需求的 expected。multi_object 用于数据隔离：两个 subject 分别 fill 不同值、分别 expect，再修改其中一个并检查另一个保持；仅选择预置角色可放在 normal 中，先观察角色项的实际文本再用 observed 比较打开后的标题。取消操作标 intent:cancel 且其后断言，重开后必须断言。',
+  'required_coverage 是宿主根据当前确认资料要求覆盖的类别。每需求有 normal。多对象、异常、取消和重开仅在该需求明确要求时才设计对应案例，不必为未要求的行为补问题或固定文案。coverage_notes 如需填写，source 逐字复制该需求的 expected。multi_object 用于数据隔离：两个 subject 分别 fill 不同值、分别 expect，再修改其中一个并检查另一个保持；仅选择预置角色可放在 normal 中，先观察角色项的实际文本再用 observed 比较打开后的标题。取消操作标 intent:cancel 且其后断言，重开后必须断言。',
   'related 可引用本批其他需求的 {feature,requirement_hash,expected_source} 作为跨模块规则依据，引用必须逐字对应确认资料。关联引用本身不计入该需求覆盖，仍须其自己的正常案例。最多 12 案例，每案例 32 步，不得返回 PASS 或修改目标。',
 ].join('\n')

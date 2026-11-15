@@ -8,7 +8,7 @@ import { createProject, updateProject, findProject } from '../../../main/project
 import { readPrdBackplane, markPrdUserConfirmed } from '../../../main/project/prd-store'
 import { parseLeanBrief } from '../../../main/guide/lean-brief'
 import { syncDocuments } from '../../../main/project/document-sync'
-import { prdScopeFingerprint } from '../../../main/project/requirement-contract'
+import { bindAcceptance, prdScopeFingerprint } from '../../../main/project/requirement-contract'
 import { prepareIndependentDesign, readIndependentDesign, type IndependentDesignPolicy, parseIndependentCases } from '../../../main/software/independent-design'
 import { independentSuite, verifyIndependentDesign } from '../../../main/software/independent-verification'
 import { requirementEvidenceHash } from '../../../main/project/requirement-contract'
@@ -116,6 +116,25 @@ it('independently rejects an unsupported challenge and reopens a later distinct 
   expect(currentIndependentSemantics(project.project_id,contract).ready).toBe(false)
 })
 const contract: import('../../../main/software/independent-semantics').IndependentCases={cases:[{id:'save',feature:'F-001',coverage:['normal'],steps:[{kind:'fill',control:'name',value:'Alice'},{kind:'click',control:'save'},{kind:'expect',control:'result',equals:'Alice',oracle:{kind:'input',step:0}}]}]}
+it('accepts a host audio observation only for an exact confirmed playback requirement and after a trigger', () => {
+  const saved=readPrdBackplane(project.project_id)
+  const brief=bindAcceptance({...saved,
+    requirements:[{...saved.requirements[0],description:'语音回复',behavior_assertions:['把回复文字朗读出来']}],
+    acceptance:{'F-001':'把回复文字朗读出来'},
+  })
+  const requirement=brief.requirements[0]
+  const proposal:IndependentCases={cases:[{id:'reply',feature:'F-001',coverage:['normal'],basis:{
+    expected_source:'把回复文字朗读出来',requirement_hash:requirementEvidenceHash(brief,requirement),
+  },steps:[{kind:'speech_input',control:'语音文件'},{kind:'expect_audio',control:'播放器',text_control:'回复文字',quote:'把回复文字朗读出来'}]}]}
+  expect(assessIndependentCases(brief,parseIndependentCases(JSON.stringify(proposal),['F-001'])).ready).toBe(true)
+  const audio=proposal.cases[0].steps[1]
+  if(audio.kind!=='expect_audio') throw Error('fixture')
+  audio.quote='播放三遍'
+  expect(assessIndependentCases(brief,proposal).cases[0].issues).toContain('音频观察缺少当前确认需求中的朗读或播放依据')
+  audio.quote='把回复文字朗读出来'
+  proposal.cases[0].steps.reverse()
+  expect(assessIndependentCases(brief,proposal).cases[0].issues).toContain('音频观察前须有实际触发操作')
+})
 const route=()=>({channel_id:'b',model:'model-b',env:{ANTHROPIC_BASE_URL:'https://b.invalid',ANTHROPIC_MODEL:'model-b'}})
 const query:SDKQuery=async function*(prompt,options){calls++;expect(prompt).not.toContain('IMPLEMENTATION_SENTINEL');expect(options.env.ANTHROPIC_MODEL).toBe('model-b');expect(options.tools).toBeUndefined()
   const aid=JSON.parse(prompt).design_aids;expect(aid.scope).toContain('不新增功能');expect(aid.cases.some((item:{id:string})=>item.id==='historical-step')).toBe(true)

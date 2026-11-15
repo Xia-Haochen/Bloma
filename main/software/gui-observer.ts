@@ -31,6 +31,76 @@ async function selectGuiOption(locator: Locator, choice: { value?: string; label
   return locator.inputValue()
 }
 
+async function localAudioRms(page: Page, source: string): Promise<number | undefined> {
+  // Use the already loaded local source and never send a new network request.
+  if (!/^(?:data:|blob:)/.test(source) || source.length > 12 * 1024 * 1024) return
+  const rms = await page.evaluate(async localSource => {
+    const response = await fetch(localSource)
+    const blob = await response.blob()
+    if (blob.size > 8 * 1024 * 1024) return null
+    const context = new OfflineAudioContext(1, 16000, 16000)
+    const buffer = await context.decodeAudioData(await blob.arrayBuffer())
+    let energy = 0
+    for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+      for (const value of buffer.getChannelData(channel)) energy += value * value
+    }
+    return Math.sqrt(energy / (buffer.length * buffer.numberOfChannels))
+  }, source).catch(() => null)
+  return rms !== null && Number.isFinite(rms) ? rms : undefined
+}
+
+async function observeAudioPlayback(page: Page, audio: Locator, step: Extract<GuiAcceptanceSuite['steps'][number], { kind: 'expect_audio' }>, signal?: AbortSignal) {
+  const deadline = Date.now() + 60000
+  const text = step.text_selector ? page.locator(step.text_selector) : undefined
+  let source = '', observedText = !text, firstTime: number | undefined, progress = false
+  let rms: number | null | undefined
+  let latest: { at: number; duration: number | null; paused: boolean; ended: boolean; muted: boolean; playedFrom: number | null; playedTo: number | null; error: number | null } | undefined
+  do {
+    signal?.throwIfAborted()
+    const count = await audio.count()
+    if (count > 1) throw Error(`GUI_LOCATOR_AMBIGUOUS:${step.id}`)
+    if (count === 1) {
+      const { src, ...sample } = await audio.evaluate(element => {
+        if (!(element instanceof HTMLAudioElement)) throw Error('GUI_AUDIO_ELEMENT_REQUIRED')
+        const played = element.played
+        return { src: element.currentSrc, at: element.currentTime,
+          duration: Number.isFinite(element.duration) ? element.duration : null,
+          paused: element.paused, ended: element.ended, muted: element.muted || element.volume === 0,
+          playedFrom: played.length === 1 ? played.start(0) : null,
+          playedTo: played.length === 1 ? played.end(0) : null, error: element.error?.code ?? null }
+      }, undefined, { timeout: 1000 })
+      latest = sample
+      if (src !== source) {
+        source = src
+        firstTime = undefined
+        progress = false
+        observedText = !text
+        rms = undefined
+      }
+      if (sample.error !== null) break
+      if (source && !sample.muted && !sample.paused) {
+        firstTime ??= sample.at
+        progress ||= sample.at > firstTime + 0.04
+        if (text && !observedText && await text.count() === 1 && await text.isVisible()) observedText = Boolean((await text.innerText({ timeout: 500 })).trim())
+        if (progress && rms === undefined) rms = await localAudioRms(page, source) ?? null
+      }
+      if (source && progress && sample.ended && !sample.muted && observedText && sample.duration
+        && sample.playedFrom !== null && sample.playedFrom <= 0.05
+        && sample.playedTo !== null && sample.playedTo >= sample.duration - 0.05) {
+        signal?.throwIfAborted()
+        if (rms == null) throw Error('GUI_AUDIO_EVIDENCE_UNAVAILABLE')
+        if (rms > 0.001) return { ...sample, rms, text_visible_during_playback: text ? observedText : undefined }
+        break
+      }
+    }
+    await page.waitForTimeout(100)
+  } while (Date.now() < deadline)
+  throw Object.assign(Error(`GUI_ASSERTION_FAILED:${step.id}`), {
+    actual: { ...latest, progress, rms, text_visible_during_playback: text ? observedText : undefined },
+    expected: '非静音音频实际播放至结尾',
+  })
+}
+
 export async function observeGuiStep(page: Page, step: GuiAcceptanceSuite['steps'][number], context?: { data: string; fixtures?: GuiAcceptanceSuite['fixtures']; nativeProcessRoot?: number; signal?: AbortSignal }): Promise<unknown> {
   const frozenUpload = (path: string) => {
     if (!context) throw Error('GUI_ACTION_UNSUPPORTED_WITHOUT_DATA_DIRECTORY')
@@ -51,6 +121,7 @@ export async function observeGuiStep(page: Page, step: GuiAcceptanceSuite['steps
   }
   if (!('selector' in step)) throw new Error(`GUI_ACTION_UNSUPPORTED_FOR_THIS_RUNTIME:${step.kind}`)
   const locator = step.has_text === undefined ? page.locator(step.selector) : page.locator(step.selector).filter({ hasText: step.has_text })
+  if (step.kind === 'expect_audio') return observeAudioPlayback(page, locator, step, context?.signal)
   if (step.kind !== 'expect' || step.property !== 'count') {
     const matches = await locator.count()
     if (matches > 1) throw Object.assign(Error(`GUI_LOCATOR_AMBIGUOUS:${step.id}: 匹配${matches}个控件，请用has_text或更具体的selector定位；数量检查使用property=count`), {

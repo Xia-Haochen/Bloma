@@ -16,6 +16,7 @@ import { validateNativeGuiTests, type NativeGuiTests } from '../software/native-
 type Action = ({ id: string; kind: 'fill'; selector: string; value: string } | { id: string; kind: 'click'; selector: string }
   | { id: string; kind: 'select'; selector: string; value?: string; label?: string }
   | { id: string; kind: 'expect'; selector: string; property?: 'text' | 'value' | 'count'; equals?: string; contains?: string; nonempty?: true; timeout_ms?: number }
+  | { id: string; kind: 'expect_audio'; selector: string; text_selector?: string }
   | { id: string; kind: 'press'; selector: string; key: string }
   | { id: string; kind: 'scroll'; selector: string }
   | { id: string; kind: 'drag'; selector: string; target_selector: string }
