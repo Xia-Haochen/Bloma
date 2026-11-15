@@ -47,9 +47,10 @@ export function hasCurrentMicrophoneEvidence(projectId: string, root: string, sp
   } catch { return false }
 }
 
-/** Only the host's prepared Python capture/decode path can carry proof across a
- * change to a Node diagnostic under scripts/. The current product still has
- * to pass its own GUI, security, and release checks on the new bytes. */
+/** Only the host's prepared Python capture/decode path can carry physical
+ * proof across changes to application JavaScript. Its interpreter, imports,
+ * models and bridge remain pinned. The product capture controls, playback,
+ * security and release checks still execute against the current candidate. */
 export async function hasReusableMicrophoneEvidence(projectId: string, root: string, speech: SpeechVerificationSpec, signal?: AbortSignal): Promise<boolean> {
   if (hasCurrentMicrophoneEvidence(projectId, root, speech)) return true
   if (!/^[A-Za-z0-9_-]+$/.test(projectId) || speech.module !== 'speech_runtime'
@@ -70,11 +71,11 @@ export async function hasReusableMicrophoneEvidence(projectId: string, root: str
     const components = ['speech_runtime.py', 'speech_locator.py', 'speech_worker.py', 'speech_bridge.cjs']
     if (!components.every(name => readFileSync(join(root, name)).equals(readFileSync(join(templates, name)))
       && readFileSync(join(previous.root, name)).equals(readFileSync(join(templates, name))))) return false
-    // Match actual materialized runtime bytes, including models and native
-    // dependencies. Python capture never runs these Node diagnostics.
-    const diagnostic = /^scripts\/[^/]+\.(?:cjs|mjs|js)$/i
-    if (current.launch.command.some(arg => diagnostic.test(arg.replaceAll('\\', '/').replace(/^\.\//, '')))) return false
-    const inputs = (files: typeof current.runtime.files) => files.filter(file => !diagnostic.test(file.path))
+    // The fixed speech probe imports the trusted Python path directly, not
+    // the Electron main/renderer or Node diagnostics. Keep dependency trees
+    // byte-identical and retain every non-JavaScript input conservatively.
+    const inputs = (files: typeof current.runtime.files) => files.filter(file =>
+      file.path.startsWith('.venv/') || file.path.startsWith('node_modules/') || !/\.(?:js|mjs|cjs)$/i.test(file.path))
     return JSON.stringify(inputs(current.runtime.files)) === JSON.stringify(inputs(previous.runtime.files))
   } catch (error) {
     if (signal?.aborted) throw error
