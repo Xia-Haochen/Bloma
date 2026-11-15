@@ -505,6 +505,30 @@ it('early coverage may inspect an unready slice but cannot grant candidate quali
  expect(await quality.gate()).toContain('REVIEW_REQUIRED')
 },60000)
 
+it('coverage reads the frozen cases and leaves engineering and experience judgment to candidate review',async()=>{
+ let turn=0
+ register(async function*(_prompt,options){
+  const read=quality.childProtocol.find(tool=>tool.name==='read_quality_review')!
+  const reviewContext=ctx(options.sessionId)
+  const packet=JSON.parse((await read.execute({},reviewContext)).output)
+  const frozen=JSON.parse((await read.execute({test_file:'cli'},reviewContext)).output)
+  expect(packet).toMatchObject({test_coverage:{cases:[{name:'sum',requirements:['F-001']}]}})
+  expect(packet).not.toHaveProperty('engineering')
+  expect(packet).not.toHaveProperty('intent_review_protocol')
+  expect(JSON.parse(frozen.text).cases[0].name).toBe('sum')
+  const submit=quality.reviewTools([],options.sessionId).find(tool=>tool.name==='submit_quality_findings')!
+  expect(submit.input_schema.properties).not.toHaveProperty('engineering')
+  expect(submit.input_schema.properties).not.toHaveProperty('intent_observations')
+  expect(++turn).toBe(1)
+  yield{type:'assistant',message:{role:'assistant',content:[{type:'tool_use',id:'coverage-only',name:'submit_quality_findings',input:{findings:[]}}]}}
+  yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
+ })
+ const child=await quality.begin(ctx(),'code',undefined,'coverage')
+ await findDelegation(parent,child.delegation_id)!.completion
+ expect(readQualityLedger(project.project_id).reviews.at(-1)).toMatchObject({status:'complete',purpose:'coverage'})
+ expect(await quality.gate()).toContain('REVIEW_REQUIRED')
+},60000)
+
 it('permits an additive targeted CLI case while refusing to delete or weaken the frozen original',async()=>{
  const tool=buildLeanCliTool(project.project_id),old={name:'sum',covers:['F-001'],args:['2','3'],stdout:'5',exit_code:0},extra={name:'new',covers:['F-001'],args:['3','4'],stdout:'7',exit_code:0}
  const register=(cases:unknown[])=>tool.execute({expectations:{'F-001':'2加3得5'},cases},ctx())

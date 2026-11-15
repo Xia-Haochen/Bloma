@@ -6,7 +6,7 @@ import {afterEach,beforeEach,expect,it} from 'vitest'
 import {verificationFailure} from '../../../main/software/verification-diagnostics'
 import {verificationReportView,readVerificationReport,verificationToolFeedback,verificationResponse,verificationCases} from '../../../main/software/verification-report'
 import {observedQualityFinding} from '../../../main/software/quality-closeout'
-import {NativeTestContractError} from '../../../main/software/native-gui-tests'
+import {freezeNativeGuiTests,frozenNativeGuiVersion,NativeTestContractError} from '../../../main/software/native-gui-tests'
 import type {SoftwareVerification} from '../../../main/software/verification'
 import {toolRecovery,persistentBudgetBlocked} from '../../../shared/tool-feedback-policy'
 import {safeToolFeedback,toolFeedbackLabel,type ToolFeedback} from '../../../shared/tool-feedback'
@@ -23,7 +23,7 @@ beforeEach(()=>{old=process.env.PROMA_HOME;home=mkdtempSync(join(tmpdir(),'feedb
 afterEach(()=>{if(old===undefined)delete process.env.PROMA_HOME;else process.env.PROMA_HOME=old;rmSync(home,{recursive:true,force:true})})
 const result=(value:unknown)=>value as SoftwareVerification
 it('routes a frozen-contract refusal directly to its readable original without implying execution or PASS',()=>{
-  const native={layout:'project',entry:'tests/a.mjs',directory:'tests',digest:'a'.repeat(64)} as any
+  const native={layout:'project',entry:'tests/a.mjs',directory:'tests',digest:'a'.repeat(64),files:[]} as any
   const error=new NativeTestContractError(['tests/a.mjs'],native)
   const view=verificationFailure(result({status:'unverified',summary:error.message}),error)
   expect(view?.next_action).toEqual({tool:'read_test_contract',arguments:{contract_digest:native.digest,file:'tests/a.mjs'}})
@@ -34,6 +34,27 @@ function receipt(id:string,r:SoftwareVerification){
   const hash=createHash('sha256').update(JSON.stringify(r)).digest('hex')
   writeFileSync(join(home,'software-verification',id+'.json'),JSON.stringify({version:1,state:'complete',at:1,result:r,result_hash:hash}));return hash
 }
+it('keeps the exact correction route after a changed helper refusal is persisted',()=>{
+  const id='frozen-helper',root=join(home,'source')
+  mkdirSync(join(root,'tests'),{recursive:true})
+  writeFileSync(join(root,'tests/acceptance.mjs'),"import run from './helper.mjs'; export default async(ctx)=>{await run(ctx)}")
+  const helper=join(root,'tests/helper.mjs')
+  writeFileSync(helper,"export default async({test,assert})=>{await test('F-001 example',()=>assert.equal(1,1))}")
+  const native=freezeNativeGuiTests(id,root,'tests/acceptance.mjs',['F-001'])
+  writeFileSync(helper,"export default async()=>{}")
+  let refused
+  try{frozenNativeGuiVersion(id,native,root)}catch(error){refused=error}
+  expect(refused).toBeInstanceOf(NativeTestContractError)
+  const observed=result({status:'unverified',summary:(refused as Error).message})
+  observed.failure=verificationFailure(observed,refused)
+  receipt(id,observed)
+  expect(verificationResponse(id,observed)).toMatchObject({
+    failure:{code:'GUI_NATIVE_TEST_SOURCE_CHANGED',paths:['tests/helper.mjs']},
+    next_action:{tool:'read_test_contract',arguments:{contract_digest:native.digest,file:'tests/helper.mjs'}},
+    next:expect.stringContaining('propose_test_correction'),
+  })
+  expect(readVerificationReport(id)).toMatchObject({next_action:verificationResponse(id,observed).next_action})
+})
 it('returns current coverage repair work with failed verification without closing the finding',()=>{
  const project=createProject({request_id:'coverage',mode:'quick'},{workflowVersion:'software-v1'}),id=project.project_id
  const parsed=parseLeanBrief(JSON.stringify({action:'brief',goal:'Save',ui:'none',requirements:[{description:'Save records',expected:'Records survive restart'}]}),{projectId:id,sessionId:'s',source:'Save records',previous:readPrdBackplane(id),software:true})!

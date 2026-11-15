@@ -373,7 +373,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   }
   const query=quality.wrapQuery(guardedQuery,async signal=>{await settleCorrections(signal)})
   const baseTools = buildSoftwareAgentTools(input.projectId, 'parent', collaboration,
-    url => emit('software_preview_changed', { preview_url: url ?? null }), () => emit('software_suggestions_changed', {}),()=>emit('longterm_changed',{summary:findProject(input.projectId).longterm_summary}),undefined,ctx=>quality.ensureCoverage(ctx))
+    url => emit('software_preview_changed', { preview_url: url ?? null }), () => emit('software_suggestions_changed', {}),()=>emit('longterm_changed',{summary:findProject(input.projectId).longterm_summary}),undefined,async ctx=>{await quality.ensureCoverage(ctx)})
   let scopePending = false
   const tools = productionAgentTools(baseTools, [
     ...quality.parentTools,
@@ -475,6 +475,12 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     recordEvaluationEvent(input.projectId,'closeout_entered',{run_id:runId,request_id:input.requestId,source:softwareVerificationFingerprint(project.root_path)})
     const waiting = await waitForProductionChildren(ctx)
     if (waiting) return waiting
+    // On recovery an approved suite may already be registered while its
+    // coverage review was interrupted. Only ask for it after a runnable result.
+    if(!deps.coreVerification&&!deps.securityScan&&!deps.launchSmoke&&await quality.ensureCoverage(ctx)){
+      const checked=await verifySoftwareCandidate(input.projectId,input.requestId,ctx.signal)
+      if(!locallyVerifiedSoftware(checked))return JSON.stringify(verificationResponse(input.projectId,checked))
+    }
     // Opt-in until real-model cost/benefit is measured. Never substitutes for C/V.
     // The UI-only observer uses the same charged transport, not the paid trial script.
     const explorationKey=versionOf()
@@ -567,7 +573,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
             const advice=partner.isObserving()?partner.take(ctx):undefined
             if(advice)return advice
           }
-          const feedback=await advanceCloseout(ctx)
+          const feedback=await advanceCloseout(ctx,Boolean(verified))
           if(feedback){partner.begin(ctx);return feedback}
           return undefined
         },
@@ -581,15 +587,22 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
           if(calls.some(call=>call.name==='challenge_independent_case'&&call.status==='ok')) {
             if(await recoverIndependentDesign())return {feedback:'独立验收争议已核对。读取当前 independent-design 核对冻结案例及控件映射，然后 verify_app 重新验收。'}
           }
+          let verified: Awaited<ReturnType<typeof recentSoftwareVerification>>
           if(calls.some(c=>c.name==='propose_test_correction'&&c.status==='ok')){
-            await settleCorrections(ctx.signal)
+            const applied=await settleCorrections(ctx.signal)
             const rejected=testCorrectionRejectionFeedback(input.projectId)
             if(rejected)return{feedback:JSON.stringify(testCorrectionFacts(input.projectId)),verification:rejected}
+            if(applied){
+              const checked=await verifySoftwareCandidate(input.projectId,input.requestId,ctx.signal)
+              if(awaitingAssistedAcceptance(checked))throw new ModelRequestRefusal('USER_ACCEPTANCE_REQUIRED')
+              if(checked.status!=='passed')return{feedback:JSON.stringify(verificationResponse(input.projectId,checked)),verification:verificationToolFeedback(checked)}
+              verified=checked
+            }
           }
-          const verified=calls.some(c=>c.status==='ok'&&!c.pending&&['verify_app','inspect_app'].includes(c.name))
-            ?await recentSoftwareVerification(input.projectId,input.requestId,ctx.signal):undefined
+          if(!verified&&calls.some(c=>c.status==='ok'&&!c.pending&&['verify_app','inspect_app'].includes(c.name)))
+            verified=await recentSoftwareVerification(input.projectId,input.requestId,ctx.signal)
           if(!verified){const advice=partner.take(ctx);return advice?{feedback:advice}:undefined}
-          const feedback = await advanceCloseout(ctx)
+          const feedback = await advanceCloseout(ctx,true)
           if(feedback)partner.begin(ctx)
           return feedback ? { feedback,verification:verificationToolFeedback(verified) } : { complete: true,verification:verificationToolFeedback(verified) }
         }, recoveryContext: () => renderSoftwareWorkingContext(input.projectId), publish: emit }) } }

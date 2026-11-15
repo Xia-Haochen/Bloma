@@ -15,7 +15,7 @@ import {independentDesignVersion} from './independent-design'
 const digest=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const readMore=(report_hash:string,offset=0)=>({tool:'read_production_context',arguments:{topic:'verification-report',report_hash,offset}})
 export function verificationToolFeedback(result:SoftwareVerification):ToolFeedback{
-  const failure=verificationFailure(result),category=failure?.category
+  const failure=result.failure??verificationFailure(result),category=failure?.category
   // A shrinking or changed set of actual findings is new evidence. Line shifts,
   // report timestamps and wording alone must not reset the no-progress guard.
   const staticFindings=category==='security_policy'?result.security?.issues
@@ -65,7 +65,7 @@ function failureDistribution(rows:ReturnType<typeof verificationCases>){
 export function verificationReportView(result:SoftwareVerification,options:{historical?:boolean;offset?:number;limit?:number;at?:number;persisted?:boolean;error?:unknown}={}){
   const reportHash=digest(result),rows=verificationCases(result),offset=options.offset??0,limit=options.limit??8
   if(!Number.isSafeInteger(offset)||offset<0||!Number.isSafeInteger(limit)||limit<1||limit>24)throw Error('VERIFICATION_REPORT_PAGE_INVALID')
-  const failure=verificationFailure(result,options.error)
+  const failure=options.error===undefined?result.failure??verificationFailure(result):verificationFailure(result,options.error)
   const facts=failure?.observation
   const pv=(value:unknown)=>preview(value,reportHash,options.persisted!==false)
   const selected=rows.slice(offset,offset+limit).map(row=>Object.fromEntries(Object.entries(row).map(([k,v])=>[k,pv(v)])))

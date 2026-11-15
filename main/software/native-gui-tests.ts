@@ -31,12 +31,16 @@ export function sameNativeTestBytes(a: NativeGuiTests, b: NativeGuiTests) {
 }
 export class NativeTestContractError extends Error {
     readonly readOriginal?: {tool:'read_test_contract';arguments:{contract_digest:string;file:string}};
-    constructor(public readonly paths: string[], before?:NativeGuiTests) {
-        const readOriginal=before?{tool:'read_test_contract' as const,arguments:{contract_digest:before.digest,file:before.layout==='project'?before.entry:before.directory+'/'+before.entry}}:undefined;
-        super(`GUI_EXISTING_EXPECTATIONS_CHANGED: ${JSON.stringify({ paths: paths.slice(0, 24), omitted: Math.max(0, paths.length - 24),contract_digest:before?.digest,
-          read_original:readOriginal,
-          next: '正式案例保留已执行输入、断言与共享逻辑。若预期或前置输入错误，read_test_contract查询冻结原文后propose_test_correction；独立裁定前不能改写或用新入口替换旧案例。未执行的引导计划可依据宿主凭据修复。' })}`);
+    readonly correctionEntry?: string;
+    constructor(public readonly paths: string[], before?:NativeGuiTests, code='GUI_EXISTING_EXPECTATIONS_CHANGED') {
+        const relative = (file: string) => before?.layout === 'project' ? file : before?.directory + '/' + file;
+        const entry = before && relative(before.entry);
+        const changed = before?.files.map(file => relative(file.path)).find(file => paths.includes(file));
+        const readOriginal=before&&entry?{tool:'read_test_contract' as const,arguments:{contract_digest:before.digest,file:changed??entry}}:undefined;
+        super(`${code}: ${JSON.stringify({ paths: paths.slice(0, 24), omitted: Math.max(0, paths.length - 24),contract_digest:before?.digest,
+          read_original:readOriginal, correction_entry:entry })}`);
         this.readOriginal=readOriginal;
+        this.correctionEntry=entry;
     }
 }
 /** Compare business contracts, allowing extra checks and layout-only migration.
@@ -259,16 +263,19 @@ export function frozenNativeGuiVersion(projectId: string, native?: NativeGuiTest
         return;
     validateNativeGuiTests(native);
     const directory = base(projectId, native.digest);
+    const changed: string[] = [];
     for (const file of native.files) {
         const frozen = fileWithin(directory, file.path);
         if (lstatSync(frozen).isSymbolicLink() || lstatSync(frozen).size !== file.size || sha(readFileSync(frozen)) !== file.sha256)
             throw Error('GUI_NATIVE_FROZEN_INPUT_CHANGED');
         if (sourceRoot) {
-            const source = fileWithin(sourceRoot, native.layout === 'project' ? file.path : native.directory + '/' + file.path);
+            const relative = native.layout === 'project' ? file.path : native.directory + '/' + file.path;
+            const source = fileWithin(sourceRoot, relative);
             if (!existsSync(source) || lstatSync(source).isSymbolicLink() || sha(readFileSync(source)) !== file.sha256)
-                throw Error('GUI_NATIVE_TEST_SOURCE_CHANGED: 输入和预期已冻结；定位修复可重新verify_app(script)，不能改断言过关');
+                changed.push(relative);
         }
     }
+    if (changed.length) throw new NativeTestContractError(changed, native, 'GUI_NATIVE_TEST_SOURCE_CHANGED');
     return native.digest;
 }
 export function frozenNativeGuiEntry(projectId: string, native: NativeGuiTests, sourceRoot: string) {

@@ -36,7 +36,7 @@ import { independentDesignVersion } from './independent-design'
 import { challengeIndependentCase } from './independent-quality'
 import { selectQualityCollaboration } from './collaboration-selection'
 
-import { qualityTestSources, qualityCoverageRulesVersion, registeredQualityCases, qualityFailureBaseline, applicableQualityLedger, qualityRulesVersion as rulesVersion, qualityHash as hash, sameIdentity as same, qualityIdentity as identity, readQualityLedger, saveQualityLedger, type Review, type ReviewKind, type ReviewPurpose, type Ledger, type QualityFinding } from './quality-ledger'
+import { qualityTestSources, qualityCoverageRulesVersion, qualityTargetIdentity, registeredQualityCases, qualityFailureBaseline, applicableQualityLedger, qualityRulesVersion as rulesVersion, qualityHash as hash, sameIdentity as same, qualityIdentity as identity, readQualityLedger, saveQualityLedger, type Review, type ReviewKind, type ReviewPurpose, type Ledger, type QualityFinding } from './quality-ledger'
 export { qualityLedgerPath, readQualityLedger } from './quality-ledger'
 export type { QualityFinding } from './quality-ledger'
 
@@ -140,21 +140,25 @@ export function createQualityReview(projectId: string, parent: string, policy: R
   })
   const ensureCoverage=async(ctx:ToolContext)=>{
     const brief=readPrdBackplane(projectId)
-    if(brief.lean_brief?.ui!=='required'&&!brief.requirements_model?.workflows?.length)return
+    if(brief.lean_brief?.ui!=='required'&&!brief.requirements_model?.workflows?.length)return false
     if(!registeredQualityCases(projectId,true).length)throw Error('QUALITY_COVERAGE_MATERIALS_REQUIRED')
-    const current=await identity(projectId,ctx.signal),rules=qualityCoverageRulesVersion(projectId)
-    if(readQualityLedger(projectId).reviews.some(r=>r.purpose==='coverage'&&r.status==='complete'&&r.identity.target===current.target&&r.rules===rules))return
+    const target=qualityTargetIdentity(projectId),rules=qualityCoverageRulesVersion(projectId)
+    if(readQualityLedger(projectId).reviews.some(r=>r.purpose==='coverage'&&r.status==='complete'&&r.identity.target===target&&r.rules===rules))return false
     const child=await begin(ctx,'code',undefined,'coverage')
     const run=findDelegation(parent,child.delegation_id)
     if(run?.completion)await withAbort(run.completion,ctx.signal)
     const review=readQualityLedger(projectId).reviews.find(r=>r.delegation===child.delegation_id)
     if(review?.status!=='complete')throw new ModelRequestRefusal('QUALITY_COVERAGE_REVIEW_INCOMPLETE')
     // Coverage discovers work; it never replaces execution or candidate C/V.
+    return true
   }
   const system = (child: string) => {
     const id = children.get(child)
     if (!id) return
     const review = readQualityLedger(projectId).reviews.find(r => r.id === id)
+    if (review?.purpose === 'coverage' && review.kind !== 'visual') {
+      return '你是独立只读代码/数据审阅C，本轮负责测试覆盖。读 read_quality_review 返回的确认旅程、现有缺口和冻结用例，用 test_file 核对具体输入、触发、断言及重开读回。提交会漏过错误实现的具体缺口；已有疑点被用例覆盖时同时填写 resolutions。工程设计与核心体验结论由最终候选审阅负责。本轮用 submit_quality_findings 完成，只读。'
+    }
     if (review?.kind !== 'visual' && review?.purpose === 'binding') {
       return '你是独立只读代码/数据审阅C。本次只判断 binding_work 中的疑点有没有注册案例覆盖。先读取 read_quality_review 和相关冻结测试，核对触发及失败断言；仅为确实覆盖的旧疑点提交 resolutions。没有匹配案例时省略该项，保留缺口，仍通过 submit_quality_findings 完成审阅。不改文件、不执行命令。完整代码审阅另有步骤。'
     }
@@ -180,6 +184,8 @@ export function createQualityReview(projectId: string, parent: string, policy: R
         const bytes=readFileSync(file.path)
         if(createHash('sha256').update(bytes).digest('hex')!==file.sha256)throw Error('QUALITY_FROZEN_TEST_CHANGED')
         const utf8=bytes.toString('utf8'),encoding=Buffer.from(utf8).equals(bytes)?'utf8':'base64',text=encoding==='utf8'?utf8:bytes.toString('base64')
+        if (encoding==='utf8' && Number(offset)<text.length && review.kind!=='visual'
+          && (review.purpose==='coverage'||review.purpose==='binding')) sourceRead.add(ctx.sessionId)
         return{output:JSON.stringify({file:file.key,sha256:file.sha256,encoding,offset,text:text.slice(offset as number,(offset as number)+16000),total_characters:text.length,
           next:(offset as number)+16000<text.length?{test_file:file.key,offset:(offset as number)+16000}:undefined,authority:'frozen_test_input_not_execution_or_current_image'})}
       }
@@ -188,18 +194,22 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       const work=qualityCloseout(applicable,review.identity,undefined,rulesVersion(projectId),independentDesignVersion(projectId))
       const bindingWork = work.binding_findings.filter(id=>(ledger.findings.find(f=>f.id===id)?.review_kind??'code')===(review.kind??'code'))
       materialsRead.add(ctx.sessionId)
-      if (review.purpose === 'binding' && review.kind !== 'visual') {
+      const coverage=review.purpose==='coverage'
+      if ((coverage||review.purpose==='binding') && review.kind!=='visual') {
         const findings = applicable.findings.filter(finding => bindingWork.includes(finding.id))
         const requirements = new Set(findings.map(finding => finding.requirement))
         return { output: JSON.stringify({
           review:{id:review.id,purpose:review.purpose,identity:review.identity,rules:review.rules},
-          binding_work:bindingWork,root:findProject(projectId).root_path,goal:brief.positioning,
+          binding_work:bindingWork,root:findProject(projectId).root_path,goal:brief.positioning,assumptions:brief.assumptions,
           unresolved_findings:findings.map(finding=>({...finding,checks:finding.checks.slice(-1)})),
           frozen_test_files:testSources.map(({path,...entry})=>entry),
-          test_coverage:{scope:'registered_cases_for_binding',cases:registeredQualityCases(projectId).filter(item=>item.requirements.some(id=>requirements.has(id))),
-            contract_changes:testCorrectionChanges(projectId),
+          test_coverage:{scope:coverage?'available_cumulative_slice':'registered_cases_for_binding',
+            cases:registeredQualityCases(projectId,coverage).filter(item=>coverage||item.requirements.some(id=>requirements.has(id))),
+            workflows:coverage?brief.requirements_model?.workflows:undefined,
+            experience:coverage?brief.requirements_model?.experience:undefined,
+            contract_changes:testCorrectionChanges(projectId,coverage),
             authority:'核对冻结案例的具体触发和断言能否区分所报错误实现；同一需求编号不能证明覆盖。'},
-          requirements:brief.requirements.filter(row=>requirements.has(row.id)).map(row=>({id:row.id,description:row.description,expected_source:trustedAcceptance(brief,row)})),
+          requirements:brief.requirements.filter(row=>coverage||requirements.has(row.id)).map(row=>({id:row.id,description:row.description,expected_source:trustedAcceptance(brief,row)})),
           resolution_protocol:'只有实际覆盖才在 resolutions 中填写 finding_id、case_name 和具体依据。没有匹配则省略，提交后让制作流程补齐案例。绑定完成后仍由宿主实际执行。',
         }) }
       }
@@ -236,10 +246,11 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       } else if (input.visual_observations !== undefined) throw Error('VISUAL_OBSERVATIONS_NOT_APPLICABLE')
       if (Object.keys(input).some(k => !['findings', 'visual_observations', 'intent_observations', 'resolutions', 'engineering'].includes(k)) || !Array.isArray(input.findings) || input.findings.length > 32) throw Error('QUALITY_FINDINGS_INVALID')
       const brief = readPrdBackplane(projectId)
-      if (review.kind !== 'visual') review.engineering = input.engineering === undefined
+      const fullCodeReview=review.kind!=='visual'&&(review.purpose??'candidate')==='candidate'
+      if (fullCodeReview) review.engineering = input.engineering === undefined
         ? { status: 'unverified', evidence: '本次代码审阅未提供工程观察。', limitations: '未据此判断架构合格或不合格。' }
         : parseEngineeringReview(input.engineering)
-      else if (input.engineering !== undefined) throw Error('ENGINEERING_REVIEW_NOT_APPLICABLE')
+      else if (review.kind==='visual'&&input.engineering!==undefined) throw Error('ENGINEERING_REVIEW_NOT_APPLICABLE')
       const bindings:Array<{finding_id:string;case_name:string;evidence:string}>=[]
       const rows = input.findings.map((raw: unknown): QualityFinding => {
         const {case_name,requires_execution,...row} = canonicalFindingReference(raw), fields = ['requirement', 'expected_source', 'category', 'severity', 'location', 'trigger', 'evidence', 'reproduction', 'unknowns', 'kind']
@@ -254,9 +265,11 @@ export function createQualityReview(projectId: string, parent: string, policy: R
         if(case_name!==undefined){if(typeof case_name!=='string'||!case_name.trim()||case_name.length>1000)throw Error('QUALITY_CASE_BINDING_INVALID');bindings.push({finding_id:findingId,case_name,evidence:String(row.reproduction)+'\n'+String(row.evidence)})}
         return { ...finding, requires_execution:requires_execution!==false, id: findingId, review: review.id, review_kind: review.kind ?? 'code', visual_material_hash: review.visual?.manifest_hash, identity: review.identity, disposition, checks: [] } as unknown as QualityFinding
       })
-      const experience = review.kind === 'visual' || review.purpose === 'binding' ? undefined : brief.requirements_model?.experience
-      const intent = validateIntentObservations(input.intent_observations,experience)
-      review.intent_observations = bindIntentFindings(intent,experience,rows)
+      if (fullCodeReview||review.kind==='visual') {
+        const experience=fullCodeReview?brief.requirements_model?.experience:undefined
+        const intent=validateIntentObservations(input.intent_observations,experience)
+        review.intent_observations=bindIntentFindings(intent,experience,rows)
+      }
       const resolutions=input.resolutions??[]
       if(!Array.isArray(resolutions)||resolutions.length>32)throw Error('QUALITY_RESOLUTION_INVALID')
       const resolvedIds=new Set<string>()
@@ -361,10 +374,11 @@ export function createQualityReview(projectId: string, parent: string, policy: R
     if(!kind||tool.name!=='submit_quality_findings')return tool
     const schema=tool.input_schema as {properties:Record<string,unknown>;required?:string[]}
     const properties={...schema.properties};delete properties[kind==='visual'?'intent_observations':'visual_observations']
-    if(purpose==='binding')delete properties.intent_observations
+    const fullCodeReview=kind==='code'&&(purpose??'candidate')==='candidate'
+    if(!fullCodeReview){delete properties.engineering;delete properties.intent_observations}
     const required=[...(schema.required??[])]
     if(kind==='visual')required.push('visual_observations')
-    else if(purpose!=='binding'&&readPrdBackplane(projectId).requirements_model?.experience)required.push('intent_observations')
+    else if(fullCodeReview&&readPrdBackplane(projectId).requirements_model?.experience)required.push('intent_observations')
     return{...tool,input_schema:{...tool.input_schema,properties,required}}
   })
   const reviewTools = (tools: AgentLoopTool[], child?: string): AgentLoopTool[] => {

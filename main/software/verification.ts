@@ -16,7 +16,7 @@ import { prdScopeFingerprint } from '../project/requirement-contract'
 import { guiSuitePath, parseGuiSuite } from '../desktop/gui-acceptance'
 import { frozenGuiFixtureVersion } from '../desktop/gui-fixtures'
 import { cliSuitePath } from '../desktop/lean-cli-check'
-import { runCoreVerification, type CoreVerificationResult } from '../desktop/core-verification'
+import { CORE_MANIFEST_REL, runCoreVerification, type CoreVerificationResult } from '../desktop/core-verification'
 import { runLaunchSmoke, requireLaunchDeclaration, type LaunchSmokeResult } from '../desktop/launch-smoke'
 import { runSecurityScan, type SecurityScanResult } from '../verification/security-scan'
 import { requirementCapabilities } from '../model/requirement-capabilities'
@@ -31,7 +31,7 @@ import { independentAdapterVersion, verifyIndependentDesign } from './independen
 import { recordEvaluationEvent } from './harness-evaluation'
 import { capabilityBindingVersion } from './capability-bindings'
 import { recordIndependentFindings, independentChallengeVersion } from './independent-quality'
-import { microphoneEvidenceVersion } from '../desktop/speech-verification'
+import { hasReusableMicrophoneEvidence, microphoneEvidenceVersion, type SpeechVerificationSpec } from '../desktop/speech-verification'
 import { settleObservedQuality } from './quality-settlement'
 
 export interface SoftwareVerification { status: 'passed' | 'failed' | 'unverified' | 'environment_blocked'; summary: string; candidate?: SoftwareRelease;
@@ -65,6 +65,7 @@ export function awaitingAssistedAcceptance(result:SoftwareVerification|undefined
     && !result.independent?.case_results?.some(row=>row.status==='failed')
 }
 const poisoned = new Set<string>()
+const requestSpeechReceipts = new Map<string,string>()
 function receiptPath(projectId: string) {
   if (!/^[A-Za-z0-9_-]+$/.test(projectId)) throw Error('SOFTWARE_VERIFY_PROJECT_INVALID')
   return join(getPromaHome(), 'software-verification', `${projectId}.json`)
@@ -87,7 +88,8 @@ export async function verificationInputs(projectId: string, requestId: string, s
       runtime.push((await runtimeInventory(npm, signal, {}, false)).digest)
     } else { reusable = false; break }
   }
-  if (brief.requirements.some(item => requirementCapabilities(item).has('speech'))) reusable = false
+  const capabilities = brief.requirements.map(requirementCapabilities)
+  const speech = capabilities.some(item => item.has('speech'))
   const host = mainRootDir(), implementation: unknown[] = []
   if (existsSync(join(host, 'desktop/core-verification.ts'))) {
     implementation.push((await runtimeInventory(host, signal, {}, false)).digest)
@@ -106,18 +108,27 @@ export async function verificationInputs(projectId: string, requestId: string, s
     environment:digest([runtime,resolved.command,resolved.env,runtimeBindingVersion(projectId),capabilityBindingVersion(projectId),implementation,process.platform,process.arch,process.versions.node]),request_id:requestId,operation_id:project.lean_operation_id}
   return { input_identity, key: digest({ protocol: 2, source, operation: project.lean_operation_id,test_corrections:testCorrectionVersion(projectId),microphone_evidence:microphoneEvidenceVersion(projectId),
     scope: prdScopeFingerprint(brief), confirmed: brief.user_confirmed_at, ux: project.ux_confirmation, rules: ruleVersion, fixtures: fixtureVersion,
-    runtime, command: resolved.command, environment: resolved.env, managed: runtimeBindingVersion(projectId),capabilities:capabilityBindingVersion(projectId), independent:independentDesignVersion(projectId),independent_challenges:independentChallengeVersion(projectId),adapter:independentAdapterVersion(project.root_path),implementation, platform: process.platform, arch: process.arch, node: process.versions.node }), reusable }
+    runtime, command: resolved.command, environment: resolved.env, managed: runtimeBindingVersion(projectId),capabilities:capabilityBindingVersion(projectId), independent:independentDesignVersion(projectId),independent_challenges:independentChallengeVersion(projectId),adapter:independentAdapterVersion(project.root_path),implementation, platform: process.platform, arch: process.arch, node: process.versions.node }),
+    reusable:reusable&&!speech, requestSpeech:reusable&&speech, needsMicrophone:capabilities.some(item=>item.has('microphone')) }
 }
 export async function recentSoftwareVerification(projectId: string, requestId: string, signal?: AbortSignal): Promise<SoftwareVerification | undefined> {
   const file = receiptPath(projectId); if (poisoned.has(file) || !existsSync(file)) return
   try {
     const receipt = JSON.parse(readFileSync(file, 'utf8')) as Receipt
-    if (receipt.version !== 1 || receipt.state !== 'complete' || !receipt.reusable || receipt.result?.status !== 'passed'
+    if (receipt.version !== 1 || receipt.state !== 'complete' || receipt.result?.status !== 'passed'
       || Date.now() - receipt.at < 0 || digest(receipt.result) !== receipt.result_hash) return
+    const requestSpeech = requestSpeechReceipts.get(file) === receipt.result_hash
+      && receipt.result.input_identity?.request_id === requestId
+    if (!receipt.reusable && !requestSpeech) return
     const current = await verificationInputs(projectId, requestId, signal)
-    if (!current.reusable || current.key !== receipt.key || !receipt.result.candidate) return
-    await readSoftwareCandidate(projectId, receipt.result.candidate.id, signal)
-    await verifyReleaseSource(receipt.result.candidate, signal)
+    const candidate=receipt.result.candidate
+    if (current.key !== receipt.key || !candidate || !(current.reusable || requestSpeech&&current.requestSpeech)) return
+    await readSoftwareCandidate(projectId, candidate.id, signal)
+    await verifyReleaseSource(candidate, signal)
+    if (requestSpeech && current.needsMicrophone) {
+      const {speech} = JSON.parse(readFileSync(join(candidate.root,CORE_MANIFEST_REL),'utf8')) as {speech?:SpeechVerificationSpec}
+      if (!speech || !await hasReusableMicrophoneEvidence(projectId,candidate.root,speech,signal)) return
+    }
     await settleObservedQuality(projectId,receipt.result,signal,qualityIdentityForInputs(projectId,current.input_identity))
     return { ...receipt.result, reused: true, core: receipt.result.core ? { ...receipt.result.core, reused: true } : undefined }
   } catch (error) { signal?.throwIfAborted(); return } // unreadable or incomplete evidence is never reused
@@ -147,6 +158,7 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
   if (!force) { const previous = await recentSoftwareVerification(projectId, requestId, signal); if (previous&&(!ownedCandidate||previous.candidate?.id===ownedCandidate.id)) {recordEvaluationEvent(projectId,'verification_result',{status:'reused',candidate_id:previous.candidate?.id});return previous} }
   if (active.has(file)) throw Error('SOFTWARE_VERIFY_ALREADY_RUNNING')
   active.add(file); poisoned.add(file)
+  requestSpeechReceipts.delete(file)
   recordEvaluationEvent(projectId,'verification_started',{request_id:requestId})
   let version: Awaited<ReturnType<typeof verificationInputs>> | undefined
   const result: SoftwareVerification = { status: 'unverified', summary: '当前版本尚未通过检查。', report_path: file }
@@ -223,8 +235,12 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
     // Even cancellation/write failure invalidates an older PASS. No result may
     // outlive changed rule, fixture, environment, binary or source inputs.
     result.completed_at=Date.now()
-    const reusable = Boolean(version?.reusable && result.status === 'passed' && !result.security?.issues.some(issue => issue.category === 'external_resource'))
-    writeTextFileAtomic(file, JSON.stringify({ version: 1, state: 'complete', key: version?.key ?? '', at: Date.now(), result, result_hash: digest(result), reusable } satisfies Receipt))
+    const eligible = result.status === 'passed' && !result.security?.issues.some(issue => issue.category === 'external_resource')
+    const resultHash=digest(result)
+    writeTextFileAtomic(file, JSON.stringify({ version: 1, state: 'complete', key: version?.key ?? '', at: Date.now(), result, result_hash: resultHash, reusable:Boolean(version?.reusable&&eligible) } satisfies Receipt))
+    // A prepared speech candidate can hand the same observation from the
+    // verifier to closeout in this request. A later request still runs speech.
+    if (eligible && version?.requestSpeech && result.candidate?.speech_resources && result.core?.speech?.status==='passed') requestSpeechReceipts.set(file,resultHash)
     poisoned.delete(file)
     recordEvaluationEvent(projectId,'verification_result',{status:result.status,category:result.failure?.category,summary:result.summary.slice(0,1600),candidate_id:result.candidate?.id})
     } finally { active.delete(file) }

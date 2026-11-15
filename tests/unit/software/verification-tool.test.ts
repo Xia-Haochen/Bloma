@@ -26,6 +26,9 @@ import { frozenGuiFixtureVersion, sealGuiFixtures } from '../../../main/desktop/
 import { installGuiAcceptanceSuite } from '../../../main/desktop/gui-acceptance'
 import { prdScopeFingerprint } from '../../../main/project/requirement-contract'
 import {readVerificationReport} from '../../../main/software/verification-report'
+import * as capabilityResources from '../../../main/software/capability-resources'
+import * as coreVerification from '../../../main/desktop/core-verification'
+import * as speechVerification from '../../../main/desktop/speech-verification'
 
 let home: string, old: string | undefined, project: ReturnType<typeof createProject>
 beforeEach(() => { old = process.env.PROMA_HOME; home = mkdtempSync(join(tmpdir(), 'bloma-verify-action-')); process.env.PROMA_HOME = home;
@@ -50,8 +53,8 @@ it('invalidates old PASS on cancellation, corrupted receipts and receipt write f
   expect(await recentSoftwareVerification(project.project_id, 'r')).toBeUndefined()
 }, 60000)
 const ctx = () => ({ projectId: project.project_id, sessionId: 's', requestId: 'r', signal: AbortSignal.timeout(90000), state: createToolState() })
-async function setup() {
-  const parsed = parseLeanBrief(JSON.stringify({ action: 'brief', goal: '输出5', ui: 'none', delivery: 'command', requirements: [{ description: '输出5', expected: '输出5' }] }),
+async function setup(description='输出5') {
+  const parsed = parseLeanBrief(JSON.stringify({ action: 'brief', goal: '输出5', ui: 'none', delivery: 'command', requirements: [{ description, expected: '输出5' }] }),
     { projectId: project.project_id, sessionId: 's', source: '输出5', previous: readPrdBackplane(project.project_id), software: true })!
   if (parsed.action !== 'brief') throw Error('fixture')
   syncDocuments({ request_id: 'sync', project_id: project.project_id, session_id: 's', checkpoint: 'requirement_confirmed' }, parsed.brief); markPrdUserConfirmed(project.project_id)
@@ -60,6 +63,32 @@ async function setup() {
   expect((await buildLeanCliTool(project.project_id).execute({ expectations: { 'F-001': '输出5' }, cases: [{ name: 'five', covers: ['F-001'], args: [], stdout: '5', exit_code: 0 }] }, ctx())).isError).not.toBe(true)
   return source
 }
+it('uses prepared speech evidence for same-request closeout only while inputs and microphone evidence match',async()=>{
+  const source=await setup('麦克风输入')
+  const root=project.root_path,id=project.project_id
+  writeFileSync(join(root,'CORE_CHECK.json'),JSON.stringify({speech:{module:'speech_runtime',factory:'SpeechEngine',method:'transcribe'}}))
+  const snapshot=vi.spyOn(capabilityResources,'snapshotSpeechResources').mockResolvedValue({
+    provider:'python-sensevoice-v1',root,manifest_sha256:'fixture',
+  })
+  const resource=vi.spyOn(capabilityResources,'validateSpeechResources').mockResolvedValue()
+  const microphone=vi.spyOn(speechVerification,'hasReusableMicrophoneEvidence').mockResolvedValue(true)
+  const runCore=vi.spyOn(coreVerification,'runCoreVerification').mockResolvedValue({
+    status:'passed',checked_at:new Date().toISOString(),summary:'test fixture',missing:[],evidence:[],
+    speech:{status:'passed',probe_version:1},
+  })
+  try{
+    const first=await verifySoftwareCandidate(id,'r')
+    expect(first.status,first.summary).toBe('passed')
+    expect((await verifySoftwareCandidate(id,'r')).candidate?.id).toBe(first.candidate?.id)
+    expect(runCore).toHaveBeenCalledTimes(1)
+    expect(microphone).toHaveBeenCalledTimes(1)
+    expect(await recentSoftwareVerification(id,'new-request')).toBeUndefined()
+    microphone.mockResolvedValueOnce(false)
+    expect(await recentSoftwareVerification(id,'r')).toBeUndefined()
+    writeFileSync(join(root,'app.cjs'),source+'\n// changed')
+    expect(await recentSoftwareVerification(id,'r')).toBeUndefined()
+  }finally{runCore.mockRestore();microphone.mockRestore();resource.mockRestore();snapshot.mockRestore()}
+},60000)
 it('runs real checks from a parent action and reuses them at final delivery only for unchanged inputs in the same request', async () => {
   await setup(); const tool = buildSoftwareVerifyTool(project.project_id, createSoftwareCollaborationPolicy(project.project_id, project.root_path, 's'))
   const first = await tool.execute({}, ctx()); expect(first.isError, first.output).not.toBe(true)
