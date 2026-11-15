@@ -475,8 +475,8 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     recordEvaluationEvent(input.projectId,'closeout_entered',{run_id:runId,request_id:input.requestId,source:softwareVerificationFingerprint(project.root_path)})
     const waiting = await waitForProductionChildren(ctx)
     if (waiting) return waiting
-    // On recovery an approved suite may already be registered while its
-    // coverage review was interrupted. Only ask for it after a runnable result.
+    // Before buying a coverage review, get an executable formal result. This
+    // also handles recovery after the review of an approved suite was interrupted.
     if(!deps.coreVerification&&!deps.securityScan&&!deps.launchSmoke&&await quality.ensureCoverage(ctx)){
       const checked=await verifySoftwareCandidate(input.projectId,input.requestId,ctx.signal)
       if(!locallyVerifiedSoftware(checked))return JSON.stringify(verificationResponse(input.projectId,checked))

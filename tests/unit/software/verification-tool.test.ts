@@ -17,6 +17,7 @@ import { readPrdBackplane, markPrdUserConfirmed } from '../../../main/project/pr
 import { syncDocuments } from '../../../main/project/document-sync'
 import { buildLeanCliTool } from '../../../main/desktop/lean-cli-check'
 import { buildSoftwareVerifyTool } from '../../../main/software/verification-tool'
+import { buildSoftwareAgentTools } from '../../../main/software/agent-tools'
 import { createSoftwareCollaborationPolicy } from '../../../main/software/collaboration-policy'
 import { createToolState } from '../../../main/agent/loop/agent-loop'
 import { recentSoftwareVerification, verifySoftwareCandidate } from '../../../main/software/verification'
@@ -88,6 +89,17 @@ it('uses prepared speech evidence for same-request closeout only while inputs an
     writeFileSync(join(root,'app.cjs'),source+'\n// changed')
     expect(await recentSoftwareVerification(id,'r')).toBeUndefined()
   }finally{runCore.mockRestore();microphone.mockRestore();resource.mockRestore();snapshot.mockRestore()}
+},60000)
+it('reports formal failures before asking any coverage reviewer to inspect the suite',async()=>{
+  const source=await setup()
+  const id=project.project_id,root=project.root_path
+  writeFileSync(join(root,'app.cjs'),source.replace('console.log(5)','console.log(999)'))
+  const stageCoverage=vi.fn(async()=>{})
+  const tools=buildSoftwareAgentTools(id,'parent',createSoftwareCollaborationPolicy(id,root,'s'),
+    undefined,undefined,undefined,undefined,stageCoverage)
+  const result=await tools.find(tool=>tool.name==='verify_app')!.execute({},ctx())
+  expect(JSON.parse(result.output)).toMatchObject({status:'failed',evidence:{counts:{failed:1}}})
+  expect(stageCoverage).not.toHaveBeenCalled()
 },60000)
 it('runs real checks from a parent action and reuses them at final delivery only for unchanged inputs in the same request', async () => {
   await setup(); const tool = buildSoftwareVerifyTool(project.project_id, createSoftwareCollaborationPolicy(project.project_id, project.root_path, 's'))
