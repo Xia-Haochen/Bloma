@@ -41,6 +41,7 @@ it('prepares and reuses pinned resources/components without downloads, marks pre
   expect(env.BLOMA_SPEECH_MODEL_DIR).toBe(speechModelRoot())
   const declared=join(project.root_path,'.venv',process.platform==='win32'?'Scripts/python.exe':'bin/python')
   expect(realpathSync.native(env.BLOMA_SPEECH_PYTHON)).toBe(realpathSync.native(declared))
+  expect(execute).toHaveBeenCalledWith(expect.objectContaining({command:expect.arrayContaining([env.BLOMA_SPEECH_PYTHON,'-I','-B'])}))
   const before=readFileSync(join(project.root_path,'speech_runtime.py'))
   await prepareSpeechCapability(project.project_id,project.root_path,signal(),{install_dependencies:false},{execute,probe,download:{fetchImpl:fetch}})
   expect(readFileSync(join(project.root_path,'speech_runtime.py'))).toEqual(before);expect(fetch).not.toHaveBeenCalled()

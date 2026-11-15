@@ -57,7 +57,7 @@ public static class BlomaSpeechPath {
 [BlomaSpeechPath]::Shorten($env:BLOMA_SPEECH_PATH_TO_SHORTEN)
 `
 
-function speechPythonPath(root:string) {
+export function speechPythonPath(root:string) {
   const windows = process.platform === 'win32'
   const python = join(root,'.venv',windows ? 'Scripts/python.exe' : 'bin/python')
   // Leave headroom for native wheel paths under .venv, which include the

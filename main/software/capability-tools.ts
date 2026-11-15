@@ -9,7 +9,7 @@ import { SPEECH_MODEL_MANIFEST, speechModelRoot } from '../platform/speech/model
 import { downloadAsset, matchesAsset, type DownloadDeps } from '../platform/speech/model-downloader'
 import { runHostSpeechProbe } from '../desktop/speech-verification'
 import { executeSoftwareCommand } from './command-runtime'
-import { bindSpeechCapability, executionSpeechBinding, speechManifestVersion } from './capability-bindings'
+import { bindSpeechCapability, executionSpeechBinding, speechManifestVersion, speechPythonPath } from './capability-bindings'
 import { projectRuntimeRequest, satisfies } from './runtime-manager'
 import type { createSoftwareCollaborationPolicy } from './collaboration-policy'
 import { redactSoftwareOutput } from './process-manager'
@@ -48,7 +48,10 @@ function componentState(root:string){
   })
 }
 async function pythonProbe(projectId:string,root:string,signal:AbortSignal,deps:Dependencies){
-  const result=await(deps.execute??executeSoftwareCommand)({projectId,root,command:['python','-I','-B','-c',importProbe],signal,timeoutMs:30000})
+  assertSpeechEnvironment(root,signal)
+  const interpreter=speechPythonPath(root)
+  const command=[existsSync(interpreter)?interpreter:'python','-I','-B','-c',importProbe]
+  const result=await(deps.execute??executeSoftwareCommand)({projectId,root,command,signal,timeoutMs:30000})
   signal.throwIfAborted()
   if(result.code!==0)throw Error(`CAPABILITY_PYTHON_UNAVAILABLE: ${result.stderr.slice(-1000)}`)
   const value=JSON.parse(result.stdout.trim().split(/\r?\n/).at(-1)??'') as PythonProbe
@@ -101,7 +104,8 @@ export async function prepareSpeechCapability(projectId:string,root:string,signa
       if(result.code!==0)throw Error(`CAPABILITY_DEPENDENCIES_FAILED: ${redactSoftwareOutput(result.stderr).slice(-1600)}`)
       python=await pythonProbe(projectId,root,signal,guardedDeps)
     }
-    if(packages.some(name=>!python.packages[name]?.available))throw Error('CAPABILITY_IMPORTS_NOT_READY')
+    const unavailable=packages.filter(name=>!python.packages[name]?.available)
+    if(unavailable.length)throw Error('CAPABILITY_IMPORTS_NOT_READY: '+JSON.stringify(unavailable.map(name=>({package:name,error:python.packages[name]?.error??'未报告导入结果'}))))
     const modelRoot=executionSpeechBinding(projectId,root)?.model_root??speechModelRoot(),rel=relative(realpathSync(root),modelRoot)
     if(!isAbsolute(rel)&&rel!=='..'&&!rel.startsWith('../')&&!rel.startsWith('..\\'))throw Error('CAPABILITY_MODELS_MUST_BE_OUTSIDE_PROJECT')
     if(options.download_models){
