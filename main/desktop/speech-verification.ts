@@ -88,6 +88,7 @@ export async function runHostSpeechProbe(options: { projectId: string; root: str
     if(software&&!executionSpeechBinding(options.projectId,root))throw Error('ASR_CAPABILITY_PREPARATION_REQUIRED: 先prepare_software_capability绑定项目Python与模型资源')
     const env = software?softwareEnvironment(options.projectId,undefined,root):buildDriverEnv({ env_whitelist: ['BLOMA_SPEECH_MODEL_DIR'] } as never, process.env)
     const command=software?resolveSoftwareCommand(root,arguments_,env).command:resolveDriverVenvCommand(arguments_,root)
+    if (software && env.BLOMA_SPEECH_PYTHON) command[0] = env.BLOMA_SPEECH_PYTHON
     env.BLOMA_SPEECH_MODEL_DIR ||= speechModelRoot()
     env.BLOMA_SPEECH_OFFLINE = '1'
     const execution = await (options.spawn ?? execFileDriverSpawn)({ command, cwd: root, env, timeoutMs: options.controlDir ? 300000 : 90000, signal: options.signal })

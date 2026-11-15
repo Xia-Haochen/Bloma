@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
@@ -37,7 +37,10 @@ it('prepares and reuses pinned resources/components without downloads, marks pre
   expect(result.status).toBe('prepared');expect(result.product_verification).toBe('unverified');expect(result.microphone).toBe('not_tested')
   expect(fetch).not.toHaveBeenCalled();expect(SPEECH_COMPONENTS.every(name=>existsSync(join(project.root_path,name)))).toBe(true)
   expect(probe.mock.calls[0][0]).not.toHaveProperty('microphone')
-  const env=capabilityEnvironment(project.project_id,project.root_path);expect(env.BLOMA_SPEECH_MODEL_DIR).toBe(speechModelRoot());expect(env.BLOMA_SPEECH_PYTHON).toContain('.venv')
+  const env=capabilityEnvironment(project.project_id,project.root_path)
+  expect(env.BLOMA_SPEECH_MODEL_DIR).toBe(speechModelRoot())
+  const declared=join(project.root_path,'.venv',process.platform==='win32'?'Scripts/python.exe':'bin/python')
+  expect(realpathSync.native(env.BLOMA_SPEECH_PYTHON)).toBe(realpathSync.native(declared))
   const before=readFileSync(join(project.root_path,'speech_runtime.py'))
   await prepareSpeechCapability(project.project_id,project.root_path,signal(),{install_dependencies:false},{execute,probe,download:{fetchImpl:fetch}})
   expect(readFileSync(join(project.root_path,'speech_runtime.py'))).toEqual(before);expect(fetch).not.toHaveBeenCalled()
