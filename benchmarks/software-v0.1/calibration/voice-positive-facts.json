@@ -1,0 +1,33 @@
+{
+  "rounds": [
+    {
+      "duration": 5,
+      "ended": true,
+      "muted": false,
+      "played_seconds": 5,
+      "text_audio_match": true
+    },
+    {
+      "duration": 5,
+      "ended": true,
+      "muted": false,
+      "played_seconds": 5,
+      "text_audio_match": true
+    },
+    {
+      "duration": 5,
+      "ended": true,
+      "muted": false,
+      "played_seconds": 5,
+      "text_audio_match": true
+    }
+  ],
+  "recalled_facts": [
+    "语音助手",
+    "周五",
+    "300",
+    "蓝色"
+  ],
+  "current_input_in_request": true,
+  "history_in_request": true
+}

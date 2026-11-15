@@ -1,0 +1,21 @@
+{
+  "scope": "offline decode sanity check; human listening and physical microphone remain operator checks",
+  "results": [
+    {
+      "file": "01-name.wav",
+      "decoded": "我叫小林，我的项目叫语音助手，计划周五交付。"
+    },
+    {
+      "file": "02-budget.wav",
+      "decoded": "请记住，项目预算300元，界面使用蓝色主题。"
+    },
+    {
+      "file": "03-recall.wav",
+      "decoded": "我的项目叫什么？何时交付预算多少？主题是什么颜色？"
+    },
+    {
+      "file": "silence.wav",
+      "decoded": ""
+    }
+  ]
+}

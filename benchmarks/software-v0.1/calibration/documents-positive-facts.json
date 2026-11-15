@@ -1,0 +1,35 @@
+{
+  "imported_files": [
+    "a/项目纪要.txt",
+    "b/项目纪要.txt",
+    "预算.md",
+    "风险.md",
+    "交付.pdf",
+    "会议.pdf"
+  ],
+  "search_results": [
+    {
+      "file": "a/项目纪要.txt",
+      "location": "line:1",
+      "text": "青禾项目负责人是林舟。"
+    },
+    {
+      "file": "预算.md",
+      "location": "line:1",
+      "text": "# 青禾预算"
+    },
+    {
+      "file": "交付.pdf",
+      "location": "page:1",
+      "text": "青禾交付清单"
+    }
+  ],
+  "selected_files": [
+    "a/项目纪要.txt",
+    "预算.md",
+    "交付.pdf"
+  ],
+  "original_input_sha256_before": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "original_input_sha256_after": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "exported_text": "林舟负责青禾项目，预算300元。"
+}

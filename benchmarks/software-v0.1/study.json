@@ -1,0 +1,23 @@
+{
+  "study_id": "weekend-pilot-01",
+  "track": "H",
+  "model_id": "TO_BE_SET",
+  "model_version": "TO_BE_SET",
+  "reasoning_effort": "TO_BE_SET",
+  "context_limit": "TO_BE_SET",
+  "output_limit": "TO_BE_SET",
+  "allowed_subagent_models": [],
+  "windows_version": "TO_BE_SET",
+  "hardware": "TO_BE_SET",
+  "common_runtimes_and_assets": "TO_BE_SET",
+  "agent_versions": {},
+  "seed": "public-01",
+  "wall_limit_seconds": 5400,
+  "production_cost_cap_rmb": 10,
+  "live_service_model": "TO_BE_SET",
+  "live_service_endpoint": "TO_BE_SET",
+  "planned_runs": [
+    {"system": "Bloma", "tasks": ["voice-conversation", "equipment-lending", "document-batch-workflow"]},
+    {"system": "generic-agent", "tasks": ["voice-conversation", "equipment-lending", "document-batch-workflow"]}
+  ]
+}

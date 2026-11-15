@@ -20,6 +20,8 @@ test('benchmark separates full completion, partial credit, budget, assistance an
           evidence:[{path:'evidence.txt',sha256:sha256('controlled test evidence')}]}))}
       assert.equal(scoreTrial(bytes,trial,root).autonomous_complete,true)
       assert.equal(scoreTrial(bytes,trial,root).rank_eligible,false)
+      const calibrationPending=Buffer.from(JSON.stringify({...suite,status:'frozen',ranking_enabled:false}))
+      assert.equal(scoreTrial(calibrationPending,{...trial,protocol_sha256:sha256(calibrationPending)},root).rank_eligible,false)
       const partial=structuredClone(trial)
       partial.observations[0].status='fail'
       assert.equal(scoreTrial(bytes,partial,root).quality_points,80)

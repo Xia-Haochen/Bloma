@@ -57,7 +57,7 @@ export function scoreTrial(suiteBytes, trial, evidenceRoot) {
   const excluded = ['infra_error','user_stopped'].includes(trial.execution_status)
   return {
     run_id:trial.run_id, task_id:task.id, system_id:trial.system_id, track:trial.track,
-    protocol_status:suite.status, rank_eligible:suite.status === 'frozen' && !excluded,
+    protocol_status:suite.status, rank_eligible:suite.status === 'frozen' && suite.ranking_enabled !== false && !excluded,
     artifact_complete:artifactComplete,
     autonomous_complete:artifactComplete && inBudget && !excluded && trial.technical_interventions === 0,
     quality_points:Object.values(dimensions).reduce((sum,points)=>sum+points,0),
