@@ -34,6 +34,10 @@ export interface GuiAcceptanceSuite { version: 1; scope_hash: string; covers: st
 }
 export interface GuiAcceptanceResult {
   environment?: AcceptanceEnvironmentEvidence
+  interrupted_audio?: {
+    tracks: Array<{index:number;source_present:boolean;duration:number|null;current_time:number;paused:boolean;ended:boolean;played_ranges:number;error:number|null}>
+    events: Array<{event:string;index:number;current_time:number;duration:number|null}>
+  }
   case_results?: Array<{name:string;feature:string;status:'passed'|'failed'|'unverified'|'not_run';assertions:number;interactions:number;error?:string}>
   failure_kind?: 'assertion'|'runtime'|'bootstrap'|'incomplete'|'unresolved'
   version: 1; scope: 'host_native_gui_business'; status: 'passed' | 'failed' | 'unverified'

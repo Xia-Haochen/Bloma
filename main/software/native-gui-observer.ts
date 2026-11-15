@@ -1,13 +1,59 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync, lstatSync, realpathSync, rmSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import type { GuiAcceptanceSuite } from '../desktop/gui-acceptance';
+import type { GuiAcceptanceResult, GuiAcceptanceSuite } from '../desktop/gui-acceptance';
 import type { LaunchDeclaration } from '../desktop/launch-smoke';
 import { openDebugSession, actDebugSession, closeDebugSessions } from './debug-sessions';
 import { debugWorkspace } from './debug-workspace';
 import { frozenNativeGuiEntry, nativeGuiObservations } from './native-gui-tests';
 import { prepareNativeTestRuntime } from './native-test-runtime';
 import { prepareAcceptanceEnvironment, type AcceptanceEnvironment } from './acceptance-environment'
+import type { Page } from 'playwright'
+
+async function trackAudioEvents(page: Page) {
+    await page.evaluate(() => {
+        const events: Array<{event:string; index:number; current_time:number; duration:number|null}> = []
+        const key = Symbol.for('bloma.hostAudioEvents')
+        Object.defineProperty(window, key, {value:() => events.map(event => ({...event}))})
+        const attached = new WeakSet<HTMLAudioElement>()
+        document.addEventListener('playing', event => {
+            const audio = event.target
+            if (!event.isTrusted || !(audio instanceof HTMLAudioElement) || attached.has(audio)) return
+            attached.add(audio)
+            const index = Array.from(document.querySelectorAll('audio')).indexOf(audio)
+            const record = (observed: Event) => {
+                if (!observed.isTrusted) return
+                if (events.length === 18) events.shift()
+                events.push({event:observed.type,index,
+                    current_time:audio.currentTime,duration:Number.isFinite(audio.duration)?audio.duration:null})
+            }
+            // Keep the listener on the original player, even if a later
+            // conversation render detaches that player from the document.
+            record(event)
+            for (const kind of ['playing', 'pause', 'ended', 'error']) audio.addEventListener(kind, record)
+        },true)
+    }).catch(() => {})
+}
+
+async function incompletePlaybackObservation(page: Page | undefined): Promise<GuiAcceptanceResult['interrupted_audio']> {
+    if (!page || page.isClosed()) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+        return await Promise.race([
+            page.evaluate(() => {
+                const tracks = Array.from(document.querySelectorAll('audio')).slice(0, 8).map((audio,index) => ({
+                    index, source_present: Boolean(audio.currentSrc || audio.getAttribute('src')),
+                    duration: Number.isFinite(audio.duration) ? audio.duration : null, current_time: audio.currentTime,
+                    paused: audio.paused, ended: audio.ended, played_ranges: audio.played.length, error: audio.error?.code ?? null,
+                }))
+                const events = Reflect.get(window,Symbol.for('bloma.hostAudioEvents'))
+                return {tracks,events:typeof events === 'function' ? events() : []}
+            }),
+            new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(Error('GUI_MEDIA_OBSERVATION_TIMEOUT')), 2000) }),
+        ])
+    } catch { return undefined }
+    finally { clearTimeout(timer) }
+}
 export async function runNativeGuiTests(input: {
     projectId: string;
     root: string;
@@ -26,6 +72,7 @@ export async function runNativeGuiTests(input: {
     }> = [];
     const runtimeFailures:string[]=[]
     let interrupted:string|undefined
+    let interruptedMedia: Awaited<ReturnType<typeof incompletePlaybackObservation>>
     const evidenceWarnings: string[] = []
     let environment: AcceptanceEnvironment | undefined
     try {
@@ -35,12 +82,17 @@ export async function runNativeGuiTests(input: {
         for (const phase of native.restart ? ['initial', 'reopened'] : ['initial']) {
             signal.throwIfAborted();
             runtime.verify();
+            let observedPage: Page | undefined
             const opened = await openDebugSession({ projectId: input.projectId, sessionId, root: input.root, launch: input.launch, signal, formal:true,
-                preparePage: page => prepared.prepare(page, phase === 'initial' ? 0 : 1) });
+                preparePage: async page => {
+                    observedPage = page
+                    await prepared.prepare(page, phase === 'initial' ? 0 : 1)
+                    await trackAudioEvents(page)
+                } });
             const directory = debugWorkspace(input.projectId, sessionId), report = join(directory, `native-${phase}.jsonl`), trace = join(directory, `native-${phase}-trace.json`);
             let observed:Awaited<ReturnType<typeof actDebugSession>>|undefined
             try{observed=await actDebugSession({ projectId: input.projectId, sessionId, id: opened.id, signal, nativeTests: { file, phase, report, trace } })}
-            catch(error){signal.throwIfAborted();interrupted=String(error)}
+            catch(error){signal.throwIfAborted();interrupted=String(error);interruptedMedia=await incompletePlaybackObservation(observedPage)}
             runtime.verify();
             if (observed?.screenshot_error) evidenceWarnings.push(observed.screenshot_error)
             const outcome = observed?.steps.find(step => step.id === 'native-tests')?.actual as {
@@ -59,7 +111,9 @@ export async function runNativeGuiTests(input: {
         frozenNativeGuiEntry(input.projectId, native, input.root);
         const result={...nativeGuiObservations(input.suite,reports),environment:prepared.evidence()}
         const evidence_dir = join(workspace, 'evidence', 'acceptance')
-        if(interrupted)return{...result,evidence_dir,evidence_warnings:evidenceWarnings,status:result.status==='failed'?'failed' as const:'unverified' as const,failure_kind:result.status==='failed'?result.failure_kind:'incomplete' as const,error:'GUI_NATIVE_EXECUTION_INCOMPLETE: '+interrupted}
+        if(interrupted)return{...result,evidence_dir,evidence_warnings:evidenceWarnings,status:result.status==='failed'?'failed' as const:'unverified' as const,failure_kind:result.status==='failed'?result.failure_kind:'incomplete' as const,
+          error:'GUI_NATIVE_EXECUTION_INCOMPLETE: '+interrupted,
+          ...(interruptedMedia&&(interruptedMedia.tracks.length||interruptedMedia.events.length)?{interrupted_audio:interruptedMedia}:{})}
         return runtimeFailures.length?{...result,evidence_dir,evidence_warnings:evidenceWarnings,status:'failed' as const,failure_kind:'runtime' as const,
           case_results:result.case_results.map(row=>row.status==='passed'?{...row,status:'unverified' as const}:row),error:`GUI_NATIVE_RUNTIME_ERROR: ${runtimeFailures[0]}`,
           steps:[...result.steps,{id:'native-runtime',passed:false,actual:runtimeFailures.slice(0,3)}]}:{...result,evidence_dir,evidence_warnings:evidenceWarnings}

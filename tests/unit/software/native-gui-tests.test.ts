@@ -34,6 +34,8 @@ const script = `export default async({test,page,expect,assert,phase,evidenceDir}
 it.each(['passed','failed'])('retains %s case evidence when a later case hits the execution deadline without passing the suite',async first=>{
   const execute=commandRuntime.executeSoftwareCommand
   vi.spyOn(commandRuntime,'executeSoftwareCommand').mockImplementation(input=>execute(input.browserBinding?.nativeTest?{...input,timeoutMs:10000}:input))
+  const html=join(project.root_path,'index.html')
+  writeFileSync(html,readFileSync(html,'utf8')+'<audio id="unused-player"></audio>')
   writeFileSync(join(project.root_path,'tests/acceptance.mjs'),`export default async({test,page,expect})=>{
     await test('F-001 completed',async()=>{await page.goto('/');await page.locator('#name').fill('Alice');await page.locator('#save').click();await expect(page.locator('#list')).toHaveText('${first==='passed'?'Alice':'WRONG'}')});
     await test('F-002 interrupted',async()=>{await page.waitForFunction(()=>false,{},{timeout:0})});
@@ -47,7 +49,9 @@ it.each(['passed','failed'])('retains %s case evidence when a later case hits th
     expect.objectContaining({name:'F-002 interrupted',status:'unverified',error:expect.stringContaining('last_operation=waitForFunction (started)')}),
   ]))
   expect(result.core?.host_gui?.error).toContain('GUI_NATIVE_EXECUTION_INCOMPLETE')
+  expect(result.core?.host_gui?.interrupted_audio).toMatchObject({tracks:[{source_present:false}]})
   const response=verificationResponse(project.project_id,result)
+  expect(response.evidence.interrupted_audio).toMatchObject({tracks:[{source_present:false}]})
   expect(response.evidence.cases).toEqual(expect.arrayContaining([
     expect.objectContaining({name:'F-002 interrupted',error:expect.stringContaining('last_operation=waitForFunction (started)')})
   ]))
