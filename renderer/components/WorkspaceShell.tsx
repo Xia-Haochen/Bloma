@@ -119,6 +119,9 @@ export const WorkspaceShell: React.FC<WorkspaceShellProps> = (props) => {
   const last = stream.events[stream.events.length - 1]
   const statusSignal = [...stream.events].reverse().find(event => ['stage_changed', 'completed', 'error', 'delegation_started', 'delegation_completed', 'delegation_failed', 'tool_call_completed', 'user_decision_required'].includes(event.type))?.event_id ?? ''
   const status = useSoftwareStatus(project?.project_id, project?.lean_operation_id, statusSignal, busy)
+  const [acceptanceRequest, setAcceptanceRequest] = React.useState(0)
+  React.useEffect(() => setAcceptanceRequest(0), [project?.project_id, project?.lean_operation_id])
+  const showDelivery = props.deliveryPanel || acceptanceRequest > 0
   const [actionResult, setActionResult] = React.useState('')
   React.useEffect(() => setActionResult(''), [project?.project_id])
 
@@ -157,7 +160,7 @@ export const WorkspaceShell: React.FC<WorkspaceShellProps> = (props) => {
     return () => document.removeEventListener('keydown', escape)
   }, [panelOpen, focused, setDocuments, setCollaboration])
   return (
-    <div className="workspace-theatre" data-ai-id="workspace-theatre" data-mode={project?.mode ?? 'quick'} data-focused={focused} data-has-preview={Boolean(props.deliveryPanel || props.previewUrl || scopePending)} data-view={mobileView} data-resizing-conversation={conversation.resizing} style={{ ...workspaceThemeVariables(), '--studio-conversation-width': `${conversation.width}px` } as React.CSSProperties}>
+    <div className="workspace-theatre" data-ai-id="workspace-theatre" data-mode={project?.mode ?? 'quick'} data-focused={focused} data-has-preview={Boolean(showDelivery || props.previewUrl || scopePending)} data-view={mobileView} data-resizing-conversation={conversation.resizing} style={{ ...workspaceThemeVariables(), '--studio-conversation-width': `${conversation.width}px` } as React.CSSProperties}>
       <div className="workspace-topbar">
         <WorkspaceHeader compact onAllProjects={props.onAllProjects} onOpenSettings={props.onOpenSettings} onUpgrade={props.onUpgrade} onHome={props.onHome} />
         <WorkspaceProgress steps={progress} liveDetail={liveDetail} onRecords={() => openTool('records')} />
@@ -175,8 +178,8 @@ export const WorkspaceShell: React.FC<WorkspaceShellProps> = (props) => {
         <div className="theatre-main" data-panel-open={documents || collaboration || Boolean(localPanel)}>
           <section className="theatre-product" aria-label="软件与当前结果">
         {scopePending ? <ScopeConfirmationPanel scope={props.decisionScope} summary={props.decisionBody} options={props.cardOptions!} onSelect={props.onCardOptionSelect!} busy={busy} />
-          : stage === 'generating_sketch' && busy && !props.previewUrl ? <div className="scope-preparing" role="status"><h3>正在准备界面草图</h3><p>需求已确认。草图会在这里展示，等你确认后才开始制作。</p></div> : props.deliveryPanel
-          ? <DeliveryPanel embedded />
+          : stage === 'generating_sketch' && busy && !props.previewUrl ? <div className="scope-preparing" role="status"><h3>正在准备界面草图</h3><p>需求已确认。草图会在这里展示，等你确认后才开始制作。</p></div> : showDelivery
+          ? <DeliveryPanel embedded acceptanceRequest={acceptanceRequest} onAcceptanceChanged={status.refresh} />
           : <PreviewPanel embedded
           status={props.previewStatus}
           previewUrl={props.previewUrl}
@@ -213,6 +216,13 @@ export const WorkspaceShell: React.FC<WorkspaceShellProps> = (props) => {
               if (action === 'continue') { if (!props.onSendMessage) throw Error('SEND_UNAVAILABLE'); await props.onSendMessage('继续') }
               else if (action === 'settings') props.onOpenSettings?.()
               else if (action === 'inspect') openTool('records')
+              else if (action === 'assisted_acceptance') {
+                setDocuments(false)
+                setCollaboration(false)
+                setLocalPanel(null)
+                setMobileView('preview')
+                setAcceptanceRequest(request => request + 1)
+              }
               else if (action === 'open') {
                 const api = window.electronAPI?.projectDeliverables
                 if (!project || !api) throw Error('LAUNCH_UNAVAILABLE')

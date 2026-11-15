@@ -2,15 +2,22 @@ import React from 'react'
 import type { AssistedAcceptanceView, AssistedAcceptanceInput } from '../../shared/types'
 import './AssistedAcceptancePanel.css'
 
-export function AssistedAcceptancePanel({projectId,onChanged}:{projectId:string;onChanged:()=>void}) {
+export function AssistedAcceptancePanel({projectId,onChanged,openRequest=0}:{projectId:string;onChanged:()=>void;openRequest?:number}) {
   const [view,setView]=React.useState<AssistedAcceptanceView|null>(null)
   const [opened,setOpened]=React.useState(false)
+  const [queryStatus, setQueryStatus] = React.useState<'loading' | 'loaded' | 'failed'>('loading')
+  const heading = React.useRef<HTMLHeadingElement>(null)
   const [device,setDevice]=React.useState('')
   const [error,setError]=React.useState('')
   const [pending,setPending]=React.useState(false)
   const alive=React.useRef(true)
   const changed=React.useRef(onChanged)
   changed.current=onChanged
+  React.useEffect(() => { if (openRequest) setOpened(true) }, [openRequest])
+  const hasView = Boolean(view)
+  React.useEffect(() => {
+    if (openRequest && opened && hasView) heading.current?.focus()
+  }, [openRequest, opened, hasView])
   React.useEffect(()=>{
     alive.current=true
     let polling=false
@@ -19,12 +26,16 @@ export function AssistedAcceptancePanel({projectId,onChanged}:{projectId:string;
       if(polling)return
       polling=true
       try {
-        const result=await window.electronAPI?.projectDeliverables.assistedAcceptance({request_id:crypto.randomUUID(),project_id:projectId,action:'query'})
-        if(alive.current&&result?.ok){
+        const result=await window.electronAPI?.projectDeliverables.assistedAcceptance?.({request_id:crypto.randomUUID(),project_id:projectId,action:'query'})
+        if (!alive.current) return
+        setQueryStatus(result?.ok ? 'loaded' : 'failed')
+        if(result?.ok){
           setView(result.data)
           if(previousPhase!==undefined&&previousPhase!==result.data?.phase)changed.current()
           previousPhase=result.data?.phase
         }
+      } catch {
+        if (alive.current) setQueryStatus('failed')
       } finally {polling=false}
     }
     void poll().catch(()=>{})
@@ -46,12 +57,15 @@ export function AssistedAcceptancePanel({projectId,onChanged}:{projectId:string;
     }catch(error){if(alive.current)setError(String(error))}
     finally{if(alive.current)setPending(false)}
   }
-  if(!view)return null
+  if (!view) return opened ? <section className="assisted-acceptance" aria-label="继续验收">
+    <p role="status">{queryStatus === 'loading' ? '正在读取麦克风实测状态…' : queryStatus === 'failed'
+      ? '暂时无法读取麦克风实测状态，正在重试。' : '当前版本没有可进行的麦克风实测，请查看最新进度。'}</p>
+  </section> : null
   const active=['preparing','ready','recording','decoding','verifying'].includes(view.phase)
   return <section aria-label="继续验收" className="assisted-acceptance">
     <button className="assisted-toggle" type="button" onClick={()=>setOpened(!opened)} aria-expanded={opened}>继续验收 <span aria-hidden="true">{opened?'⌃':'⌄'}</span></button>
     {opened&&<div className="assisted-content">
-      <h3>麦克风实测</h3>
+      <h3 ref={heading} tabIndex={-1}>麦克风实测</h3>
       <p>本次录音 8 秒，用于核对设备采集和当前程序的语音识别入口。原始录音只在内存中处理。</p>
       <p role="status" className={'assisted-status assisted-status-'+view.phase}>{view.phase==='recording'&&<strong>● 录音中　</strong>}{view.detail}</p>
       {view.phase==='recording'&&<div>

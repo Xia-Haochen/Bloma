@@ -14,6 +14,8 @@ import {assistedAcceptanceAction,assistedAcceptanceView,pendingAssistedCandidate
 import {hasRunForProject} from '../../../main/orchestration/stages/run-registry'
 import {readSoftwareRunState} from '../../../main/software/run-state'
 import {runLeanProduction} from '../../../main/desktop/lean-production'
+import {softwareStatusView} from '../../../main/software/state-view'
+import {saveSoftwareRunState} from '../../../main/software/run-state'
 
 let home:string,old:string|undefined,id:string,candidate:any,complete:(value:any)=>void
 let changes=false
@@ -25,7 +27,7 @@ beforeEach(()=>{
   writeFileSync(join(p.root_path,'CORE_CHECK.json'),JSON.stringify({speech:{module:'speech_runtime',factory:'SpeechEngine',method:'transcribe'}}))
   const core={status:'unverified',speech:{status:'passed'},host_gui:{status:'passed'},distribution:{status:'passed'},
     pending_user_checks:[{kind:'microphone',feature:'F-001'}],requirements:[{id:'F-001',verification:'unverified'}]}
-  const result={status:'unverified',candidate,core,security:{passed:true},input_identity:{scope:prdScopeFingerprint(readPrdBackplane(id)),source:candidate.source.digest}}
+  const result={status:'unverified',candidate,core,security:{passed:true},launch:{passed:true},input_identity:{scope:prdScopeFingerprint(readPrdBackplane(id)),source:candidate.source.digest}}
   mkdirSync(join(home,'software-verification'),{recursive:true})
   writeFileSync(join(home,'software-verification',id+'.json'),JSON.stringify({version:1,state:'complete',result,result_hash:createHash('sha256').update(JSON.stringify(result)).digest('hex')}))
   changes=false
@@ -59,6 +61,20 @@ afterEach(async()=>{
 })
 const start=()=>assistedAcceptanceAction({request_id:'start',project_id:id,action:'start',candidate_id:candidate.id})
 const pass={status:'passed',microphone:{status:'passed',rms:.1},real_decode_calls:4}
+it('routes an old microphone checkpoint with a failed launch back to production', async () => {
+  saveSoftwareRunState({projectId:id,sessionId:'session',runId:'run',status:'waiting_user',candidateId:candidate.id})
+  expect(softwareStatusView(id,false).guidance?.action).toBe('assisted_acceptance')
+  const file=join(home,'software-verification',id+'.json'),saved=JSON.parse(readFileSync(file,'utf8'))
+  saved.result.launch={passed:false,detail:'找不到候选主窗口'}
+  saved.result_hash=createHash('sha256').update(JSON.stringify(saved.result)).digest('hex')
+  writeFileSync(file,JSON.stringify(saved))
+
+  expect(softwareStatusView(id,false).guidance).toMatchObject({action:'continue',headline:'程序的启动检查还未通过。'})
+  expect(assistedAcceptanceView(id)).toBeNull()
+  expect(await pendingAssistedCandidate(id)).toBeUndefined()
+  await expect(start()).rejects.toThrow('CURRENT_CANDIDATE_REQUIRED')
+  expect(speech.runHostSpeechProbe).not.toHaveBeenCalled()
+})
 it.each(['failed','unverified'] as const)('does not offer user recording when independent acceptance is %s',async status=>{
   const file=join(home,'software-verification',id+'.json'),saved=JSON.parse(readFileSync(file,'utf8'))
   saved.result.independent={status,case_results:[{status}]}

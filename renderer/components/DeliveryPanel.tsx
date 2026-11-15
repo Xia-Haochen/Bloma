@@ -27,7 +27,11 @@ import type { ProjectDeliverablesResult } from '../../shared/types'
  */
 const MarkdownLazy: React.FC<{ text: string }> = Markdown
 
-export const DeliveryPanel: React.FC<{ embedded?: boolean }> = ({ embedded = false }) => {
+export const DeliveryPanel: React.FC<{
+  embedded?: boolean
+  acceptanceRequest?: number
+  onAcceptanceChanged?: () => void
+}> = ({ embedded = false, acceptanceRequest, onAcceptanceChanged }) => {
   const project = useAtomValue(currentProjectAtom)
   const running = useAtomValue(hasActiveStreamAtom)
   const correctionSession = useAtomValue(correctionSessionAtom)
@@ -166,7 +170,8 @@ export const DeliveryPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
         </button>
       </div>
 
-      {projectId&&<AssistedAcceptancePanel key={projectId} projectId={projectId} onChanged={()=>void refresh()} />}
+      {projectId && <AssistedAcceptancePanel key={projectId} projectId={projectId} openRequest={acceptanceRequest}
+        onChanged={() => { void refresh(); onAcceptanceChanged?.() }} />}
       <Inspection className={hasCanvas ? 'workspace-delivery-inspector workspace-status-inspector' : undefined}>
       {hasCanvas && <summary onClick={inspect}>{data?.status_view?.execution.label ?? '当前状态'} · 检查与启动</summary>}
       <div className={hasCanvas ? 'workspace-inspection-content' : undefined}>

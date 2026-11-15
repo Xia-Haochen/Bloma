@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react'
 import { createStore, Provider } from 'jotai'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatPanel } from '../../renderer/components/ChatPanel'
 import { WorkspaceShell } from '../../renderer/components/WorkspaceShell'
@@ -87,4 +87,32 @@ it('Escape closes only the topmost inspection surface and preserves the input', 
   expect(screen.queryByRole('complementary', { name: '项目资料面板' })).toBeNull()
   expect(document.activeElement).toBe(docs)
   expect((input as HTMLTextAreaElement).value).toBe('保留草稿')
+})
+
+it('opens the microphone test from the main acceptance action, including from a sketch view', async () => {
+  const store = createStore()
+  store.set(currentProjectAtom, { project_id: 'mic-project', name: '语音聊天', mode: 'quick' } as Project)
+  store.set(workflowStageAtom, 'testing')
+  const send = vi.fn()
+  const assistedAcceptance = vi.fn().mockResolvedValue({
+    ok: true, data: { candidate_id: 'a'.repeat(64), phase: 'available', detail: '需要实体麦克风实测。' },
+  })
+  window.electronAPI = { projectDeliverables: {
+    assistedAcceptance,
+    get: vi.fn().mockResolvedValue({ ok: true, data: { status_view: {
+      execution: { status: 'waiting_user', label: '等待实测' },
+      verification: { status: 'last_unverified', label: '待实测' },
+      goal: { status: 'not_delivered', label: '尚未交付' },
+      guidance: { headline: '完成麦克风实测', detail: '选择设备并录音。', action: 'assisted_acceptance', action_label: '继续验收' },
+    }, launch: { declared: false }, files: [] } }),
+  } } as unknown as typeof window.electronAPI
+  render(<Provider store={store}><WorkspaceShell previewUrl="bloma-file://mic-project/sketch.html" onSendMessage={send} /></Provider>)
+  const guidance = within(screen.getByRole('region', { name: '现在该做什么' }))
+  fireEvent.click(await guidance.findByRole('button', { name: '继续验收' }))
+  const heading = await screen.findByRole('heading', { name: '麦克风实测' })
+  await waitFor(() => expect(document.activeElement).toBe(heading))
+  expect(screen.getByRole('button', { name: '准备麦克风测试' })).toBeTruthy()
+  expect(screen.queryByRole('heading', { name: '工作记录' })).toBeNull()
+  expect(assistedAcceptance).toHaveBeenCalledWith(expect.objectContaining({ project_id: 'mic-project', action: 'query' }))
+  expect(send).not.toHaveBeenCalled()
 })

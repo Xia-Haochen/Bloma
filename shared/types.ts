@@ -466,7 +466,7 @@ export interface ProjectDeliverablesInput extends RequestEnvelope {
 export interface SoftwareStatusView {
   observed_at?: number
   operation_id?: string
-  guidance?: { headline: string; detail: string; action?: 'continue' | 'settings' | 'inspect' | 'open'; action_label?: string }
+  guidance?: { headline: string; detail: string; action?: 'continue' | 'settings' | 'inspect' | 'open' | 'assisted_acceptance'; action_label?: string }
   execution: { status: string; label: string; reason?: string; review_purpose?: 'candidate' | 'binding' | 'coverage' }
   verification: { status: 'not_run' | 'running' | 'last_passed' | 'last_failed' | 'last_unverified' | 'unavailable'; label: string; at?: number; scope_note?: string }
   goal: { status: 'not_delivered' | 'waiting_confirmation' | 'delivered' | 'archived'; label: string }

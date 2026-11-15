@@ -60,6 +60,7 @@ export function awaitingUserChecks(core?: CoreVerificationResult): boolean {
  * Missing service setup is engineering work, not a reason to ask for more audio. */
 export function awaitingAssistedAcceptance(result:SoftwareVerification|undefined):boolean {
   return !!result?.candidate && awaitingUserChecks(result.core) && result.security?.passed===true
+    && result.launch?.passed === true
     && (!result.independent||['passed','disabled'].includes(result.independent.status))
     && !result.independent?.case_results?.some(row=>row.status==='failed')
 }
@@ -185,7 +186,12 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
     const brief = readPrdBackplane(projectId), windowReady = brief.lean_brief?.ui !== 'required'
       || candidate.launch.ui === 'browser' && launch.http_ready === true
       || launch.criteria && !launch.criteria.degraded && launch.criteria.window_found && launch.criteria.responsive && launch.criteria.stable && launch.criteria.closed_gracefully
-    if (!launch.passed || !windowReady) { result.status = 'unverified'; result.summary = `正常启动未通过：${launch.detail}${launch.outputExcerpt?'\n'+launch.outputExcerpt.slice(-4000):''}`; return result }
+    if (!launch.passed || !windowReady) {
+      result.launch = { ...launch, passed: false }
+      result.status = 'unverified'
+      result.summary = `正常启动未通过：${launch.detail}${launch.outputExcerpt?'\n'+launch.outputExcerpt.slice(-4000):''}`
+      return result
+    }
     await verifyReleaseSource(candidate, signal)
     if ((await verificationInputs(projectId, requestId, signal)).key !== version.key) throw Error('SOFTWARE_VERIFY_INPUT_CHANGED')
     // An unconfigured B adapter must not suppress independent launch evidence.

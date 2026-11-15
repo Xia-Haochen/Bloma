@@ -11,7 +11,7 @@ import { readSoftwareRunState } from './run-state'
 import { activeSoftwareCommands, redactSoftwareOutput } from './process-manager'
 import { acceptanceScopeNote } from '../desktop/acceptance-evidence'
 import { assistantDisplayText } from '../../shared/message-presentation'
-import { awaitingAssistedAcceptance } from './verification'
+import { awaitingAssistedAcceptance, awaitingUserChecks } from './verification'
 
 /** Presentation facts only. A historical PASS is never a fresh delivery
  * credential; launch/promotion keep their existing independent gates. */
@@ -25,6 +25,7 @@ export function softwareStatusView(projectId: string, busy: boolean): SoftwareSt
   const labels: Record<string, string> = { idle: '尚未执行', running: '正在执行', verifying: '正在检查', repairing: '正在修复', ended: '本轮已结束', blocked: '本轮需处理', cancelled: '本轮已停止', interrupted: '本轮已中断', waiting_user: '等待你确认', waiting_environment: '等待运行环境' }
   let verification: SoftwareStatusView['verification'] = { status: 'not_run', label: '尚无检查记录' }
   let userCheckPending=false
+  let interruptedLaunchDetail: string | undefined
   const file = join(getPromaHome(), 'software-verification', projectId + '.json')
   if (existsSync(file)) try {
     if (statSync(file).size > 2 * 1024 * 1024) throw Error('receipt too large')
@@ -35,6 +36,10 @@ export function softwareStatusView(projectId: string, busy: boolean): SoftwareSt
       if (receipt.state !== 'complete' || !receipt.result || createHash('sha256').update(JSON.stringify(receipt.result)).digest('hex') !== receipt.result_hash) throw Error('invalid receipt')
       const status = receipt.result.status
       userCheckPending=awaitingAssistedAcceptance(receipt.result)
+      if (run?.status === 'waiting_user' && run.candidateId && run.candidateId === receipt.result.candidate?.id
+        && receipt.result.launch?.passed === false && awaitingUserChecks(receipt.result.core)) {
+        interruptedLaunchDetail = receipt.result.launch.detail
+      }
       verification = { status: status === 'passed' ? 'last_passed' : status === 'failed' ? 'last_failed' : 'last_unverified',
         label: status === 'passed' ? '最近检查通过（对应记录版本）' : status === 'failed' ? '最近检查未通过' : '最近检查尚未验证', at,
         scope_note:acceptanceScopeNote(receipt.result.core?.acceptance_evidence) }
@@ -43,7 +48,9 @@ export function softwareStatusView(projectId: string, busy: boolean): SoftwareSt
   const goal: SoftwareStatusView['goal'] = project.status === 'archived' || project.status === 'abandoned' ? { status: 'archived', label: '项目已归档或放弃' }
     : project.current_stage === 'completed' && project.desktop_phase === 'delivered' ? { status: 'delivered', label: '已交付' }
     : project.longterm_summary?.status === 'awaiting_confirmation' ? { status: 'waiting_confirmation', label: '本阶段待你核对' } : { status: 'not_delivered', label: '本轮尚未交付' }
-  const rawReason = run?.error ?? project.desktop_blocked?.note
+  const launchNeedsRetry = interruptedLaunchDetail !== undefined && !busy && goal.status === 'not_delivered' && !project.workflow_retirement
+  const visibleExecution = launchNeedsRetry ? 'blocked' : execution
+  const rawReason = launchNeedsRetry ? interruptedLaunchDetail : run?.error ?? project.desktop_blocked?.note
   const reason = rawReason ? assistantDisplayText(rawReason) : undefined
   let reviewPurpose: 'candidate' | 'binding' | 'coverage' | undefined
   if (busy && run) try {
@@ -58,11 +65,13 @@ export function softwareStatusView(projectId: string, busy: boolean): SoftwareSt
     const budget = leanBudget(projectId, 'desktop-implement').snapshot()
     internalAllowanceAvailable = budget.requests < budget.limits.requests && budget.limits.output - budget.output >= 512
   } catch { /* An unreadable allowance cannot enable a continue hint. */ }
-  const guidance = softwareGuidance(execution, goal.status, reason, Boolean(project.workflow_retirement), internalAllowanceAvailable)
+  const guidance = launchNeedsRetry
+    ? { headline: '程序的启动检查还未通过。', detail: '点击“继续制作”处理启动问题。启动检查通过后再进行麦克风实测。', action: 'continue' as const, action_label: '继续制作' }
+    : softwareGuidance(execution, goal.status, reason, Boolean(project.workflow_retirement), internalAllowanceAvailable)
   if(userCheckPending&&!busy&&goal.status==='not_delivered'&&!project.workflow_retirement)Object.assign(guidance,{
-    headline:'请打开“继续验收”完成麦克风实测。',detail:'选择设备并录音，平台会保存观察并继续原候选的验收。',action:'inspect',action_label:'继续验收'})
+    headline:'请打开“继续验收”完成麦克风实测。',detail:'选择设备并录音，平台会保存观察并继续原候选的验收。',action:'assisted_acceptance',action_label:'继续验收'})
   if (reviewPurpose) { guidance.headline = reviewPurpose === 'coverage' ? '现在不用操作，正在核对检查是否完整。' : reviewPurpose === 'binding' ? '现在不用操作，正在确认问题能否被检查出来。' : '现在不用操作，正在独立检查程序。'; guidance.detail = '尚未交付；需要你确认时会明确提示。' }
-  return { observed_at: Date.now(), operation_id: project.lean_operation_id, guidance, execution: { status: execution, review_purpose: reviewPurpose, label: labels[execution] ?? '现场需核对', reason: reason ? redactSoftwareOutput(reason).slice(0, 500) : undefined }, verification, goal,
+  return { observed_at: Date.now(), operation_id: project.lean_operation_id, guidance, execution: { status: visibleExecution, review_purpose: reviewPurpose, label: labels[visibleExecution] ?? '现场需核对', reason: reason ? redactSoftwareOutput(reason).slice(0, 500) : undefined }, verification, goal,
     active_commands: activeSoftwareCommands(projectId, run?.sessionId ?? project.last_session_id ?? '').length }
 }
 
