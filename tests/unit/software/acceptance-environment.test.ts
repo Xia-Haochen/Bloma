@@ -1,5 +1,5 @@
 import { createServer } from 'node:net'
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, afterEach, it, expect } from 'vitest'
@@ -9,6 +9,8 @@ import { observeSoftwareGui } from '../../../main/software/gui-observer'
 import type { GuiAcceptanceSuite } from '../../../main/desktop/gui-acceptance'
 import { verificationFailure } from '../../../main/software/verification-diagnostics'
 import type { Page } from 'playwright'
+import { freezeNativeGuiTests } from '../../../main/software/native-gui-tests'
+import { runNativeGuiTests } from '../../../main/software/native-gui-observer'
 
 let home:string,previous:string|undefined,project:ReturnType<typeof createProject>,port:number
 const settings={endpoint:'#service',model:'#model',api_key:'#key',save:'#configure',ready:{selector:'#ready',contains:'saved'}}
@@ -41,6 +43,27 @@ const suite=():GuiAcceptanceSuite=>({version:1,scope_hash:'a'.repeat(64),covers:
 ]})
 const observe=(environment:Awaited<ReturnType<typeof prepare>>,rules=suite(),signal?:AbortSignal)=>observeSoftwareGui({projectId:project.project_id,root:project.root_path,
   launch:{schema_version:2,ui:'browser',command:['node','server.cjs'],url:'http://127.0.0.1:'+port},suite:rules,temporary:join(home,'case'),environment,signal:signal??AbortSignal.timeout(30000),purpose:'acceptance',comparisons:{reopened:'reply'}})
+
+it('provisions the same declared service before a frozen native suite and retains it through restart', async () => {
+  const root = project.root_path
+  mkdirSync(join(root,'tests'))
+  writeFileSync(join(root,'tests/acceptance.mjs'), `export default async ({test,page,expect,phase}) => {
+    const run=async()=> {
+      await page.locator('#say').fill('acceptance voice text');
+      await page.locator('#send').click();
+      await expect(page.locator('#reply')).toContainText('验收服务回复');
+    };
+    if(phase==='reopened') { await test('F-001 same service after reopen',async()=>{await run()}); return; }
+    await test('F-001 host service before first input',async()=>{await run()});
+  }`)
+  const launch = {schema_version:2 as const,ui:'browser' as const,command:['node','server.cjs'],url:'http://127.0.0.1:'+port}
+  writeFileSync(join(root,'LAUNCH.json'),JSON.stringify(launch))
+  const native_tests=freezeNativeGuiTests(project.project_id,root,'tests/acceptance.mjs',['F-001'],true)
+  const result=await runNativeGuiTests({projectId:project.project_id,root,launch,suite:{...suite(),steps:[],native_tests},signal:AbortSignal.timeout(45000)})
+  expect(result.status,JSON.stringify(result)).toBe('passed')
+  expect(result.environment).toMatchObject({mode:'controlled_service',external_model_effects:'unverified'})
+  expect(result.environment.requests.filter(row=>row.phase==='case'&&row.valid)).toHaveLength(2)
+},60000)
 
 it('prepares through normal settings, keeps settings/data through restart, records actual traffic and closes its endpoint',async()=>{
   const env=await prepare(),rules=suite();rules.steps.push({id:'restart',kind:'restart'},{id:'reopened',kind:'expect',selector:'#reply',nonempty:true},

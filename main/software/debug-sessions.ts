@@ -276,7 +276,7 @@ export function readDebugSession(projectId:string,sessionId:string,id:string,sin
   return {...session.snapshot,runtime_attached:!!session.page&&!session.page.isClosed()&&!session.finished&&['opening','ready'].includes(session.snapshot.state),retained_snapshot:false,...diagnosticPage(session.snapshot.observations,session.seq,since,query),stale:!current||current!==session.snapshot.source,log_cursor:session.seq,steps:[...session.snapshot.steps]}
 }
 const debugLaunchKey = (launch: LaunchDeclaration) => JSON.stringify([launch.schema_version, launch.command, launch.ui, launch.mode, launch.url, launch.artifact, launch.window_title])
-export async function openDebugSession(input: { projectId: string; sessionId: string; root: string; launch: LaunchDeclaration; signal: AbortSignal; processId?: string; formal?:boolean; declaration?:LaunchDeclaration }): Promise<DebugSnapshot> {
+export async function openDebugSession(input: { projectId: string; sessionId: string; root: string; launch: LaunchDeclaration; signal: AbortSignal; processId?: string; formal?:boolean; declaration?:LaunchDeclaration; preparePage?: (page:Page) => Promise<void> }): Promise<DebugSnapshot> {
   input.signal.throwIfAborted()
   // Host-only pinned relocation overlay. Public inspect_app has no such field.
   if (input.declaration) { const actual=readLaunchDeclaration(input.root); if(!actual?.ok||debugLaunchKey(actual.launch)!==debugLaunchKey(input.declaration))throw Error('DEBUG_LAUNCH_DECLARATION_MISMATCH') }
@@ -332,6 +332,7 @@ export async function openDebugSession(input: { projectId: string; sessionId: st
     } else throw Error('DEBUG_RUNTIME_UNSUPPORTED: 持续会话首期支持Electron/浏览器；Python仍使用固定GUI检查')
     if (!session.page) throw Error('DEBUG_PAGE_UNAVAILABLE')
     input.signal.throwIfAborted(); session.page.setDefaultTimeout(4000)
+    await input.preparePage?.(session.page)
     for (const error of await session.page.pageErrors()) log(session, 'renderer.startup_error', error.stack || error.message || String(error))
     session.snapshot.state = 'ready'; persist(session)
     return readDebugSession(input.projectId, input.sessionId, id)

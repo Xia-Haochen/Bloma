@@ -12,6 +12,7 @@ import { GUI_ACTION_KINDS } from './gui-tool-contract'
 import { materializeGuiFixtures } from './gui-fixtures'
 import { isSoftwareProject } from './workflow-policy'
 import { validateNativeGuiTests, type NativeGuiTests } from '../software/native-gui-tests'
+import type { AcceptanceEnvironmentEvidence } from '../software/acceptance-environment'
 
 type Action = ({ id: string; kind: 'fill'; selector: string; value: string } | { id: string; kind: 'click'; selector: string }
   | { id: string; kind: 'select'; selector: string; value?: string; label?: string }
@@ -32,6 +33,7 @@ export interface GuiAcceptanceSuite { version: 1; scope_hash: string; covers: st
   fixtures?: Array<{ path: string; text?: string; source?: string; sha256?: string; size?: number }>
 }
 export interface GuiAcceptanceResult {
+  environment?: AcceptanceEnvironmentEvidence
   case_results?: Array<{name:string;feature:string;status:'passed'|'failed'|'unverified'|'not_run';assertions:number;interactions:number;error?:string}>
   failure_kind?: 'assertion'|'runtime'|'bootstrap'|'incomplete'|'unresolved'
   version: 1; scope: 'host_native_gui_business'; status: 'passed' | 'failed' | 'unverified'

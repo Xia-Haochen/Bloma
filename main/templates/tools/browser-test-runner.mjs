@@ -39,7 +39,7 @@ await test('Bloma native application suite', async () => {
                 return (...args) => {
                     const record = current.getStore();
                     const operation = { method: String(key), state: 'started', at: Date.now() };
-                    const track = record && (actions.has(String(key)) || ['evaluate', 'waitForFunction', 'waitForSelector', 'waitForTimeout'].includes(String(key)));
+                    const track = record && (actions.has(String(key)) || ['evaluate', 'waitFor', 'waitForFunction', 'waitForSelector', 'waitForTimeout'].includes(String(key)));
                     const progress = state => {
                         if (!track) return;
                         operation.state = state;

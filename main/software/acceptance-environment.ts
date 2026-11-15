@@ -49,6 +49,7 @@ function settingsBinding(value: unknown): LlmSettingsBinding {
  * user data, provider keys or paid route selection are accepted by this API. */
 export async function prepareAcceptanceEnvironment(input: {
   root: string; features: string[]; requiresLlm: boolean; supportsControlledOutput: boolean; signal?: AbortSignal
+  useDeclaredSettingsOnly?: boolean
 }): Promise<AcceptanceEnvironment> {
   input.signal?.throwIfAborted()
   const manifestPath = join(input.root, 'CORE_CHECK.json')
@@ -59,7 +60,8 @@ export async function prepareAcceptanceEnvironment(input: {
     try { llm = JSON.parse(readFileSync(manifestPath, 'utf8')).llm } catch { return fail('ACCEPTANCE_ENVIRONMENT_MANIFEST_INVALID') }
   }
   const covers = llm?.covers
-  const required = input.requiresLlm || Array.isArray(covers) && input.features.some(feature => covers.includes(feature))
+  const required = (!input.useDeclaredSettingsOnly || llm?.settings !== undefined && llm.input === undefined)
+    && (input.requiresLlm || Array.isArray(covers) && input.features.some(feature => covers.includes(feature)))
   const evidence: AcceptanceEnvironmentEvidence = { version: 1, mode: required ? 'controlled_service' : 'isolated_local',
     configuration_digest: hash({ version: 1, llm: required ? llm ?? null : null }), readiness: 'ready',
     external_model_effects: required ? 'unverified' : 'not_required', requests: [], ...(required?{instance_id:randomUUID()}:{}) }
