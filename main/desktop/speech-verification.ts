@@ -115,7 +115,7 @@ export async function runHostSpeechProbe(options: { projectId: string; root: str
     if (!speech || !/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(speech.module) ||
         !/^[A-Za-z_]\w*$/.test(speech.factory) || !/^[A-Za-z_]\w*$/.test(speech.method) ||
         !existsSync(join(root, ...speech.module.split('.'))) && !existsSync(join(root, `${speech.module.replace(/\./g, '/')}.py`))) {
-      throw new Error('语音模块/工厂/方法声明不可用')
+      throw new Error('ASR_ENTRY_INVALID: 语音检查需要产品实际调用的 Python 模块、工厂和方法；Node 产品可用已准备的文件转写桥')
     }
     const policy = declaredVerificationPolicy(root), fingerprint = verificationFingerprint(root, null, policy)
     if (!fingerprint) throw new Error('语音源码版本不可确认')

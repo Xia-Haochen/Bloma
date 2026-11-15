@@ -59,9 +59,11 @@ const llmVerifier: CapabilityVerifier = { id: 'llm', async run(ctx) {
   const ids = new Set(ctx.backplane.requirements.map(item => item.id))
   if (spec && (!Array.isArray(spec.covers) || !spec.covers.length || spec.covers.some(id => !ids.has(id)) || required.some(item => !spec.covers.includes(item.id)))) {
     const declared = Array.isArray(spec.covers) ? spec.covers.filter(id => typeof id === 'string' && /^F-\d+$/.test(id)) : []
-    throw Error(`MODEL_COVERAGE_INVALID: 模型入口覆盖声明缺失、悬空或漏掉模型需求 ${JSON.stringify({ required: required.map(item => item.id), declared,
+    const affected = new Set([...required.map(item=>item.id),...declared.filter(id=>ids.has(id))])
+    const detail = `MODEL_COVERAGE_INVALID: 模型入口覆盖声明缺失、悬空或漏掉模型需求 ${JSON.stringify({ required: required.map(item => item.id), declared,
       missing: required.filter(item => !declared.includes(item.id)).map(item => item.id), unknown: declared.filter(id => !ids.has(id)),
-      next: '在CORE_CHECK.json的llm.covers登记实际客户端覆盖的对应需求；入口必须由产品实际使用，不要更改需求或添加探针专用替身。' })}`)
+      next: '在CORE_CHECK.json的llm.covers登记实际客户端覆盖的对应需求；入口必须由产品实际使用，不要更改需求或添加探针专用替身。' })}`
+    return {status:'unverified', missing:[detail],features:Object.fromEntries([...affected].map(id=>[id,'unverified' as const]))}
   }
   const result = spec ? await runHostLlmProbe(ctx.root, spec, undefined, ctx.signal, ctx.projectId) : undefined
   const status = result?.status ?? 'unverified'

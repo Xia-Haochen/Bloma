@@ -25,6 +25,17 @@ export function verificationFailure(result: SoftwareVerification, error?: unknow
     observation:{status:result.status,candidate_id:result.candidate?.id,source:result.candidate?.source.digest,expected:'已确认需求和可追溯预期',actual:result.independent.semantics},
     diagnosis:{certainty:'unknown',basis:'unresolved',root_cause_confirmed:false,note:'业务预期存在争议，尚无产品缺陷结论。'},
     allowed_changes:['核对确认来源与未明确规则，保留争议；不得让实现者修改冻结输入、断言或新增需求'],next_tool:'read_production_context',next_action:{tool:'read_production_context',arguments:{topic:'independent-design'}},next:'先澄清业务预期或覆盖争议，保留现有候选和案例；这不是已确认产品缺陷，不自动修产品迎合错误预期，也不自动重发B。'}
+  const speech=result.core?.speech?.error
+  const speechPrerequisite=speech?.match(/^(ASR_ENTRY_INVALID|ASR_RUNTIME_UNSUPPORTED|ASR_CAPABILITY_PREPARATION_REQUIRED):/)
+  if(speechPrerequisite)return{
+    category:'test_adapter',classification_basis:'adapter_contract',code:speechPrerequisite[1],
+    observation:{status:result.status,candidate_id:result.candidate?.id,source:result.candidate?.source.digest,
+      expected:'可由宿主运行的实际语音识别入口',actual:speech},
+    diagnosis:{certainty:'supported',basis:'adapter_contract',root_cause_confirmed:false,note:'当前语音声明尚未满足正式检查入口。'},
+    expected:'可由宿主运行的实际语音识别入口',actual:speech,paths:['CORE_CHECK.json'],
+    allowed_changes:['准备或修正产品实际使用的语音组件及入口登记'],
+    next_tool:'read_production_context',next_action:{tool:'read_production_context',arguments:{topic:'verification-speech'}},
+    next:'先核对语音入口、宿主准备工具和产品实际调用关系，再执行正式检查。已执行的界面案例仍保留在回执。'}
   const summary = result.summary??'', gui = result.core?.host_gui
   const failed = gui?.steps?.find(step => !step.passed)
   const independent=independentFailureEvidence(result.independent)
