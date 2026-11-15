@@ -10,6 +10,7 @@ import type { GuiAcceptanceSuite } from '../../../main/desktop/gui-acceptance'
 import { installGuiAcceptanceSuite,runGuiAcceptance } from '../../../main/desktop/gui-acceptance'
 import { observedQualityFinding } from '../../../main/software/quality-closeout'
 import { chromium } from 'playwright'
+import { settleNativePlayback } from '../../../main/software/native-gui-observer'
 let home:string,previous:string|undefined,project:ReturnType<typeof createProject>,launch:LaunchDeclaration
 beforeEach(async()=>{
   previous=process.env.PROMA_HOME;home=mkdtempSync(join(tmpdir(),'bloma-observer-evidence-'));process.env.PROMA_HOME=home
@@ -42,6 +43,10 @@ it('observes advancing non-silent audio to its end and rejects an otherwise iden
     }
     const played=await verify(5500)
     expect(played).toMatchObject({ended:true,muted:false,playedFrom:0,duration:2,text_visible_during_playback:true})
+    await page.getByRole('button',{name:'Play'}).click()
+    expect(await page.locator('audio').evaluate(audio=>(audio as HTMLAudioElement).ended)).toBe(false)
+    expect(await settleNativePlayback(page,AbortSignal.timeout(9000))).toBe(true)
+    expect(await page.locator('audio').evaluate(audio=>(audio as HTMLAudioElement).ended)).toBe(true)
     await expect(verify(0)).rejects.toMatchObject({message:'GUI_ASSERTION_FAILED:reply-audio',actual:{rms:0,progress:true}})
   } finally { await browser.close() }
 },30000)

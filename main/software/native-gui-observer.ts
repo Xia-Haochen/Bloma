@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync, lstatSync, realpathSync, rmSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import { clearTimeout as clearTimer, setTimeout as setTimer } from 'node:timers'
 import type { GuiAcceptanceResult, GuiAcceptanceSuite } from '../desktop/gui-acceptance';
 import type { LaunchDeclaration } from '../desktop/launch-smoke';
 import { openDebugSession, actDebugSession, closeDebugSessions } from './debug-sessions';
@@ -14,12 +15,17 @@ async function trackAudioEvents(page: Page) {
     await page.evaluate(() => {
         const events: Array<{event:string; index:number; current_time:number; duration:number|null}> = []
         const key = Symbol.for('bloma.hostAudioEvents')
-        Object.defineProperty(window, key, {value:() => events.map(event => ({...event}))})
+        const players = new Set<HTMLAudioElement>()
+        Object.defineProperty(window, key, { value: () => ({
+            events:events.map(event => ({...event})),
+            active:[...players].some(audio => !audio.loop && Number.isFinite(audio.duration) &&
+                !audio.paused && !audio.ended && !audio.error),
+        }) })
         const attached = new WeakSet<HTMLAudioElement>()
         document.addEventListener('playing', event => {
             const audio = event.target
-            if (!event.isTrusted || !(audio instanceof HTMLAudioElement) || attached.has(audio)) return
-            attached.add(audio)
+            if (!event.isTrusted || !(audio instanceof HTMLAudioElement)) return
+            if (!audio.loop && Number.isFinite(audio.duration)) players.add(audio)
             const index = Array.from(document.querySelectorAll('audio')).indexOf(audio)
             const record = (observed: Event) => {
                 if (!observed.isTrusted) return
@@ -30,7 +36,12 @@ async function trackAudioEvents(page: Page) {
             // Keep the listener on the original player, even if a later
             // conversation render detaches that player from the document.
             record(event)
-            for (const kind of ['playing', 'pause', 'ended', 'error']) audio.addEventListener(kind, record)
+            if (attached.has(audio)) return
+            attached.add(audio)
+            for (const kind of ['pause', 'ended', 'error']) audio.addEventListener(kind, observed => {
+                record(observed)
+                players.delete(audio)
+            })
         },true)
     }).catch(() => {})
 }
@@ -46,14 +57,48 @@ async function incompletePlaybackObservation(page: Page | undefined): Promise<Gu
                     duration: Number.isFinite(audio.duration) ? audio.duration : null, current_time: audio.currentTime,
                     paused: audio.paused, ended: audio.ended, played_ranges: audio.played.length, error: audio.error?.code ?? null,
                 }))
-                const events = Reflect.get(window,Symbol.for('bloma.hostAudioEvents'))
-                return {tracks,events:typeof events === 'function' ? events() : []}
+                const read = Reflect.get(window,Symbol.for('bloma.hostAudioEvents'))
+                return {tracks,events:typeof read === 'function' ? read().events : []}
             }),
             new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(Error('GUI_MEDIA_OBSERVATION_TIMEOUT')), 2000) }),
         ])
     } catch { return undefined }
     finally { clearTimeout(timer) }
 }
+
+/** Test success can be reported before the last reply finishes playing. Give
+ * finite audio time to finish before success-path cleanup closes the app. */
+export async function settleNativePlayback(page:Page,signal:AbortSignal):Promise<boolean> {
+    if (page.isClosed() || signal.aborted) return true
+    let quietSince = 0
+    let timer:ReturnType<typeof setTimer>|undefined
+    const started = Date.now(), limit = started + 30000
+    try {
+        while (Date.now() < limit && !signal.aborted && !page.isClosed()) {
+            const sample = await Promise.race([
+                page.evaluate(() => {
+                    const players = Array.from(document.querySelectorAll('audio')).filter(audio => !audio.loop)
+                    const read = Reflect.get(window,Symbol.for('bloma.hostAudioEvents'))
+                    const observed = typeof read === 'function' ? read() : undefined
+                    return { present:players.length > 0 || Boolean(observed?.active),
+                        active:Boolean(observed?.active) || players.some(audio =>
+                            Number.isFinite(audio.duration) && !audio.paused && !audio.ended && !audio.error) }
+                }),
+                new Promise<undefined>(resolve => { timer=setTimer(() => resolve(undefined),1000) }),
+            ])
+            clearTimer(timer)
+            if (!sample) return false
+            if (!sample.present) return true
+            const now = Date.now()
+            quietSince = sample.active ? 0 : quietSince || now
+            if (quietSince && now - quietSince >= 1000) return true
+            await new Promise(resolve => setTimeout(resolve,150))
+        }
+        return signal.aborted || page.isClosed()
+    } catch { return page.isClosed() || signal.aborted }
+    finally { clearTimer(timer) }
+}
+
 export async function runNativeGuiTests(input: {
     projectId: string;
     root: string;
@@ -104,6 +149,8 @@ export async function runNativeGuiTests(input: {
             const runtimeErrors = observed?.observations.filter(row => row.version === observed!.version && /^renderer\.(?:error|startup_error)$/.test(row.kind))??[];
             runtimeFailures.push(...runtimeErrors.map(row=>row.message))
             reports.push({ code: runtimeErrors.length ? 1 : outcome?.exit_code ?? 1, events: readFileSync(report, 'utf8'), trace: readFileSync(trace, 'utf8') });
+            if (outcome?.exit_code === 0 && !runtimeErrors.length && observedPage &&
+                !await settleNativePlayback(observedPage,signal)) evidenceWarnings.push('测试窗口关闭前未能确认最后一段有限音频已自然结束。')
             await closeDebugSessions(input.projectId, sessionId);
             if (outcome?.exit_code !== 0 || runtimeErrors.length)
                 break;
