@@ -47,6 +47,11 @@ it('returns current coverage repair work with failed verification without closin
  const response=verificationResponse(id,failed)
  expect(response).toMatchObject({status:'failed',quality:{status:'needs_work',problem_count:1,problems:[{id:'coverage-gap',trigger:'Restart the app'}]}})
  expect(JSON.stringify(response)).toContain('read_quality_findings')
+ const passed=result({...failed,status:'passed',summary:'Registered cases passed'})
+ receipt(id,passed)
+ expect(verificationResponse(id,passed).next).toContain('仍有待处理事项')
+ expect(verificationResponse(id,passed).next).not.toContain('可以结束制作')
+ receipt(id,failed)
  expect(readQualityLedger(id).findings[0].disposition).toBe('suspected')
  const ledger=readQualityLedger(id),current=qualityIdentityForInputs(id,input),rules=qualityRulesVersion(id)
  ledger.findings[0].disposition='closed'

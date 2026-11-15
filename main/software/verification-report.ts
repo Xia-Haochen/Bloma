@@ -119,6 +119,7 @@ export function verificationResponse(projectId:string,result:SoftwareVerificatio
   const failure=view.failure&&{category:view.failure.category,code:view.failure.code,step:view.failure.step,
     classification_basis:view.failure.classification_basis,expected:view.failure.expected,actual:view.failure.actual,paths:view.failure.paths,allowed_changes:view.failure.allowed_changes}
   let quality:unknown
+  let qualityNeedsWork=false
   if(result.input_identity){
     const details={tool:'read_quality_findings',arguments:{}}
     try{
@@ -126,6 +127,7 @@ export function verificationResponse(projectId:string,result:SoftwareVerificatio
         applicableQualityLedger(projectId),qualityIdentityForInputs(projectId,result.input_identity),
         undefined,qualityRulesVersion(projectId),independentDesignVersion(projectId),
       )
+      qualityNeedsWork=queue.status==='needs_work'
       const problems=queue.problems.slice(0,4).map(row=>{
         const readFinding={tool:'read_quality_findings',arguments:{finding_id:row.id}}
         return Object.fromEntries(Object.entries(row).map(([key,value])=>[
@@ -145,7 +147,11 @@ export function verificationResponse(projectId:string,result:SoftwareVerificatio
       interrupted_audio:view.interrupted_audio,omitted:case_count-cases.length,details:view.details},
     warnings:[...(result.core?.host_gui?.evidence_warnings??[]),...(result.independent?.case_results??[]).flatMap(row=>row.evidence_warnings??[])].slice(0,4),
     next_action:result.status==='passed'?undefined:view.failure?.next_action,
-    next:result.status==='passed'?'本次登记检查通过，可以结束制作。宿主继续必要审阅与交付；如有实际缺口会返回。不要无变化重复验收。':view.failure?.next,
+    next:result.status==='passed'
+      ? qualityNeedsWork
+        ? '本次登记检查通过。仍有待处理事项，按 quality.problems 补齐缺失的证据后继续；同一套检查反复通过不能补足覆盖。'
+        : '本次登记检查通过，可以结束制作。宿主继续必要审阅与交付。不要无变化重复验收。'
+      : view.failure?.next,
     delivery:'not_issued_by_tool'}
 }
 /** Only this project's verified host receipt is readable; no arbitrary paths. */

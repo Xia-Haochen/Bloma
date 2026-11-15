@@ -79,7 +79,7 @@ export function qualityWorkQueue(ledger: Ledger, current: Identity, block: Deliv
     summary: closeout.must_fix.length ? '实际检查仍有未解决的问题，请按具体观察修复。' : closeout.required_investigation.length ? '以下行为仍缺少足以判断的证据，请核对实际表现。' : ['intent','engineering'].includes(block?.code ?? '') ? block!.message : block ? '还有宿主验收条件尚未满足，现有产物和证据保留。' : '当前质量条件已齐备，由宿主继续交付。',
     problems: ledger.findings.filter(f=>ids.has(f.id)).map(f=>({id:f.id,requirement:f.requirement,expected:f.expected_source,trigger:f.trigger,location:f.location,investigation:investigationObligation(f,current,rules),
       observation:f.checks.at(-1)?.observation??f.evidence,observation_version:sameIdentity(f.checks.at(-1)?.identity??f.identity,current)?'current':'previous',missing:f.unknowns||f.reproduction,
-      task:closeout.must_fix.includes(f.id)?'修正当前行为，保留原预期。':findingCaseBinding(f,current,rules)?'宿主执行已独立确认的案例和必要回归。':'补齐覆盖所列连续触发步骤的测试，保留原预期及前置约束；由独立审阅确认案例绑定后宿主执行。临时观察或旧套件通过不能结算。'})),
+      task:closeout.must_fix.includes(f.id)?'修正当前行为，保留原预期。':findingCaseBinding(f,current,rules)?'宿主执行已独立确认的案例和必要回归。':'追加能覆盖所列触发并区分错误行为的正式案例，保留原案例及预期。GUI 新增案例的登记方式见 read_production_context(verification-gui)。宿主将核对案例绑定和执行结果。'})),
     deferred: closeout.deferred,
     history: { reviews: ledger.reviews.length, findings: ledger.findings.length, details: 'read_quality_findings(finding_id)' } }
 

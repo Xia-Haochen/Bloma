@@ -48,7 +48,7 @@ export function hasCurrentMicrophoneEvidence(projectId: string, root: string, sp
 }
 
 /** Only the host's prepared Python capture/decode path can carry physical
- * proof across changes to application JavaScript. Its interpreter, imports,
+ * proof across changes to application JavaScript or Git metadata. Its interpreter, imports,
  * models and bridge remain pinned. The product capture controls, playback,
  * security and release checks still execute against the current candidate. */
 export async function hasReusableMicrophoneEvidence(projectId: string, root: string, speech: SpeechVerificationSpec, signal?: AbortSignal): Promise<boolean> {
@@ -72,10 +72,11 @@ export async function hasReusableMicrophoneEvidence(projectId: string, root: str
     if (!components.every(name => readFileSync(join(root, name)).equals(readFileSync(join(templates, name)))
       && readFileSync(join(previous.root, name)).equals(readFileSync(join(templates, name))))) return false
     // The fixed speech probe imports the trusted Python path directly, not
-    // the Electron main/renderer or Node diagnostics. Keep dependency trees
-    // byte-identical and retain every non-JavaScript input conservatively.
+    // the Electron main/renderer, Node diagnostics or source-control ignore
+    // rules. Keep all other inputs and dependency trees byte-identical.
     const inputs = (files: typeof current.runtime.files) => files.filter(file =>
-      file.path.startsWith('.venv/') || file.path.startsWith('node_modules/') || !/\.(?:js|mjs|cjs)$/i.test(file.path))
+      file.path.startsWith('.venv/') || file.path.startsWith('node_modules/')
+      || (file.path !== '.gitignore' && !/\.(?:js|mjs|cjs)$/i.test(file.path)))
     return JSON.stringify(inputs(current.runtime.files)) === JSON.stringify(inputs(previous.runtime.files))
   } catch (error) {
     if (signal?.aborted) throw error
