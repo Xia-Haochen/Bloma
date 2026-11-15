@@ -65,7 +65,6 @@ export function awaitingAssistedAcceptance(result:SoftwareVerification|undefined
     && !result.independent?.case_results?.some(row=>row.status==='failed')
 }
 const poisoned = new Set<string>()
-const requestSpeechReceipts = new Map<string,string>()
 function receiptPath(projectId: string) {
   if (!/^[A-Za-z0-9_-]+$/.test(projectId)) throw Error('SOFTWARE_VERIFY_PROJECT_INVALID')
   return join(getPromaHome(), 'software-verification', `${projectId}.json`)
@@ -109,7 +108,7 @@ export async function verificationInputs(projectId: string, requestId: string, s
   return { input_identity, key: digest({ protocol: 2, source, operation: project.lean_operation_id,test_corrections:testCorrectionVersion(projectId),microphone_evidence:microphoneEvidenceVersion(projectId),
     scope: prdScopeFingerprint(brief), confirmed: brief.user_confirmed_at, ux: project.ux_confirmation, rules: ruleVersion, fixtures: fixtureVersion,
     runtime, command: resolved.command, environment: resolved.env, managed: runtimeBindingVersion(projectId),capabilities:capabilityBindingVersion(projectId), independent:independentDesignVersion(projectId),independent_challenges:independentChallengeVersion(projectId),adapter:independentAdapterVersion(project.root_path),implementation, platform: process.platform, arch: process.arch, node: process.versions.node }),
-    reusable:reusable&&!speech, requestSpeech:reusable&&speech, needsMicrophone:capabilities.some(item=>item.has('microphone')) }
+    reusable:reusable&&!speech, reusableSpeech:reusable&&speech, needsMicrophone:capabilities.some(item=>item.has('microphone')) }
 }
 export async function recentSoftwareVerification(projectId: string, requestId: string, signal?: AbortSignal): Promise<SoftwareVerification | undefined> {
   const file = receiptPath(projectId); if (poisoned.has(file) || !existsSync(file)) return
@@ -117,15 +116,17 @@ export async function recentSoftwareVerification(projectId: string, requestId: s
     const receipt = JSON.parse(readFileSync(file, 'utf8')) as Receipt
     if (receipt.version !== 1 || receipt.state !== 'complete' || receipt.result?.status !== 'passed'
       || Date.now() - receipt.at < 0 || digest(receipt.result) !== receipt.result_hash) return
-    const requestSpeech = requestSpeechReceipts.get(file) === receipt.result_hash
-      && receipt.result.input_identity?.request_id === requestId
-    if (!receipt.reusable && !requestSpeech) return
+    // Prepared speech resources and physical evidence are revalidated below.
+    // A request boundary alone does not invalidate their recorded execution.
+    const preparedSpeech = Boolean(receipt.result.candidate?.speech_resources && receipt.result.core?.speech?.status==='passed'
+      && !receipt.result.security?.issues.some(issue=>issue.category==='external_resource'))
+    if (!receipt.reusable && !preparedSpeech) return
     const current = await verificationInputs(projectId, requestId, signal)
     const candidate=receipt.result.candidate
-    if (current.key !== receipt.key || !candidate || !(current.reusable || requestSpeech&&current.requestSpeech)) return
+    if (current.key !== receipt.key || !candidate || !(current.reusable || preparedSpeech&&current.reusableSpeech)) return
     await readSoftwareCandidate(projectId, candidate.id, signal)
     await verifyReleaseSource(candidate, signal)
-    if (requestSpeech && current.needsMicrophone) {
+    if (preparedSpeech && current.needsMicrophone) {
       const {speech} = JSON.parse(readFileSync(join(candidate.root,CORE_MANIFEST_REL),'utf8')) as {speech?:SpeechVerificationSpec}
       if (!speech || !await hasReusableMicrophoneEvidence(projectId,candidate.root,speech,signal)) return
     }
@@ -158,7 +159,6 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
   if (!force) { const previous = await recentSoftwareVerification(projectId, requestId, signal); if (previous&&(!ownedCandidate||previous.candidate?.id===ownedCandidate.id)) {recordEvaluationEvent(projectId,'verification_result',{status:'reused',candidate_id:previous.candidate?.id});return previous} }
   if (active.has(file)) throw Error('SOFTWARE_VERIFY_ALREADY_RUNNING')
   active.add(file); poisoned.add(file)
-  requestSpeechReceipts.delete(file)
   recordEvaluationEvent(projectId,'verification_started',{request_id:requestId})
   let version: Awaited<ReturnType<typeof verificationInputs>> | undefined
   const result: SoftwareVerification = { status: 'unverified', summary: '当前版本尚未通过检查。', report_path: file }
@@ -238,9 +238,6 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
     const eligible = result.status === 'passed' && !result.security?.issues.some(issue => issue.category === 'external_resource')
     const resultHash=digest(result)
     writeTextFileAtomic(file, JSON.stringify({ version: 1, state: 'complete', key: version?.key ?? '', at: Date.now(), result, result_hash: resultHash, reusable:Boolean(version?.reusable&&eligible) } satisfies Receipt))
-    // A prepared speech candidate can hand the same observation from the
-    // verifier to closeout in this request. A later request still runs speech.
-    if (eligible && version?.requestSpeech && result.candidate?.speech_resources && result.core?.speech?.status==='passed') requestSpeechReceipts.set(file,resultHash)
     poisoned.delete(file)
     recordEvaluationEvent(projectId,'verification_result',{status:result.status,category:result.failure?.category,summary:result.summary.slice(0,1600),candidate_id:result.candidate?.id})
     } finally { active.delete(file) }

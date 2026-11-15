@@ -48,14 +48,14 @@ export function qualityCloseout(ledger: Ledger, current: Identity, block: Delive
   const contractChange=mustFix.find(f=>qualityFailureBaseline(f)?.rules!==(f.independent?independentRules:rules) && !(f.retest&&sameIdentity(f.retest.identity,current)&&f.retest.rules===rules))
   const priority = contractChange??investigate.find(importantFinding)
   const reviewKind=priority?.review_kind??'code'
-  // Coverage judges test adequacy, not whether these suspicions have a case.
-  // Keep the latest interruption authoritative; never fall back to an older PASS.
-  const latestReview=ledger.reviews.filter(r=>(r.kind??'code')===reviewKind&&['candidate','binding'].includes(r.purpose??'candidate')&&sameIdentity(r.identity,current)).at(-1)
+  // One candidate review judges implementation, coverage and case bindings.
+  // Legacy partial reviews remain history and never qualify the candidate.
+  const latestReview=ledger.reviews.filter(r=>(r.kind??'code')===reviewKind&&(r.purpose??'candidate')==='candidate'&&sameIdentity(r.identity,current)).at(-1)
   const freshReview=Boolean(latestReview?.status==='complete'&&(!latestReview.rules||latestReview.rules===rules)
-    && (latestReview.purpose==='binding'&&reviewKind==='code'||!observationDigest||latestReview.observation?.digest===observationDigest))
+    && (!observationDigest||latestReview.observation?.digest===observationDigest))
   const bindingFindings=[...mustFix,...investigate.filter(importantFinding)].filter(f=>!f.independent&&!findingCaseBinding(f,current,rules))
   const boundPriority=priority&&findingCaseBinding(priority,current,rules)
-  const purpose=priority?'binding' as const:'candidate' as const
+  const purpose='candidate' as const
   let next = 'verify_app'
   if (pending.length) next = 'wait_for_delegations'
   else if (block?.code==='apply_correction') next = 'apply_test_correction'

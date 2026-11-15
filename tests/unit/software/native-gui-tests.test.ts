@@ -280,15 +280,16 @@ it('allows locator repairs but freezes input, expected values and helper busines
 });
 it('records bounded wait/navigation adaptations and rejects selector getters, computed keys and navigation changes', () => {
     const file = join(project.root_path, 'tests/acceptance.mjs');
-    const initial = script.replace("await page.goto('/');", "await page.goto('/',{timeout:1000,waitUntil:'load'});await page.waitForTimeout(100);");
+    const initial = script.replace("await page.goto('/');", "await page.goto('/',{timeout:1000,waitUntil:'load'});await page.waitForTimeout(100);await page.waitForFunction(x=>Boolean(document.querySelector(x)),'#list',{timeout:1500});");
     writeFileSync(file, initial);
     const first = registerNativeGuiTests(project.project_id, 'tests/acceptance.mjs').native_tests!;
-    const adapted = initial.replace('timeout:1000', 'timeout:2000').replace("waitUntil:'load'", "waitUntil:'domcontentloaded'").replace('waitForTimeout(100)', 'waitForTimeout(200)');
+    const adapted = initial.replace('timeout:1000', 'timeout:2000').replace('timeout:1500','timeout:30000').replace("waitUntil:'load'", "waitUntil:'domcontentloaded'").replace('waitForTimeout(100)', 'waitForTimeout(200)');
     writeFileSync(file, adapted);
     const second = registerNativeGuiTests(project.project_id, 'tests/acceptance.mjs').native_tests!;
     expect(second.contract).toBe(first.contract); expect(second.digest).not.toBe(first.digest);
     expect(JSON.parse(readFileSync(join(home, 'gui-native-adapters', project.project_id, second.digest+'.json'), 'utf8')).previous).toBe(first.digest);
     for (const bad of [initial.replace("goto('/'", "goto('/bypass'"), initial.replace('timeout:1000', 'timeout:0'),
+        initial.replace("'#list',{timeout:1500}","'#different',{timeout:1500}"),initial.replace('timeout:1500','timeout:0'),
         initial.replace("locator('#list')", "locator(selectors.dangerous)"), initial.replace("locator('#list')", "getByRole('list',{[runCode()]:true})")]) {
         writeFileSync(file, bad); expect(() => registerNativeGuiTests(project.project_id, 'tests/acceptance.mjs')).toThrow('EXISTING_EXPECTATIONS_CHANGED');
     }

@@ -64,7 +64,7 @@ async function setup(description='输出5') {
   expect((await buildLeanCliTool(project.project_id).execute({ expectations: { 'F-001': '输出5' }, cases: [{ name: 'five', covers: ['F-001'], args: [], stdout: '5', exit_code: 0 }] }, ctx())).isError).not.toBe(true)
   return source
 }
-it('uses prepared speech evidence for same-request closeout only while inputs and microphone evidence match',async()=>{
+it('reuses prepared speech evidence across continuation only while inputs and microphone evidence match',async()=>{
   const source=await setup('麦克风输入')
   const root=project.root_path,id=project.project_id
   writeFileSync(join(root,'CORE_CHECK.json'),JSON.stringify({speech:{module:'speech_runtime',factory:'SpeechEngine',method:'transcribe'}}))
@@ -83,9 +83,12 @@ it('uses prepared speech evidence for same-request closeout only while inputs an
     expect((await verifySoftwareCandidate(id,'r')).candidate?.id).toBe(first.candidate?.id)
     expect(runCore).toHaveBeenCalledTimes(1)
     expect(microphone).toHaveBeenCalledTimes(1)
-    expect(await recentSoftwareVerification(id,'new-request')).toBeUndefined()
+    expect((await recentSoftwareVerification(id,'new-request'))?.candidate?.id).toBe(first.candidate?.id)
+    expect(runCore).toHaveBeenCalledTimes(1)
     microphone.mockResolvedValueOnce(false)
     expect(await recentSoftwareVerification(id,'r')).toBeUndefined()
+    resource.mockRejectedValueOnce(Error('SPEECH_RESOURCE_BYTES_CHANGED'))
+    expect(await recentSoftwareVerification(id,'new-request')).toBeUndefined()
     writeFileSync(join(root,'app.cjs'),source+'\n// changed')
     expect(await recentSoftwareVerification(id,'r')).toBeUndefined()
   }finally{runCore.mockRestore();microphone.mockRestore();resource.mockRestore();snapshot.mockRestore()}

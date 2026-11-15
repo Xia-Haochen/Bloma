@@ -26,6 +26,7 @@ import { readPrdBackplane } from '../project/prd-store'
 import { readConfirmedUxBinding } from '../project/ux-binding'
 import { trustedAcceptance } from '../project/requirement-contract'
 import { verifySoftwareCandidate } from './verification'
+import { readVerificationReport } from './verification-report'
 import type { createSoftwareCollaborationPolicy } from './collaboration-policy'
 import { activeSoftwareCommands, redactSoftwareOutput, stopSoftwareSession } from './process-manager'
 import { retainedDebugObservation, activeDebugSessionId, readDebugSession, closeDebugSessions } from './debug-sessions'
@@ -36,7 +37,7 @@ import { independentDesignVersion } from './independent-design'
 import { challengeIndependentCase } from './independent-quality'
 import { selectQualityCollaboration } from './collaboration-selection'
 
-import { qualityTestSources, qualityCoverageRulesVersion, qualityTargetIdentity, registeredQualityCases, qualityFailureBaseline, applicableQualityLedger, qualityRulesVersion as rulesVersion, qualityHash as hash, sameIdentity as same, qualityIdentity as identity, readQualityLedger, saveQualityLedger, type Review, type ReviewKind, type ReviewPurpose, type Ledger, type QualityFinding } from './quality-ledger'
+import { qualityTestSources, qualityCoverageRulesVersion, registeredQualityCases, qualityFailureBaseline, applicableQualityLedger, qualityRulesVersion as rulesVersion, qualityHash as hash, sameIdentity as same, qualityIdentity as identity, readQualityLedger, saveQualityLedger, type Review, type ReviewKind, type ReviewPurpose, type Ledger, type QualityFinding } from './quality-ledger'
 export { qualityLedgerPath, readQualityLedger } from './quality-ledger'
 export type { QualityFinding } from './quality-ledger'
 
@@ -135,23 +136,9 @@ export function createQualityReview(projectId: string, parent: string, policy: R
     try {
       return startDelegation(ctx, { role: 'review', readOnly: true,
         task: purpose!=='candidate'?`这是${purpose}局部审查，不能替代最终C/V。读取read_quality_review及相关冻结测试；coverage核对断言能否区分原旅程中的错误实现，binding逐条核对binding_work所列触发和原预期。同一案例可分别绑定多个确实覆盖的疑点，不按F编号猜测；无匹配时保留缺口，有明确匹配时一次提交resolutions，宿主随后执行。` : kind === 'visual' ? `视觉审阅候选 ${id}。用read_quality_review读取确认预期、同次DOM/操作事实；必须view_quality_image查看真实图片，再提交visual_observations（image_sha256、area、region、observed；area须覆盖layout/interaction/content/scope）及findings。独立检查布局、遮挡、静态残留、单位、状态和当前对象；DOM与文件名不是图片。只报证据与疑点，不改源码或目标，不自报PASS。`
-          : `审阅候选 ${id}。先用read_quality_review取得宿主绑定的确认需求和材料。先看宿主review_focus的同目标/环境前次审阅及文件差异，再批量读取相关实现，不重复读取同一范围；测试只在核对预期或疑点时读取，不逐页遍历全部测试和依赖。保留回合用于结构化提交。重点检查对象身份、异步状态、持久化、接口和遗漏分支；不继承制作方成功结论。用submit_quality_findings提交结构化疑点（没有发现也提交空数组），不自报PASS、不新增需求、不运行或修改文件。` })
+          : `审阅候选 ${id}。先用read_quality_review取得宿主绑定的确认需求和材料。先看宿主review_focus的同目标/环境前次审阅及文件差异，再批量读取相关实现，不重复读取同一范围；同次核对已执行案例的覆盖以及 binding_work 中的既有问题，覆盖时提交 resolutions；缺少案例直接指出触发和原预期。保留回合用于结构化提交。重点检查对象身份、异步状态、持久化、接口和遗漏分支；不继承制作方成功结论。用submit_quality_findings提交结构化疑点（没有发现也提交空数组），不自报PASS、不新增需求、不运行或修改文件。` })
     } finally { pending = undefined }
   })
-  const ensureCoverage=async(ctx:ToolContext)=>{
-    const brief=readPrdBackplane(projectId)
-    if(brief.lean_brief?.ui!=='required'&&!brief.requirements_model?.workflows?.length)return false
-    if(!registeredQualityCases(projectId,true).length)throw Error('QUALITY_COVERAGE_MATERIALS_REQUIRED')
-    const target=qualityTargetIdentity(projectId),rules=qualityCoverageRulesVersion(projectId)
-    if(readQualityLedger(projectId).reviews.some(r=>r.purpose==='coverage'&&r.status==='complete'&&r.identity.target===target&&r.rules===rules))return false
-    const child=await begin(ctx,'code',undefined,'coverage')
-    const run=findDelegation(parent,child.delegation_id)
-    if(run?.completion)await withAbort(run.completion,ctx.signal)
-    const review=readQualityLedger(projectId).reviews.find(r=>r.delegation===child.delegation_id)
-    if(review?.status!=='complete')throw new ModelRequestRefusal('QUALITY_COVERAGE_REVIEW_INCOMPLETE')
-    // Coverage discovers work; it never replaces execution or candidate C/V.
-    return true
-  }
   const system = (child: string) => {
     const id = children.get(child)
     if (!id) return
@@ -215,7 +202,10 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       }
       const visual = review.visual ? readVisualMaterial(review.visual, hash(review.identity)).manifest : undefined
       const ux = readConfirmedUxBinding(projectId, brief)
+      let execution:unknown
+      try{execution=readVerificationReport(projectId,{limit:24})}catch{execution={available:false}}
       return { output: JSON.stringify({ review, binding_work:bindingWork, root: findProject(projectId).root_path, goal: brief.positioning, source_statements:brief.lean_brief?.intent_sources??brief.requirements_model?.sources, constraints: brief.constraints, assumptions: brief.assumptions, confirmed_ux: ux, design_policy: productDesignPolicy(brief),
+        execution_report:execution,
         frozen_test_files:testSources.map(({path,...entry})=>entry),test_coverage:{scope:review.purpose==='coverage'?'available_cumulative_slice':'complete_registered_suite',cases:registeredQualityCases(projectId,review.purpose==='coverage'),workflows:brief.requirements_model?.workflows,requirements:brief.requirements,contract_changes:testCorrectionChanges(projectId,review.purpose==='coverage'),authority:'派生阅读投影；核对前置状态、触发、可见结果及持久状态，断言须能区分所报错误实现；共有词或F编号不证明覆盖。修订差异只指引阅读，不继承旧绑定或PASS。'},
         host_observation:review.observation, engineering_advice:engineeringAdvice?.(), confirmed_design: review.kind === 'visual' && ux?.html_path ? { html: readFileSync(join(findProject(projectId).root_path, ux.html_path), 'utf8').slice(0, 64000), bounded_characters: 64000 } : undefined,
         unresolved_findings: applicableQualityLedger(projectId).findings.filter(f=>findingNeedsClosure(f,review.identity,rulesVersion(projectId),independentDesignVersion(projectId))||findingNeedsInvestigation(f,review.identity,rulesVersion(projectId),independentDesignVersion(projectId))).map(f=>({...f,checks:f.checks.slice(-1)})), resolution_protocol:'旧疑点若被实际证据排除，在resolutions提交finding_id和具体触发/观察依据。普通案例通过不足以排除疑点；已确认失败不得用审阅关闭。', review_focus: review.kind === 'visual' ? undefined : reviewChangeContext(ledger, review.identity, review.source_manifest, review.id), intent: brief.requirements_model, intent_review_protocol: review.kind === 'visual' ? 'V仅按当前真实图片和同次操作事实检查布局/交互/内容/覆盖范围；不得声称核对全部长期业务。核心体验上下文用于识别偏题，具体疑点提交finding。截图可能保留用户或测试修改后的状态，当前数值不等于出厂默认；明确区分所见事实与推断。可自定义设置按已确认范围判断，不擅自把默认偏好变成禁止修改的约束。无需提交intent_observations。' : '有experience时逐项提交intent_observations:{commitment_id,status:supported|concern|unverified,evidence,limitations}；核对禁止替代。supported只是审阅意见，不代表真实运行通过。concern须提供finding_indices，填本次findings数组中对应问题的0起始索引，只关联真正影响该体验的问题；证据不足保留unverified。', visual_facts: visual, visual_checklist: review.kind === 'visual' ? visualReviewChecklist : undefined,
@@ -261,9 +251,18 @@ export function createQualityReview(projectId: string, parent: string, policy: R
         if (!requirement && (row.requirement !== 'unscoped' || row.kind !== 'suggestion')) throw Error('QUALITY_REQUIREMENT_ID_INVALID: requirement只填当前F编号；纯增强建议才用unscoped。')
         const disposition = !requirement ? 'suggestion' : row.expected_source !== trustedAcceptance(brief, requirement) ? 'disputed' : row.kind
         const { kind: _kind, ...finding } = row
-        const findingId=randomUUID()
+        // Repeating the same trigger and reproduction updates its review
+        // binding. It does not create a second independently blocking debt.
+        const existing=ledger.findings.find(f=>!f.independent&&['suspected','confirmed','suggestion','disputed'].includes(f.disposition)
+          && f.identity.target===review.identity.target&&(f.review_kind??'code')===(review.kind??'code')
+          && f.requirement===row.requirement&&f.expected_source===row.expected_source
+          && f.trigger===row.trigger&&f.reproduction===row.reproduction&&f.location===row.location
+          && (f.requires_execution!==false)===(requires_execution!==false)
+          && (['suggestion','disputed'].includes(f.disposition)?f.disposition===disposition:!['suggestion','disputed'].includes(String(disposition)))
+          && f.severity===row.severity)
+        const findingId=existing?.id??randomUUID()
         if(case_name!==undefined){if(typeof case_name!=='string'||!case_name.trim()||case_name.length>1000)throw Error('QUALITY_CASE_BINDING_INVALID');bindings.push({finding_id:findingId,case_name,evidence:String(row.reproduction)+'\n'+String(row.evidence)})}
-        return { ...finding, requires_execution:requires_execution!==false, id: findingId, review: review.id, review_kind: review.kind ?? 'code', visual_material_hash: review.visual?.manifest_hash, identity: review.identity, disposition, checks: [] } as unknown as QualityFinding
+        return existing??{ ...finding, requires_execution:requires_execution!==false, id: findingId, review: review.id, review_kind: review.kind ?? 'code', visual_material_hash: review.visual?.manifest_hash, identity: review.identity, disposition, checks: [] } as unknown as QualityFinding
       })
       if (fullCodeReview||review.kind==='visual') {
         const experience=fullCodeReview?brief.requirements_model?.experience:undefined
@@ -301,7 +300,7 @@ export function createQualityReview(projectId: string, parent: string, policy: R
       review.resolutions=[...resolutions,...bindings]
       // This validated final submission is the review's commit point. A later
       // transport failure or cancellation cannot undo an already accepted opinion.
-      ledger.findings.push(...rows); review.status = 'complete'
+      ledger.findings.push(...rows.filter(row=>!ledger.findings.some(f=>f.id===row.id))); review.status = 'complete'
       for(const item of review.resolutions){
         const finding=ledger.findings.find(f=>f.id===item.finding_id)!
         const evidence={identity:review.identity,review:review.id,evidence:item.evidence,...(item.basis?{basis:item.basis}:{})}
@@ -445,7 +444,7 @@ export function createQualityReview(projectId: string, parent: string, policy: R
     if(calls.some(c=>c.status!=='ok'||c.pending)||!calls.some(c=>c.name==='submit_quality_findings'))return
     if(readQualityLedger(projectId).reviews.some(r=>r.child===child&&r.status==='complete'))return{complete:true}
   }
-  return { prepare, system, gate, begin, ensureCoverage, childAfterTools, acceptedHandoff:(delegation:string,child:string)=>readQualityLedger(projectId).reviews.some(r=>r.delegation===delegation&&r.child===child&&r.status==='complete'), completionAction: async (signal?: AbortSignal) => { const existing=await deliveryQualityBlock(projectId,signal,activeRoute),observedGap=observationGap(),reason=existing??(observedGap?{code:'code_review' as const,message:observedGap}:undefined), current = await identity(projectId, signal); const ledger=applicableQualityLedger(projectId);return {...qualityCloseout(ledger,current,reason,rulesVersion(projectId),independentDesignVersion(projectId),currentObservation()?.digest),feedback:JSON.stringify(qualityWorkQueue(ledger,current,reason,rulesVersion(projectId),independentDesignVersion(projectId)))} }, parentTools, reviewTools, wrapQuery, isQualityChild: (child: string) => children.has(child),
+  return { prepare, system, gate, begin, childAfterTools, acceptedHandoff:(delegation:string,child:string)=>readQualityLedger(projectId).reviews.some(r=>r.delegation===delegation&&r.child===child&&r.status==='complete'), completionAction: async (signal?: AbortSignal) => { const existing=await deliveryQualityBlock(projectId,signal,activeRoute),observedGap=observationGap(),reason=existing??(observedGap?{code:'code_review' as const,message:observedGap}:undefined), current = await identity(projectId, signal); const ledger=applicableQualityLedger(projectId);return {...qualityCloseout(ledger,current,reason,rulesVersion(projectId),independentDesignVersion(projectId),currentObservation()?.digest),feedback:JSON.stringify(qualityWorkQueue(ledger,current,reason,rulesVersion(projectId),independentDesignVersion(projectId)))} }, parentTools, reviewTools, wrapQuery, isQualityChild: (child: string) => children.has(child),
     // The role-only tool builder cannot know the child ID until execute. Protocol
     // tools authenticate the actual session, including against parent forgeries.
     childProtocol }

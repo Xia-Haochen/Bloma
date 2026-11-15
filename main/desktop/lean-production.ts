@@ -66,7 +66,7 @@ import { handleLongtermMessage } from '../software/longterm-message'
 import { workflowRetirementReason } from './workflow-retirement'
 import { renderSoftwareWorkingContext } from '../software/working-context'
 import { createQualityReview } from '../software/quality-review'
-import { readQualityLedger, qualityCoverageRulesVersion } from '../software/quality-ledger'
+import { readQualityLedger } from '../software/quality-ledger'
 
 // Dissatisfaction is a repair request, not cancellation of the new workflow.
 const isStop = (text: string) => text.split(/[，。；！？,;!?\n]+/).some(part => /^(?:(?:请|先|现在|马上|暂时)\s*)*(?:停止|取消|暂停|停下|先停|别推进|暂缓|先别做|不要开工|stop|cancel|pause)(?:(?:当前|本次|这个)?(?:任务|流程|运行|执行|制作)|一下|吧|了|\s)*$/i.test(part.trim()))
@@ -199,10 +199,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     const thinking=body.thinking?.type==='enabled'?body.thinking.budget_tokens:undefined
     const minimumOutput=Math.max(window?.minimumOutputTokens??0,thinking===undefined?0:thinking+1)
     const quote=quoteMonetaryWork(request.url,body.model,body.max_tokens,policyPath,minimumOutput)
-    const ledger=readQualityLedger(input.projectId)
-    const bindingKinds=new Set(ledger.findings.filter(f=>['suspected','confirmed'].includes(f.disposition)&&['high','critical'].includes(f.severity)&&!f.retest).map(f=>f.review_kind??'code'))
-    const needsCoverage=(brief.lean_brief?.ui==='required'||Boolean(brief.requirements_model?.workflows?.length))&&!ledger.reviews.some(r=>r.purpose==='coverage'&&r.status==='complete'&&r.rules===qualityCoverageRulesVersion(input.projectId))
-    const mandatory=1+(brief.lean_brief?.ui==='required'?1:0)+bindingKinds.size+(needsCoverage?1:0)
+    const mandatory=1+(brief.lean_brief?.ui==='required'?1:0)
     const remaining=quote?Math.min(quote.remaining_micro_rmb,window?Math.floor(window.remainingRmb*1e6):Infinity):undefined
     // Requests run serially and settle before the next dispatch. Keep room
     // for one minimally sized required request and protect time for all reviews.
@@ -373,7 +370,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   }
   const query=quality.wrapQuery(guardedQuery,async signal=>{await settleCorrections(signal)})
   const baseTools = buildSoftwareAgentTools(input.projectId, 'parent', collaboration,
-    url => emit('software_preview_changed', { preview_url: url ?? null }), () => emit('software_suggestions_changed', {}),()=>emit('longterm_changed',{summary:findProject(input.projectId).longterm_summary}),undefined,async ctx=>{await quality.ensureCoverage(ctx)})
+    url => emit('software_preview_changed', { preview_url: url ?? null }), () => emit('software_suggestions_changed', {}),()=>emit('longterm_changed',{summary:findProject(input.projectId).longterm_summary}))
   let scopePending = false
   const tools = productionAgentTools(baseTools, [
     ...quality.parentTools,
@@ -475,12 +472,6 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     recordEvaluationEvent(input.projectId,'closeout_entered',{run_id:runId,request_id:input.requestId,source:softwareVerificationFingerprint(project.root_path)})
     const waiting = await waitForProductionChildren(ctx)
     if (waiting) return waiting
-    // Before buying a coverage review, get an executable formal result. This
-    // also handles recovery after the review of an approved suite was interrupted.
-    if(!deps.coreVerification&&!deps.securityScan&&!deps.launchSmoke&&await quality.ensureCoverage(ctx)){
-      const checked=await verifySoftwareCandidate(input.projectId,input.requestId,ctx.signal)
-      if(!locallyVerifiedSoftware(checked))return JSON.stringify(verificationResponse(input.projectId,checked))
-    }
     // Opt-in until real-model cost/benefit is measured. Never substitutes for C/V.
     // The UI-only observer uses the same charged transport, not the paid trial script.
     const explorationKey=versionOf()
@@ -488,9 +479,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
       attemptedExplorations.add(explorationKey)
       const admit=()=>{
         const state=budget.snapshot(), window=currentFundedExecutionWindow()
-        const ledger=readQualityLedger(input.projectId)
-        const bindingKinds=new Set(ledger.findings.filter(f=>['suspected','confirmed'].includes(f.disposition)&&['high','critical'].includes(f.severity)&&!f.retest).map(f=>f.review_kind??'code'))
-        const mandatory=3+bindingKinds.size // C, V and an independent binding/repair handoff
+        const mandatory=2 // Candidate code and visual review own all quality judgments.
         const quote=quoteMonetaryWork(input.env.ANTHROPIC_BASE_URL,input.env.ANTHROPIC_MODEL,input.maxTokens)
         // No quote is not evidence that optional requests are free.
         const decision=interactionExplorationAdmission({requests:state.limits.requests-state.requests,output:state.limits.output-state.output,maxTokens:input.maxTokens,windowRequests:window?.remainingRequests,remainingMicro:quote?Math.min(quote.remaining_micro_rmb,window?Math.floor(window.remainingRmb*1e6):Infinity):undefined,requestMicro:quote?.request_micro_rmb,mandatoryRequests:mandatory,deadlineAt:window?.deadlineAt,drainMs:DEFAULT_STREAM_PROGRESS_TIMEOUT_MS})

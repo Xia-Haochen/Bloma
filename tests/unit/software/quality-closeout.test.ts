@@ -88,12 +88,12 @@ it('a later interrupted review prevents an older completion from directing the m
  expect(qualityCloseout(facts,identity,{code:'investigation',message:'仍需审阅'},'rules').next_tool).toBe('start_quality_review')
 })
 
-it('keeps a completed code binding review current when only live observations change',()=>{
+it('requires candidate judgment after a legacy binding review',()=>{
  const facts=ledger([finding()])
  facts.reviews.push({id:'binding',kind:'code',purpose:'binding',rules:'rules',identity,status:'complete',at:'',
   observation:{digest:'old observation',ui:{},steps:[],logs:[]}})
  const block={code:'investigation' as const,message:'需要补足对应案例'}
- expect(qualityCloseout(facts,identity,block,'rules',undefined,'new observation').next_tool).toBe('inspect_app')
+ expect(qualityCloseout(facts,identity,block,'rules',undefined,'new observation').next_tool).toBe('start_quality_review')
  expect(qualityCloseout(facts,{...identity,source:'changed'},block,'rules',undefined,'new observation').next_tool).toBe('start_quality_review')
 })
 
@@ -138,7 +138,7 @@ it('coverage completion cannot stand in for current case-binding review after a 
  const facts=ledger([finding({id:'original'}),finding({id:'same-trigger-copy'}),finding({id:'different-trigger',trigger:'offline then retry'})])
  facts.reviews.push({id:'coverage',kind:'code',purpose:'coverage',rules:'coverage-rules',identity,status:'complete',at:''})
  expect(qualityCloseout(facts,identity,{code:'investigation',message:'missing bindings'},'rules')).toMatchObject({
-  next_tool:'start_quality_review',purpose:'binding',binding_findings:['original','same-trigger-copy','different-trigger'],required_investigation:['original','same-trigger-copy','different-trigger']})
+  next_tool:'start_quality_review',purpose:'candidate',binding_findings:['original','same-trigger-copy','different-trigger'],required_investigation:['original','same-trigger-copy','different-trigger']})
  expect(facts.findings.every(f=>!f.retest&&f.checks.length===0)).toBe(true)
 })
 it('does not let a review of another frozen contract suppress binding work',()=>{
@@ -160,6 +160,6 @@ it('replays the sanitized 14-finding navigation ledger without merging the three
  expect(result.required_investigation).toEqual(navigationReplay.expected_investigation)
  expect(result.must_fix).toEqual(['finding-06','finding-07'])
  expect(result.binding_findings).toEqual(['finding-06','finding-07',...navigationReplay.expected_investigation])
- expect(result).toMatchObject({next_tool:'start_quality_review',purpose:'binding'})
+ expect(result).toMatchObject({next_tool:'start_quality_review',purpose:'candidate'})
  expect(JSON.stringify(facts)).toBe(before)
 })

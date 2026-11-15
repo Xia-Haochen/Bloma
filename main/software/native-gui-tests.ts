@@ -201,6 +201,9 @@ export function freezeNativeGuiTests(projectId: string, root: string, script: st
                                 if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.expression.getText(parsed) === 'page'
                                     && ['goto', 'waitForLoadState'].includes(n.expression.name.text) && n.arguments.length === 2 && waitOptions(n.arguments[1]))
                                     return ts.factory.updateCallExpression(n, n.expression, n.typeArguments, [n.arguments[0], ts.factory.createStringLiteral('[wait-options]')]);
+                                if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.expression.getText(parsed)==='page'
+                                    && n.expression.name.text==='waitForFunction' && n.arguments.length===3 && waitOptions(n.arguments[2]))
+                                    return ts.factory.updateCallExpression(n,n.expression,n.typeArguments,[n.arguments[0],n.arguments[1],ts.factory.createStringLiteral('[wait-options]')]);
                                 if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.expression.getText(parsed) === 'page'
                                     && n.expression.name.text === 'waitForTimeout' && n.arguments.length === 1 && ts.isNumericLiteral(n.arguments[0])
                                     && Number(n.arguments[0].text) >= 100 && Number(n.arguments[0].text) <= 30000)

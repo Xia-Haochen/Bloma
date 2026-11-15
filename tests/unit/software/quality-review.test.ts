@@ -4,7 +4,7 @@ import { createInteractionExploration } from '../../../main/software/interaction
 import { verificationInputs } from '../../../main/software/verification'
 import { promoteSoftwareRelease, activeSoftwareRelease } from '../../../main/software/release-store'
 import { prdScopeFingerprint } from '../../../main/project/requirement-contract'
-import {applicableQualityLedger} from '../../../main/software/quality-ledger'
+import {applicableQualityLedger,saveQualityLedger} from '../../../main/software/quality-ledger'
 import { organizedPrd } from '../../support/organized-prd'
 import { projectRequirementsModel } from '../../../main/model/requirements-model'
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
@@ -291,15 +291,23 @@ it('production repairs a previously reviewed defect before buying C for the stab
   expect(ledger.reviews.filter(r => r.status === 'complete')).toHaveLength(2)
 }, 120000)
 
-it('verification hands off to host review and publication without another maker turn',async()=>{
+it.each([false,true])('verification hands off to one candidate review and publication (legacy finding=%s)',async legacy=>{
   const {enterDesktopLine}=await import('../../../main/desktop/desktop-route'),{findProject}=await import('../../../main/project/project-service')
   const source='console.log(Number(process.argv[2]||2)+Number(process.argv[3]||3))';writeFileSync(join(project.root_path,'app.cjs'),source)
+  let previousFinding:string|undefined
+  if(legacy){
+    const {case_name,...unbound}=finding
+    await review([unbound],undefined,undefined,undefined,'coverage')
+    previousFinding=readQualityLedger(project.project_id).findings[0].id
+  }
   let parentCalls=0,unexpected='';const children=new Set<string>()
   const use=(name:string,input:Record<string,unknown>)=>({type:'tool_use' as const,id:`manual-${parentCalls}-${name}`,name,input})
   const query:SDKQuery=async function*(_prompt,options){
     let content
     if(JSON.stringify(options.messages?.filter(m=>m.role==='system')).includes('独立只读代码/数据审阅C')){
-      if(!children.has(options.sessionId)){children.add(options.sessionId);content=[use('read_quality_review',{}),use('read_file',{path:'app.cjs'}),use('submit_quality_findings',{findings:[],engineering:{status:'supported',evidence:'Read app.cjs: stateless addition and CLI input/output.',limitations:'Fixture'}})]}
+      if(!children.has(options.sessionId)){children.add(options.sessionId);content=[use('read_quality_review',{}),use('read_file',{path:'app.cjs'}),use('submit_quality_findings',{findings:[],
+        resolutions:previousFinding?[{finding_id:previousFinding,case_name:'sum',evidence:'Frozen sum uses the original 2 and 3 inputs and checks 5.'}]:[],
+        engineering:{status:'supported',evidence:'Read app.cjs: stateless addition and CLI input/output.',limitations:'Fixture'}})]}
       else content=[{type:'text' as const,text:'结构化审阅已提交。'}]
     }else{parentCalls++;if(parentCalls>1){unexpected=JSON.stringify(options.messages).slice(-5000);throw Error('TEST_UNEXPECTED_IMPLEMENTATION_TURN')}content=[use('verify_app',{})]}
     yield{type:'assistant',message:{role:'assistant',content}};yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
@@ -308,7 +316,31 @@ it('verification hands off to host review and publication without another maker 
     {publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
   expect(parentCalls,unexpected).toBe(1);expect(children.size).toBe(1);expect(readFileSync(join(project.root_path,'app.cjs'),'utf8')).toBe(source)
   expect(findProject(project.project_id).status).toBe('completed')
+  const facts=readQualityLedger(project.project_id)
+  expect(facts.reviews.filter(r=>r.purpose==='candidate')).toHaveLength(1)
+  expect(facts.reviews.some(r=>r.purpose==='binding')).toBe(false)
+  if(legacy)expect(facts.findings[0]).toMatchObject({disposition:'not_reproduced',checks:[{outcome:'passed',grounded:true}]})
 },90000)
+
+it('repeated identical findings reuse their obligation and preserve distinct triggers',async()=>{
+  const {case_name,...unbound}=finding
+  await review([unbound])
+  const first=readQualityLedger(project.project_id).findings[0].id
+  await review([unbound,{...unbound,trigger:'different trigger',reproduction:'different input'}])
+  const facts=readQualityLedger(project.project_id)
+  expect(facts.findings).toHaveLength(2)
+  expect(facts.findings[0].id).toBe(first)
+  expect(facts.findings.every(f=>f.disposition==='suspected'&&f.checks.length===0)).toBe(true)
+  facts.findings[0].disposition='not_reproduced'
+  saveQualityLedger(project.project_id,facts)
+  await review([unbound])
+  const repeated=readQualityLedger(project.project_id)
+  expect(repeated.findings).toHaveLength(3)
+  expect(repeated.findings[0].disposition).toBe('not_reproduced')
+  expect(repeated.findings.at(-1)).toMatchObject({disposition:'suspected',checks:[]})
+  await review([{...unbound,requires_execution:false}])
+  expect(readQualityLedger(project.project_id).findings).toHaveLength(4)
+},60000)
 
 it('stops repeated failed checks without buying a review or teaching the maker review protocol',async()=>{
   const {enterDesktopLine}=await import('../../../main/desktop/desktop-route'),{findProject}=await import('../../../main/project/project-service')
@@ -577,7 +609,7 @@ it('one current binding review settles several same-case suspicions but cannot c
  await review([unbound,{...unbound,location:'same-trigger second report'},{...unbound,location:'same-trigger third report'},{...unbound,trigger:'network failure then retry',reproduction:'different path not present in sum'}],undefined,undefined,undefined,'coverage')
  let facts=readQualityLedger(project.project_id)
  const ids=facts.findings.map(f=>f.id)
- expect(await quality.completionAction(ctx().signal)).toMatchObject({next_tool:'start_quality_review',purpose:'binding',binding_findings:ids})
+ expect(await quality.completionAction(ctx().signal)).toMatchObject({next_tool:'start_quality_review',purpose:'candidate',binding_findings:ids})
  const first=await verifySoftwareCandidate(project.project_id,'r',ctx().signal)
  expect(first.status).toBe('passed');expect(readQualityLedger(project.project_id).findings.every(f=>f.checks.length===0)).toBe(true)
  register(async function*(_prompt,options){
