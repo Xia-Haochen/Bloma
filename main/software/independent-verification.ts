@@ -57,7 +57,13 @@ export function independentSuite(projectId:string,root:string,caseIds?:string[])
   if(adapter.version!==1||adapter.design_digest!==record.digest||Object.keys(adapter).some(key=>!['version','design_digest','controls'].includes(key))||!adapter.controls||Array.isArray(adapter.controls))throw Error('INDEPENDENT_ADAPTER_INVALID')
   const allowed=new Set(record.contract.cases.flatMap(item=>item.steps.flatMap(stepControls)))
   const controls=new Set(selected.flatMap(item=>item.steps.flatMap(stepControls)))
-  if(Object.keys(adapter.controls).some(key=>!allowed.has(key))||[...controls].some(key=>!isStaticGuiSelector(adapter.controls[key])))throw Error('INDEPENDENT_ADAPTER_STATIC_CSS_REQUIRED')
+  const extra = Object.keys(adapter.controls).filter(key => !allowed.has(key))
+  const missing = [...controls].filter(key => !Object.hasOwn(adapter.controls,key))
+  const invalid = [...controls].filter(key => Object.hasOwn(adapter.controls,key) && !isStaticGuiSelector(adapter.controls[key]))
+  if (extra.length || missing.length || invalid.length) throw Error('INDEPENDENT_ADAPTER_STATIC_CSS_REQUIRED: '+JSON.stringify({
+    extra:extra.slice(0,20).map(key=>key.slice(0,128)),missing:missing.slice(0,20),invalid:invalid.slice(0,20),
+    next:'只绑定当前冻结案例引用的逻辑控件。模型设置控件由 CORE_CHECK.llm.settings 管理。缺失项补静态 CSS，额外项移出独立适配器。',
+  }))
   const suite:GuiAcceptanceSuite = {version:1,scope_hash:record.scope,design_hash:record.design_hash,covers:[...new Set(selected.map(item=>item.feature))],steps:selected.flatMap(item=>item.steps.map((step,index)=>{
     const id=`${item.id}-${index}`
     if(step.kind==='restart')return{id,kind:'restart' as const}
