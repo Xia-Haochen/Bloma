@@ -44,15 +44,21 @@ const suite=():GuiAcceptanceSuite=>({version:1,scope_hash:'a'.repeat(64),covers:
 const observe=(environment:Awaited<ReturnType<typeof prepare>>,rules=suite(),signal?:AbortSignal)=>observeSoftwareGui({projectId:project.project_id,root:project.root_path,
   launch:{schema_version:2,ui:'browser',command:['node','server.cjs'],url:'http://127.0.0.1:'+port},suite:rules,temporary:join(home,'case'),environment,signal:signal??AbortSignal.timeout(30000),purpose:'acceptance',comparisons:{reopened:'reply'}})
 
-it('restores the normal entry after opening settings and keeps the controlled service through restart', async () => {
+it.each([false, true])('restores the normal entry and keeps service across restart (fixed model %s)', async (fixedModel) => {
   const root = project.root_path
   const app = join(root, 'index.html')
   const html = readFileSync(app, 'utf8')
-  writeFileSync(app, html
+  let entry = html
     .replace('<input id="service">', '<button id="settings">Settings</button><section id="panel" hidden><input id="service">')
     .replace('<input id="say">', '</section><input id="say">')
-    .replace("el('configure').onclick", "el('settings').onclick=()=>{el('panel').hidden=false;el('say').hidden=true;el('send').hidden=true};el('configure').onclick"))
-  writeFileSync(join(root, 'CORE_CHECK.json'), JSON.stringify({ llm: { ...spec(), settings: { ...settings, open: '#settings' } } }))
+    .replace("el('configure').onclick", "el('settings').onclick=()=>{el('panel').hidden=false;el('say').hidden=true;el('send').hidden=true};el('configure').onclick")
+  const binding = { ...settings, open: '#settings', notes: 'extra settings metadata' } as Record<string, unknown>
+  if (fixedModel) {
+    delete binding.model
+    entry = entry.replace('<input id="model">', '').replace("el('model').value", "'deepseek-flash'")
+  }
+  writeFileSync(app, entry)
+  writeFileSync(join(root, 'CORE_CHECK.json'), JSON.stringify({ llm: { ...spec(), covers: undefined, settings: binding } }))
   mkdirSync(join(root,'tests'))
   writeFileSync(join(root,'tests/acceptance.mjs'), `export default async ({test,page,expect,phase}) => {
     const run=async()=> {
@@ -137,6 +143,16 @@ it('blocks missing settings before executing a business case',async()=>{
   expect(diagnosis?.category).toBe('environment');expect(diagnosis?.code).toBe('ACCEPTANCE_ENVIRONMENT_SETTINGS_REQUIRED')
   expect(diagnosis?.next_action).toEqual({tool:'read_production_context',arguments:{topic:'ai-service'}})
 })
+it('identifies the exact required field without requiring a model control', async () => {
+  const llm = spec()
+  writeFileSync(join(project.root_path, 'CORE_CHECK.json'), JSON.stringify({
+    llm: { ...llm, settings: { ...settings, model: undefined, api_key: undefined } },
+  }))
+  await expect(prepare()).rejects.toThrow('CORE_CHECK.llm.settings.api_key')
+  const failure = verificationFailure({ status: 'unverified', summary: '实际界面业务检查：ACCEPTANCE_ENVIRONMENT_SETTINGS_INVALID: CORE_CHECK.llm.settings.api_key' })
+  expect(failure).toMatchObject({ category: 'environment', code: 'ACCEPTANCE_ENVIRONMENT_SETTINGS_INVALID',
+    next_action: { tool: 'read_production_context', arguments: { topic: 'ai-service' } } })
+})
 it('marks failed setup as unverified without running frozen assertions or creating service observations',async()=>{
   writeFileSync(join(project.root_path,'CORE_CHECK.json'),JSON.stringify({llm:{...spec(),settings:{...settings,save:'#does-not-exist'}}}))
   const env=await prepare()
@@ -153,7 +169,9 @@ it.each(['openai-chat','anthropic-messages'])('isolates service credentials and 
   const first=await prepare(),second=await prepare()
   const configure=async(env:typeof first)=>{
     const fields:Record<string,string>={}
-    await env.prepare({url:()=> 'http://127.0.0.1/', locator:(selector:string)=>({isVisible:async()=>true,inputValue:async()=>'',fill:async(value:string)=>{fields[selector]=value},click:async()=>{},filter:()=>({waitFor:async()=>{}})})} as unknown as Page,0)
+    await env.prepare({url:()=> 'http://127.0.0.1/', locator:(selector:string)=>({isVisible:async()=>true,
+      evaluate:async()=>({value:'',editable:true}),isEditable:async()=>true,fill:async(value:string)=>{fields[selector]=value},
+      click:async()=>{},filter:()=>({waitFor:async()=>{}})})} as unknown as Page,0)
     return fields
   }
   try{

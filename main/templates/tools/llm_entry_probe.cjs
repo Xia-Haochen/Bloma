@@ -40,7 +40,18 @@ async function probe(root, spec) {
     const module = await import(pathToFileURL(file).href), Constructor = module[spec.factory] ?? module.default?.[spec.factory]
     const instance = new Constructor(), method = instance[spec.method].bind(instance)
     const config = { endpoint: `http://127.0.0.1:${port}/v1`, model: 'host-test-model', api_key: 'host-test-key', provider: 'real', timeout: 2000,...(vision||spec.protocol?{network:'loopback'}:{}),...(spec.protocol?{protocol:spec.protocol}:{}) }
-    const validRequest=request=>request?.path===(anthropic?'/v1/messages':'/v1/chat/completions')&&request.auth===(anthropic?'host-test-key':'Bearer host-test-key')&&(!anthropic||request.version==='2023-06-01')&&request.body.model==='host-test-model'
+    const fixedModel = !vision && spec.settings && spec.settings.model === undefined
+    let observedModel
+    const validRequest = request => {
+      if (request?.path !== (anthropic ? '/v1/messages' : '/v1/chat/completions')
+        || request.auth !== (anthropic ? 'host-test-key' : 'Bearer host-test-key')
+        || (anthropic && request.version !== '2023-06-01')) return false
+      const model = request.body?.model
+      if (!fixedModel) return model === config.model
+      if (typeof model !== 'string' || !model.trim() || model.length > 256) return false
+      observedModel ??= model
+      return model === observedModel
+    }
     const invoke = async (config,index=0) => {
       let timer
       try {

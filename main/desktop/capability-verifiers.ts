@@ -57,12 +57,14 @@ const llmVerifier: CapabilityVerifier = { id: 'llm', async run(ctx) {
   const needed = required.length > 0 || !!ctx.backplane.shape && !['none', 'preview'].includes(ctx.backplane.shape.llm_role)
   if (!needed && !spec) return
   const ids = new Set(ctx.backplane.requirements.map(item => item.id))
-  if (spec && (!Array.isArray(spec.covers) || !spec.covers.length || spec.covers.some(id => !ids.has(id)) || required.some(item => !spec.covers.includes(item.id)))) {
+  // The transport probe is shared. The host already knows capability features
+  // from the confirmed requirements, so the maker need not duplicate that list.
+  if (spec?.covers !== undefined && (!Array.isArray(spec.covers) || spec.covers.some(id => !ids.has(id)))) {
     const declared = Array.isArray(spec.covers) ? spec.covers.filter(id => typeof id === 'string' && /^F-\d+$/.test(id)) : []
     const affected = new Set([...required.map(item=>item.id),...declared.filter(id=>ids.has(id))])
-    const detail = `MODEL_COVERAGE_INVALID: 模型入口覆盖声明缺失、悬空或漏掉模型需求 ${JSON.stringify({ required: required.map(item => item.id), declared,
+    const detail = `MODEL_COVERAGE_INVALID: 模型入口覆盖声明包含未知需求或格式无效 ${JSON.stringify({ required: required.map(item => item.id), declared,
       missing: required.filter(item => !declared.includes(item.id)).map(item => item.id), unknown: declared.filter(id => !ids.has(id)),
-      next: '在CORE_CHECK.json的llm.covers登记实际客户端覆盖的对应需求；入口必须由产品实际使用，不要更改需求或添加探针专用替身。' })}`
+      next: 'llm.covers可省略，由宿主关联确认需求。若填写，仅使用当前需求编号；入口须由产品实际使用。' })}`
     return {status:'unverified', missing:[detail],features:Object.fromEntries([...affected].map(id=>[id,'unverified' as const]))}
   }
   const result = spec ? await runHostLlmProbe(ctx.root, spec, undefined, ctx.signal, ctx.projectId) : undefined

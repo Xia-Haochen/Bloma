@@ -114,7 +114,7 @@ export function buildProductionContextTool(projectId: string): AgentLoopTool {
         }
         if(input.topic==='independent-design')return{output:JSON.stringify({enabled:readIndependentPolicy(projectId)?.enabled??false,design:readIndependentDesign(projectId)??{status:'disabled',reason:'未启用第二模型验收设计；当前为单模型验收。'},
           semantics:readIndependentDesign(projectId)?.contract?currentIndependentSemantics(projectId,readIndependentDesign(projectId)!.contract!):undefined,
-          environment:'依赖模型的GUI案例先由宿主准备隔离受控服务。CORE_CHECK.llm.settings绑定正常设置入口，字段契约见read_production_context(ai-service)；配置不就绪属于环境未验证，不让用户补验收标准。冻结案例不含配置步骤，重开不重新配置，受控服务结果不证明真实供应商或模型效果。',
+          environment:'依赖模型的GUI案例先由宿主准备隔离受控服务。CORE_CHECK.llm.settings绑定正常设置入口，字段契约见read_production_context(ai-service)，固定模型不必绑定model控件；配置不就绪属于环境未验证，不让用户补验收标准。冻结案例不含配置步骤，重开不重新配置，受控服务结果不证明真实供应商或模型效果。',
           adapter:'启用时，在项目根INDEPENDENT_ADAPTER.json提供{version:1,design_digest:冻结设计digest,controls:{逻辑控件名:静态CSS选择器}}。不得包含输入、预期或脚本；宿主按冻结业务设计编排并执行，B的文字不能签发PASS。'})}
         if(input.topic==='verification-speech'&&isSoftwareProject(projectId))return{output:JSON.stringify({protocol:SPEECH_VERIFICATION_BRIEF,
           prepare:'先inspect_software_capabilities；准备用prepare_software_capability({capability:"speech"})，缺资源可显式download_models:true下载固定公开资产；普通pip不会物化平台组件。',
@@ -145,7 +145,7 @@ export function buildProductionContextTool(projectId: string): AgentLoopTool {
             control_bindings: controlBindings, data_directory: 'APP_DATA_DIR' }) }
         }
         if (input.topic === 'verification-llm' && isSoftwareProject(projectId)) return { output: JSON.stringify({ vision:VISION_GUIDANCE.verify, protocol:
-          '登记CORE_CHECK.json llm:{runtime:"node",module:"src/llm-client.cjs",factory:"Client",method:"enhance",covers:["模型功能F编号"]}。Node模块须是产品实际使用的入口，导出可无参new的类；Node的timeout单位为毫秒；method异步接收{prompt,config:{endpoint,model,api_key,provider,timeout}}，返回{ok,kind,text/message}，kind为success/auth_error/model_error/rate_limited/invalid_response/unconfigured。宿主调用真实客户端验证本机HTTP请求及5类异常，不请求付费端点。Python入口沿用module/factory/method协议（不填runtime）。不能登记只为探针伪造的替身；外部质量另列待实测。' }) }
+          '登记CORE_CHECK.json llm:{runtime:"node",module:"src/llm-client.cjs",factory:"Client",method:"enhance",covers:可选，宿主已关联确认需求里的模型功能}。Node模块须是产品实际使用的入口，导出可无参new的类；Node的timeout单位为毫秒；method异步接收{prompt,config:{endpoint,model,api_key,provider,timeout}}，返回{ok,kind,text/message}，kind为success/auth_error/model_error/rate_limited/invalid_response/unconfigured。宿主调用真实客户端验证本机HTTP请求及5类异常，不请求付费端点。Python入口沿用module/factory/method协议（不填runtime）。不能登记只为探针伪造的替身；外部质量另列待实测。' }) }
         if (input.topic === 'verification-gui') return { output: JSON.stringify({ control_bindings: guiControlBindings(projectId), note: '实现需保留这些已确认控件身份，固定业务期望由宿主管理。' }) }
         if (input.feature_ids !== undefined && (!Array.isArray(input.feature_ids) || input.feature_ids.some(id => typeof id !== 'string'))) throw new Error('PRODUCTION_INVALID_FEATURES')
         return { output: JSON.stringify(productionContext(readPrdBackplane(projectId), String(input.topic), input.feature_ids as string[] | undefined)) }

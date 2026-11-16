@@ -43,6 +43,9 @@ export function verificationFailure(result: SoftwareVerification, error?: unknow
   const cli = result.core?.host_cli?.cases.find(row => !row.passed)
   const security = result.security?.issues.filter(row => row.severity === 'critical' || row.severity === 'high')
   const details = summary + '\n' + JSON.stringify(failed?.actual ?? '')
+  const serviceSetupCode = [gui?.error, independent.row?.kind === 'environment' ? independent.row.error : undefined, summary]
+    .map(value => value?.match(/\bACCEPTANCE_ENVIRONMENT_(?:SETTINGS\w*|READY_BINDING_INVALID|SETUP_FAILED|PROTOCOL_UNSUPPORTED|MANIFEST_INVALID|START_FAILED)\b/)?.[0])
+    .find(Boolean)
   const adapterContract = /INDEPENDENT_ADAPTER|GUI_NATIVE_(?:PATH|SYNTAX|CASE|REPORT|ASSERTIONS|EVIDENCE|COVERAGE|INPUT|TEST_SOURCE|DEPENDENCY|PACKAGE|BOOTSTRAP)|GUI_EXISTING_EXPECTATIONS|EVIDENCE_(?:PATH|DIRECTORY)/.test(details)
   // A timeout alone can be a broken UI, overlay, wrong locator or slow runtime.
   // Only the contradictory hidden-selector + visible wait is decisive here.
@@ -54,6 +57,7 @@ export function verificationFailure(result: SoftwareVerification, error?: unknow
   const category: VerificationFailure['category'] = result.status === 'environment_blocked' ? 'environment'
     : security?.length ? 'security_policy'
     : kind === 'runtime' ? 'product_assertion'
+    : serviceSetupCode ? 'environment'
     : kind === 'bootstrap' || adapterContract || contradictoryWait ? 'test_adapter'
     : explicitAssertion ? 'product_assertion'
     : independent.row?.kind==='environment' ? 'environment'
@@ -64,7 +68,7 @@ export function verificationFailure(result: SoftwareVerification, error?: unknow
   const expected = independent?.expected ?? assertion?.expected ?? cli?.expected ?? (security?.length ? '通过现役静态安全规则；规则命中不等同已证实漏洞' : undefined)
   const actual = independent?.actual ?? assertion?.actual ?? failed?.actual ?? (cli ? {stdout:cli.actual,exit_code:cli.exit_code,stderr:cli.stderr} : security?.length ? security : summary)
   const basis = category==='security_policy'?'static_policy':kind==='runtime'?'host_runtime':category==='test_adapter'?'adapter_contract':explicitAssertion?'assertion':'unresolved'
-  const serviceEnvironment=independent.row?.kind==='environment'&&independent.row.error?.includes('ACCEPTANCE_ENVIRONMENT_')
+  const serviceEnvironment=serviceSetupCode||independent.row?.kind==='environment'&&independent.row.error?.includes('ACCEPTANCE_ENVIRONMENT_')
   const contract=error instanceof NativeTestContractError?error:undefined
   const next_action=contract?.readOriginal??(serviceEnvironment?{tool:'read_production_context',arguments:{topic:'ai-service'}}:category==='environment'?{tool:'inspect_software_environment',arguments:{}}
     :category==='security_policy'&&security?.[0]?.file?{tool:'read_file',arguments:{path:security[0].file}}
@@ -75,7 +79,7 @@ export function verificationFailure(result: SoftwareVerification, error?: unknow
     observation:{status:result.status,candidate_id:result.candidate?.id,source:result.candidate?.source.digest,expected,actual},
     diagnosis:{certainty:explicitAssertion||security?.length||kind==='runtime'?'supported':category==='test_adapter'?'suspected':'unknown',basis,root_cause_confirmed:false,
       note:explicitAssertion?'仅确认实际结果不符合登记断言；先核对预期来源，不等于确认业务实现根因。':category==='security_policy'?'仅确认静态规则命中，不据此宣称漏洞可利用。':'原因未闭合；按当前现场检查，不把检查失败直接等同产品缺陷。'},
-    code: contradictoryWait && category === 'test_adapter' ? 'TEST_WAIT_STATE_CONTRADICTION' : (independent.row?.kind==='environment'?independent.row.error??summary:summary).match(/\b[A-Z][A-Z_]{4,}\b/)?.[0] ?? (category === 'security_policy'?'STATIC_POLICY_BLOCKED':category === 'product_assertion' ? 'PRODUCT_CHECK_FAILED' : 'VERIFICATION_INCOMPLETE'),
+    code: contradictoryWait && category === 'test_adapter' ? 'TEST_WAIT_STATE_CONTRADICTION' : serviceSetupCode ?? (independent.row?.kind==='environment'?independent.row.error??summary:summary).match(/\b[A-Z][A-Z_]{4,}\b/)?.[0] ?? (category === 'security_policy'?'STATIC_POLICY_BLOCKED':category === 'product_assertion' ? 'PRODUCT_CHECK_FAILED' : 'VERIFICATION_INCOMPLETE'),
     step: independent?.id??failed?.id??cli?.name, expected, actual,
     paths: release?.differences.map(item => item.path) ?? (error instanceof NativeTestContractError ? error.paths.slice(0, 24) : []),
     allowed_changes: contract?.readOriginal?['恢复误改的冻结原文，或保留有意修正的草稿并提交独立裁定']:category==='security_policy'?['核对命中规则及具体数据来源；修正应用写法，不关闭规则或宣称已证实漏洞']:category === 'unknown'?['先核对实际界面、进程和日志；原因尚未确定，不修改业务输入或断言'] : category === 'test_adapter' ? ['测试定位的静态字面量', '有界等待时间和导航等待选项；业务输入、目标页面和断言保持冻结'] : category === 'product_assertion' ? ['先核对断言预期的确认来源，再修应用实现；断言不等同业务根因，不得降低已确认预期'] : ['宿主证据目录和执行环境；不得绕过完整性校验'],

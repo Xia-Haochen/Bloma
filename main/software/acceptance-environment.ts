@@ -8,7 +8,7 @@ import { isStaticGuiSelector } from './gui-selectors'
 export interface LlmSettingsBinding {
   open?: string
   endpoint: string
-  model: string
+  model?: string
   api_key: string
   protocol?: string
   save: string
@@ -38,13 +38,22 @@ const fail = (code: string): never => { throw new AcceptanceEnvironmentError(cod
 function settingsBinding(value: unknown): LlmSettingsBinding {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return fail('ACCEPTANCE_ENVIRONMENT_SETTINGS_REQUIRED: CORE_CHECK.llm.settings 须登记产品正常模型设置界面')
   const row = value as Record<string, unknown>
-  if (Object.keys(row).some(key => !['open','endpoint','model','api_key','protocol','save','ready'].includes(key))
-    || ['endpoint','model','api_key','save'].some(key => !isStaticGuiSelector(row[key]))
-    || ['open','protocol'].some(key => row[key] !== undefined && !isStaticGuiSelector(row[key]))) return fail('ACCEPTANCE_ENVIRONMENT_SETTINGS_INVALID')
+  const fields = ['endpoint', 'api_key', 'save'].filter(key => !isStaticGuiSelector(row[key]))
+  fields.push(...['open', 'model', 'protocol'].filter(key => row[key] !== undefined && !isStaticGuiSelector(row[key])))
+  if (fields.length) return fail('ACCEPTANCE_ENVIRONMENT_SETTINGS_INVALID: 静态 CSS 绑定缺失或无效：' +
+    fields.map(key => 'CORE_CHECK.llm.settings.' + key).join('、'))
   const ready = row.ready as Record<string, unknown> | undefined
-  if (!ready || Object.keys(ready).some(key => !['selector','contains'].includes(key)) || !isStaticGuiSelector(ready.selector)
-    || typeof ready.contains !== 'string' || !ready.contains.trim() || ready.contains.length > 200) return fail('ACCEPTANCE_ENVIRONMENT_READY_BINDING_INVALID')
+  if (!ready || Array.isArray(ready) || !isStaticGuiSelector(ready.selector)) {
+    return fail('ACCEPTANCE_ENVIRONMENT_READY_BINDING_INVALID: CORE_CHECK.llm.settings.ready.selector 须指向实际保存状态')
+  }
+  if (typeof ready.contains !== 'string' || !ready.contains.trim() || ready.contains.length > 200) {
+    return fail('ACCEPTANCE_ENVIRONMENT_READY_BINDING_INVALID: CORE_CHECK.llm.settings.ready.contains 须填写实际保存成功文案')
+  }
   return value as LlmSettingsBinding
+}
+
+function validModel(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 256 && !!value.trim() && !/[\u0000-\u001f\u007f]/.test(value)
 }
 
 /** A host-owned dependency lease. No business assertions, product-specific IDs,
@@ -63,8 +72,11 @@ export async function prepareAcceptanceEnvironment(input: {
     try { llm = JSON.parse(readFileSync(manifestPath, 'utf8')).llm } catch { return fail('ACCEPTANCE_ENVIRONMENT_MANIFEST_INVALID') }
   }
   const covers = llm?.covers
-  const required = (!input.useDeclaredSettingsOnly || llm?.settings !== undefined && llm.input === undefined)
-    && (input.requiresLlm || Array.isArray(covers) && input.features.some(feature => covers.includes(feature)))
+  const hasSettings = llm?.settings !== undefined && llm.input === undefined
+  const covered = Array.isArray(covers) && input.features.some(feature => covers.includes(feature))
+  const required = input.useDeclaredSettingsOnly
+    ? hasSettings && (input.requiresLlm || covered || !Array.isArray(covers) || !covers.length)
+    : input.requiresLlm || covered
   const evidence: AcceptanceEnvironmentEvidence = { version: 1, mode: required ? 'controlled_service' : 'isolated_local',
     configuration_digest: hash({ version: 1, llm: required ? llm ?? null : null, requestExpectation:input.requestExpectation??'response' }), readiness: 'ready',
     ...(required?{request_expectation:input.requestExpectation??'response'}:{}),
@@ -73,7 +85,7 @@ export async function prepareAcceptanceEnvironment(input: {
   if (!llm || llm.input !== undefined || !['openai-chat','anthropic-messages'].includes(String(llm.protocol))) return fail('ACCEPTANCE_ENVIRONMENT_PROTOCOL_UNSUPPORTED: 首期支持已声明协议的文本对话依赖')
   const settings = settingsBinding(llm.settings), anthropic = llm.protocol === 'anthropic-messages'
   const token = randomUUID(), responses: string[] = []
-  let model = 'bloma-acceptance-text'
+  let model: string | undefined
   let prepared = false, closed = false
   evidence.readiness = 'blocked'
   const server = createServer((req, res) => {
@@ -88,8 +100,10 @@ export async function prepareAcceptanceEnvironment(input: {
       let data: {model?:string;messages?:Array<{role?:string;content?:unknown}>} = {}
       try { data = JSON.parse(body) } catch { /* invalid request remains a failed observation */ }
       const valid = (anthropic ? req.headers['x-api-key'] === token && req.headers['anthropic-version'] === '2023-06-01' : req.headers.authorization === 'Bearer ' + token)
-        && data?.model === model && Array.isArray(data.messages) && data.messages.some(message => message && message.role === 'user'
+        && validModel(data?.model) && (model === undefined || data.model === model)
+        && Array.isArray(data.messages) && data.messages.some(message => message && message.role === 'user'
           && (typeof message.content === 'string' && !!message.content.trim() || Array.isArray(message.content) && message.content.length > 0))
+      if (valid && prepared && model === undefined) model = data.model
       const response = '这是一条验收服务回复，编号 ' + randomUUID().slice(0, 8) + '。'
       evidence.requests.push({ phase: prepared ? 'case' : 'setup', valid, request_hash: hash(body), ...(valid ? { response_hash: hash(response) } : {}) })
       if (valid && prepared) responses.push(response)
@@ -120,23 +134,44 @@ export async function prepareAcceptanceEnvironment(input: {
   return {
     async prepare(page, segment) {
       if (segment > 0) return // A restart must prove persisted configuration; never reset business data or re-save settings.
+      let step = '打开正常设置入口（settings.open）'
       try {
         input.signal?.throwIfAborted()
         const entryUrl = page.url()
         const field = page.locator(settings.endpoint)
         const openedSettings = settings.open && !await field.isVisible()
         if (openedSettings) await page.locator(settings.open!).click()
-        if (settings.protocol) await page.locator(settings.protocol).selectOption(String(llm!.protocol))
+        if (settings.protocol) {
+          step = '设置协议（settings.protocol）'
+          await page.locator(settings.protocol).selectOption(String(llm!.protocol))
+        }
+        step = '填写服务地址（settings.endpoint）'
         await field.fill(endpoint)
-        const modelField = page.locator(settings.model)
-        model = (await modelField.inputValue()).trim() || model
-        await modelField.fill(model)
+        if (settings.model) {
+          step = '读取模型控件（settings.model，可省略）'
+          const field = page.locator(settings.model)
+          const current = await field.evaluate(element => {
+            if (element instanceof HTMLInputElement || element instanceof HTMLSelectElement || element instanceof HTMLTextAreaElement) {
+              return { value: element.value.trim(), editable: element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement }
+            }
+            return { value: '', editable: false }
+          })
+          if (validModel(current.value)) model = current.value
+          else if (current.editable && await field.isEditable()) {
+            model = 'bloma-acceptance-text'
+            await field.fill(model)
+          }
+        }
+        step = '填写隔离服务凭据（settings.api_key）'
         await page.locator(settings.api_key).fill(token)
+        step = '保存配置（settings.save）'
         await page.locator(settings.save).click()
         const ready = page.locator(settings.ready.selector)
+        step = '确认保存状态（settings.ready）'
         await ready.filter({hasText:settings.ready.contains}).waitFor({state:'visible',timeout:5000})
         // Provisioning is outside the case. Reset its navigation without
         // changing the isolated data directory or saving settings again.
+        step = '回到正常应用入口'
         if (entryUrl !== page.url()) {
           const navigation = await page.goto(entryUrl, { waitUntil: 'load', timeout: 15000 })
           if (!navigation) await page.reload({ waitUntil: 'load', timeout: 15000 })
@@ -147,7 +182,7 @@ export async function prepareAcceptanceEnvironment(input: {
         prepared = true; evidence.readiness = 'ready'
       } catch (error) {
         input.signal?.throwIfAborted()
-        throw new AcceptanceEnvironmentError('ACCEPTANCE_ENVIRONMENT_SETUP_FAILED: 产品正常设置入口尚未完成配置或就绪确认')
+        throw new AcceptanceEnvironmentError('ACCEPTANCE_ENVIRONMENT_SETUP_FAILED: ' + step)
       }
     },
     assess(observations) {

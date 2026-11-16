@@ -577,12 +577,12 @@ it('routes one bounded no-tools design before implementation, freezes business v
   enable();const first=await prepareIndependentDesign(input());expect(first.status,first.reason).toBe('frozen');expect(first.contract).toEqual(contract)
   expect((await prepareIndependentDesign(input())).digest).toBe(first.digest);expect(calls).toBe(1)
   expect(leanBudget(project.project_id,'acceptance-design').snapshot()).toMatchObject({requests:1,phases:{'acceptance-design':1}})
-  writeFileSync(join(project.root_path,'INDEPENDENT_ADAPTER.json'),JSON.stringify({version:1,design_digest:first.digest,controls:{name:'#name',save:'#save',result:'#result'}}))
+  writeFileSync(join(project.root_path,'INDEPENDENT_ADAPTER.json'),JSON.stringify({version:1,design_digest:first.digest,controls:{name:'#name',save:'#save',result:'#result',settings_open:'#settings'}}))
   expect(independentSuite(project.project_id,project.root_path).steps.at(-1)).toMatchObject({kind:'expect',equals:'Alice'})
   writeFileSync(join(project.root_path,'INDEPENDENT_ADAPTER.json'),JSON.stringify({version:1,design_digest:first.digest,
     controls:{name:'#name',save:'xpath=//button',settings_open:'#settings'}}))
   expect(()=>independentSuite(project.project_id,project.root_path)).toThrow(
-    /"extra":\["settings_open"\],"missing":\["result"\],"invalid":\["save"\]/)
+    /"missing":\["result"\],"invalid":\["save"\]/)
   writeFileSync(join(project.root_path,'INDEPENDENT_ADAPTER.json'),JSON.stringify({version:1,design_digest:first.digest,controls:{name:'#name',save:'#save',result:'#result'},equals:'Wrong'}))
   expect(()=>independentSuite(project.project_id,project.root_path)).toThrow('ADAPTER_INVALID')
 })
