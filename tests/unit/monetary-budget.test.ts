@@ -23,6 +23,49 @@ const state = (path: string) => JSON.parse(readFileSync(`${path}.state.json`, 'u
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 
 describe('shared monetary ceiling', () => {
+  const flashUrl = 'https://api.deepseek.com/anthropic/v1/messages'
+  function flashWallet(cap: number) {
+    const path = fixture(cap), policy = JSON.parse(readFileSync(path, 'utf8'))
+    Object.assign(policy.models[0], { host: 'api.deepseek.com', model: 'deepseek-flash', context_tokens: 1048576 })
+    writeFileSync(path, JSON.stringify(policy))
+    return path
+  }
+  it('can run six sequential text repairs on the pilot remainder while reserving full output each time', () => {
+    const path = flashWallet(2.086463)
+    const request = JSON.stringify({ model: 'deepseek-flash', max_tokens: 32768, thinking: { type: 'enabled' },
+      messages: [{ role: 'user', content: '分析结果'.repeat(64_000) }] })
+    expect(monetaryInputBlocked(flashUrl, 'deepseek-flash', path)).toBe(false)
+    for (let turn = 0; turn < 6; turn++) {
+      const fitted = fitMonetaryRequest(flashUrl, request, path)
+      expect(JSON.parse(fitted).max_tokens).toBe(32768)
+      const ticket = reserveModelRequest(flashUrl, fitted, path)!
+      const entry = state(path).entries.at(-1)
+      expect(entry.input_tokens_limit).toBeGreaterThan(Buffer.byteLength(fitted))
+      expect(entry.input_tokens_limit).toBeLessThan(1048576)
+      expect(() => reserveModelRequest(flashUrl, fitted, path)).toThrow('MONETARY_BUDGET_EXHAUSTED')
+      ticket.settle({ input_tokens: 6_000, cache_read_input_tokens: 289_000, output_tokens: 2200 }, true)
+    }
+    expect(readMonetaryBudget(path)[0].accounted_upper_rmb).toBeCloseTo(0.24696, 6)
+  })
+  it('falls back to a full input reserve for images and provider-expanded request shapes', () => {
+    const path = flashWallet(2.086463)
+    for (const variant of [
+      { messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'image' } }] }] },
+      { messages: [{ role: 'user', content: 'hello' }], unknown_provider_field: true },
+    ]) {
+      const request = JSON.stringify({ model: 'deepseek-flash', max_tokens: 512, ...variant })
+      expect(() => reserveModelRequest('https://api.deepseek.com/chat/completions', request, path)).toThrow('MONETARY_BUDGET_EXHAUSTED')
+    }
+  })
+  it('keeps reported usage if the text envelope is exceeded and returns to full reserves for the wallet', () => {
+    const path = flashWallet(1)
+    const request = JSON.stringify({ model: 'deepseek-flash', max_tokens: 1000, messages: [{ role: 'user', content: 'hello' }] })
+    const ticket = reserveModelRequest(flashUrl, request, path)!
+    expect(() => ticket.settle({ input_tokens: 20_000, output_tokens: 10 }, true)).toThrow('MONETARY_USAGE_EXCEEDS_RESERVATION')
+    expect(state(path).entries.at(-1)).toMatchObject({ status: 'reported', charged_micro_rmb: 40_080, input_envelope_exceeded: true })
+    expect(monetaryInputBlocked(flashUrl, 'deepseek-flash', path)).toBe(true)
+    expect(() => reserveModelRequest(flashUrl, request, path)).toThrow('MONETARY_BUDGET_EXHAUSTED')
+  })
   it('detects an impossible input reserve without touching the ledger, while pending contention is not a permanent stop',()=>{
     const path=fixture(1);expect(monetaryInputBlocked(url,'M1',path)).toBe(true)
     const possible=fixture(3),pending=reserveModelRequest(url,body,possible)!

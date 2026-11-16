@@ -147,6 +147,9 @@ it('missing static adapter controls are unverified harness findings, not reprodu
   const file = join(project.root_path, 'INDEPENDENT_ADAPTER.json'), adapter = JSON.parse(readFileSync(file, 'utf8')); delete adapter.controls.nameA; writeFileSync(file, JSON.stringify(adapter))
   const result = await verifySoftwareCandidate(project.project_id, 'r', ctx().signal, true)
   expect(result.status).toBe('unverified'); expect(result.independent?.case_results?.[0].kind).toBe('adapter')
+  expect(result.independent_mapping).toMatchObject({
+    status: 'mapping_pending', detail: expect.stringContaining('"missing":["nameA"]'),
+  })
   expect(readQualityLedger(project.project_id).findings[0].disposition).toBe('suspected')
   expect(readQualityLedger(project.project_id).findings[0].checks.some(c => c.outcome === 'failed')).toBe(false)
 }, 90000)

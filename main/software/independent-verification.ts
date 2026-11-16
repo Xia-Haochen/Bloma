@@ -38,6 +38,41 @@ function stepControls(step: IndependentStep): string[] {
   if (!('control' in step)) return []
   return step.kind === 'expect_audio' && step.text_control ? [step.control, step.text_control] : [step.control]
 }
+function readIndependentAdapter(root: string, digest: string | undefined, allowed: Set<string>, controls: Set<string>) {
+  const file=join(root,'INDEPENDENT_ADAPTER.json')
+  if(!existsSync(file))throw Error('INDEPENDENT_ADAPTER_REQUIRED: 提供版本1的controls逻辑控件名到静态CSS选择器映射，不含输入或断言')
+  const text=readFileSync(file,'utf8');if(Buffer.byteLength(text)>32*1024)throw Error('INDEPENDENT_ADAPTER_TOO_LARGE')
+  const adapter=JSON.parse(text) as {version:number;design_digest:string;controls:Record<string,string>}
+  if(!adapter||adapter.version!==1||adapter.design_digest!==digest||Object.keys(adapter).some(key=>!['version','design_digest','controls'].includes(key))||!adapter.controls||typeof adapter.controls!=='object'||Array.isArray(adapter.controls))throw Error('INDEPENDENT_ADAPTER_INVALID')
+  const extra = Object.keys(adapter.controls).filter(key => !allowed.has(key))
+  const missing = [...controls].filter(key => !Object.hasOwn(adapter.controls,key))
+  const invalid = [...controls].filter(key => Object.hasOwn(adapter.controls,key) && !isStaticGuiSelector(adapter.controls[key]))
+  if (extra.length || missing.length || invalid.length) throw Error('INDEPENDENT_ADAPTER_STATIC_CSS_REQUIRED: '+JSON.stringify({
+    extra:extra.slice(0,20).map(key=>key.slice(0,128)),missing:missing.slice(0,20),invalid:invalid.slice(0,20),
+    next:'只绑定当前冻结案例引用的逻辑控件。模型设置控件由 CORE_CHECK.llm.settings 管理。缺失项补静态 CSS，额外项移出独立适配器。',
+  }))
+  return adapter.controls
+}
+
+/** Cheap input check. A valid mapping still needs actual GUI execution. */
+export function independentAdapterPreflight(projectId: string, root: string) {
+  if (!readIndependentPolicy(projectId)?.enabled) return
+  const design = readIndependentDesign(projectId)
+  if (design?.status !== 'frozen' || !design.contract) return
+  const semantics = currentIndependentSemantics(projectId, design.contract)
+  const grounded = new Set(semantics.cases.filter(row => row.status === 'grounded').map(row => row.id))
+  const required = new Set(design.contract.cases.filter(item => grounded.has(item.id)).flatMap(item => item.steps.flatMap(stepControls)))
+  if (!required.size) return
+  try {
+    const allowed = new Set(design.contract.cases.flatMap(item => item.steps.flatMap(stepControls)))
+    readIndependentAdapter(root, design.digest, allowed, required)
+    return { status: 'ready_for_execution' as const, required_controls: [...required] }
+  } catch (error) {
+    return { status: 'mapping_pending' as const, required_controls: [...required], detail: String(error),
+      next: '先用 inspect_app 核对正常入口的实际控件，再绑定映射。可优先沿用现有控件，无需为映射改变默认页面。' }
+  }
+}
+
 /** Adapter values are selectors only. All action values, assertions and order
  * come from the host-frozen B design, never from implementer-authored code. */
 export function independentSuite(projectId:string,root:string,caseIds?:string[]):GuiAcceptanceSuite{
@@ -50,26 +85,14 @@ export function independentSuite(projectId:string,root:string,caseIds?:string[])
   const selected=caseIds?record.contract.cases.filter(c=>caseIds.includes(c.id)):record.contract.cases
   if(!selected.length||caseIds&&selected.length!==caseIds.length||selected.some(c=>semantics.cases.find(s=>s.id===c.id)?.status!=='grounded')||!caseIds&&!semantics.ready)throw Error('INDEPENDENT_SEMANTICS_UNRESOLVED: 不得执行无依据预期或把争议写成产品缺陷')
   if (selected.some(item => item.steps.some(step => step.kind === 'speech_probe'))) throw Error('INDEPENDENT_SPEECH_REQUIRES_HOST_PROBE')
-  const file=join(root,'INDEPENDENT_ADAPTER.json')
-  if(!existsSync(file))throw Error('INDEPENDENT_ADAPTER_REQUIRED: 提供版本1的controls逻辑控件名到静态CSS选择器映射，不含输入或断言')
-  const text=readFileSync(file,'utf8');if(Buffer.byteLength(text)>32*1024)throw Error('INDEPENDENT_ADAPTER_TOO_LARGE')
-  const adapter=JSON.parse(text) as {version:number;design_digest:string;controls:Record<string,string>}
-  if(adapter.version!==1||adapter.design_digest!==record.digest||Object.keys(adapter).some(key=>!['version','design_digest','controls'].includes(key))||!adapter.controls||Array.isArray(adapter.controls))throw Error('INDEPENDENT_ADAPTER_INVALID')
-  const allowed=new Set(record.contract.cases.flatMap(item=>item.steps.flatMap(stepControls)))
-  const controls=new Set(selected.flatMap(item=>item.steps.flatMap(stepControls)))
-  const extra = Object.keys(adapter.controls).filter(key => !allowed.has(key))
-  const missing = [...controls].filter(key => !Object.hasOwn(adapter.controls,key))
-  const invalid = [...controls].filter(key => Object.hasOwn(adapter.controls,key) && !isStaticGuiSelector(adapter.controls[key]))
-  if (extra.length || missing.length || invalid.length) throw Error('INDEPENDENT_ADAPTER_STATIC_CSS_REQUIRED: '+JSON.stringify({
-    extra:extra.slice(0,20).map(key=>key.slice(0,128)),missing:missing.slice(0,20),invalid:invalid.slice(0,20),
-    next:'只绑定当前冻结案例引用的逻辑控件。模型设置控件由 CORE_CHECK.llm.settings 管理。缺失项补静态 CSS，额外项移出独立适配器。',
-  }))
+  const allowed = new Set(record.contract.cases.flatMap(item => item.steps.flatMap(stepControls)))
+  const controls = readIndependentAdapter(root, record.digest, allowed, new Set(selected.flatMap(item => item.steps.flatMap(stepControls))))
   const suite:GuiAcceptanceSuite = {version:1,scope_hash:record.scope,design_hash:record.design_hash,covers:[...new Set(selected.map(item=>item.feature))],steps:selected.flatMap(item=>item.steps.map((step,index)=>{
     const id=`${item.id}-${index}`
     if(step.kind==='restart')return{id,kind:'restart' as const}
     if(step.kind==='speech_probe')throw Error('INDEPENDENT_SPEECH_REQUIRES_HOST_PROBE')
-    const selector=adapter.controls[step.control]
-    if(step.kind==='expect_audio')return{id,kind:'expect_audio' as const,selector,text_selector:step.text_control?adapter.controls[step.text_control]:undefined}
+    const selector=controls[step.control]
+    if(step.kind==='expect_audio')return{id,kind:'expect_audio' as const,selector,text_selector:step.text_control?controls[step.text_control]:undefined}
     if(step.kind==='speech_input')return{id,kind:'upload' as const,selector,path:step.sample==='silence'?'input/voice-silence.wav':'input/voice-golden.wav'}
     if(step.kind==='fill')return{id,kind:'fill' as const,selector,value:step.value}
     if(step.kind==='click')return{id,kind:'click' as const,selector}

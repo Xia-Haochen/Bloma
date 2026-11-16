@@ -3,11 +3,12 @@ import { acquireMonetaryEpoch } from './monetary-epoch'
 import { closeSync, existsSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import type { SDKMessage } from '../../../shared/types'
 import {reportedPricingCredit,type ReportedPricingCheckpoint} from './reported-pricing'
+import { monetaryInputEnvelope, supportsTextEnvelope } from './monetary-input'
 
 type Usage = NonNullable<SDKMessage['usage']>
 interface Rate { host: string; model: string; cap_rmb: number; context_tokens: number; input_rmb_per_million: number; output_rmb_per_million: number; cache_rmb_per_million: number }
 interface Policy { version: 1; models: Rate[] }
-interface Entry { id: string; model: string; host: string; at?: string; home?: string; budget_wait_ms?: number; input_tokens_limit?: number; output_tokens_limit?: number; reserved_micro_rmb: number; charged_micro_rmb: number; status: 'reserved' | 'reported' | 'unknown' | 'reconciled_unauthenticated' | 'reconciled_pre_execution'; usage?: Usage }
+interface Entry { id: string; model: string; host: string; at?: string; home?: string; budget_wait_ms?: number; input_tokens_limit?: number; output_tokens_limit?: number; reserved_micro_rmb: number; charged_micro_rmb: number; status: 'reserved' | 'reported' | 'unknown' | 'reconciled_unauthenticated' | 'reconciled_pre_execution'; usage?: Usage; input_envelope_exceeded?: true }
 interface BalanceCheckpoint { id: string; host: string; model: string; covered_request_ids: string[]; spent_upper_micro_rmb: number; evidence_path: string; evidence_sha256: string }
 interface State { version: 1; policy_hash: string; entries: Entry[]; balance_checkpoints?: BalanceCheckpoint[]; reported_pricing_checkpoints?:ReportedPricingCheckpoint[] }
 
@@ -35,8 +36,15 @@ export function monetaryStopMessage(error: unknown): string | undefined {
 const fail = (code: string): never => { throw new MonetaryBudgetError(code) }
 const integer = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0
 const micro = (tokens: number, rmbPerMillion: number) => Math.ceil(tokens * rmbPerMillion)
-const requestReserveMicro=(rate:Rate,output:number)=>micro(rate.context_tokens,rate.input_rmb_per_million)+micro(output,rate.output_rmb_per_million)
+const requestReserveMicro=(rate:Rate,output:number,input=rate.context_tokens)=>micro(input,rate.input_rmb_per_million)+micro(output,rate.output_rmb_per_million)
 const MINIMUM_FITTED_OUTPUT_TOKENS = 512
+function usesTextEnvelope(rate: Rate, state?: State): boolean {
+  return supportsTextEnvelope(rate) && !state?.entries.some(row =>
+    row.host === rate.host && row.model === rate.model && row.input_envelope_exceeded)
+}
+function inputLimit(url: string, body: string, rate: Rate, state: State): number {
+  return usesTextEnvelope(rate, state) ? monetaryInputEnvelope(new URL(url), body, rate) : rate.context_tokens
+}
 const reportedCharge=(state:State,host:string,model:string)=>state.entries.filter(e=>e.host===host&&e.model===model&&e.status==='reported').reduce((sum,e)=>sum+e.charged_micro_rmb,0)
   -(state.reported_pricing_checkpoints??[]).filter(c=>c.host===host&&c.model===model).reduce((sum,c)=>sum+c.original_micro_rmb-c.settled_micro_rmb,0)
 
@@ -112,7 +120,7 @@ export function fitMonetaryRequest(url: string, body: string, policyPath = proce
     || !Number.isFinite(rate.output_rmb_per_million) || rate.output_rmb_per_million <= 0) return body
   if (state.entries.some(entry => !integer(entry.charged_micro_rmb) || !integer(entry.reserved_micro_rmb))) fail('MONETARY_STATE_INVALID')
   const spent = accountedSpent(state, host, rate.model), cap = Math.floor(rate.cap_rmb * 1e6)
-  const inputReserve = micro(rate.context_tokens, rate.input_rmb_per_million)
+  const inputReserve = micro(inputLimit(url, body, rate, state), rate.input_rmb_per_million)
   const available = cap - spent - inputReserve
   if (inputReserve + micro(requested, rate.output_rmb_per_million) <= cap - spent || available < 0) return body
   let limit = Math.min(requested, Math.floor(available / rate.output_rmb_per_million))
@@ -124,9 +132,8 @@ export function fitMonetaryRequest(url: string, body: string, policyPath = proce
   return JSON.stringify({ ...request, max_tokens: limit })
 }
 
-/** When even the policy's full input reserve cannot fit, no output choice can
- * make the next request admissible. Let the host finish existing checks without
- * first calling the model. In-flight contention is not permanent exhaustion. */
+/** Before a body exists, stop only when no supported request could fit.
+ * Physical admission below prices the actual body under the wallet lock. */
 export function monetaryInputBlocked(baseUrl:string|undefined,model:string|undefined,policyPath=process.env.BLOMA_MONETARY_POLICY):boolean{
   if(!policyPath||!baseUrl||!model)return false
   const bytes=readFileSync(policyPath),policy=JSON.parse(bytes.toString('utf8').replace(/^\uFEFF/,'')) as Policy
@@ -137,19 +144,20 @@ export function monetaryInputBlocked(baseUrl:string|undefined,model:string|undef
   if(!integer(rate.context_tokens)||!rate.context_tokens||!Number.isFinite(rate.cap_rmb)||rate.cap_rmb<=0
     ||[rate.input_rmb_per_million,rate.output_rmb_per_million,rate.cache_rmb_per_million].some(v=>!Number.isFinite(v)||v<0)
     ||rate.cache_rmb_per_million>rate.input_rmb_per_million)fail('MONETARY_POLICY_INVALID')
-  let spent=0
+  let spent=0, state: State | undefined
   if(existsSync(policyPath+'.state.json')){
-    const state=JSON.parse(readFileSync(policyPath+'.state.json','utf8')) as State
+    state=JSON.parse(readFileSync(policyPath+'.state.json','utf8')) as State
     if(state.version!==1||state.policy_hash!==createHash('sha256').update(bytes).digest('hex')||!Array.isArray(state.entries)
       ||state.entries.some(row=>!integer(row.charged_micro_rmb)||!integer(row.reserved_micro_rmb)||!policy.models.some(rate=>rate.host===row.host&&rate.model===row.model)))fail('MONETARY_STATE_INVALID')
     if(state.entries.some(row=>row.host===host&&row.model===model&&row.status==='reserved'))return false
     spent=accountedSpent(state,host,model)
   }
+  if (usesTextEnvelope(rate, state)) return spent >= Math.floor(rate.cap_rmb * 1e6)
   return spent+micro(rate.context_tokens,rate.input_rmb_per_million)>Math.floor(rate.cap_rmb*1e6)
 }
 
 /** Optional shared, cross-home spending ceiling. No prompts, keys, or request bodies are persisted.
- * Reserve a full context at peak rates before EACH physical request. Missing usage and crashes
+ * Reserve the input envelope and full permitted output before each physical request. Missing usage and crashes
  * retain the reservation; they never become free calls. State/policy corruption fails closed.
  */
 export function reserveModelRequest(url: string, body: string, policyPath = process.env.BLOMA_MONETARY_POLICY, waitedMs = 0) {
@@ -169,7 +177,6 @@ export function reserveModelRequest(url: string, body: string, policyPath = proc
   if (matches.length !== 1) fail('MONETARY_MODEL_NOT_ALLOWED')
   const rate = matches[0]
   if (!integer(request.max_tokens) || !request.max_tokens || request.max_tokens > rate.context_tokens) fail('MONETARY_OUTPUT_LIMIT_REQUIRED')
-  const reserved = requestReserveMicro(rate,request.max_tokens!)
   const statePath = `${policyPath}.state.json`, lockPath = `${policyPath}.lock`
   const mutate = (fn: (state: State) => void) => {
     let fd: number
@@ -200,6 +207,8 @@ export function reserveModelRequest(url: string, body: string, policyPath = proc
     catch (error) { return fail(error instanceof Error && error.message.startsWith('MONETARY_') ? error.message : 'MONETARY_EPOCH_INVALID') }
   })()
   try { mutate(state => {
+    const input = inputLimit(url, body, rate, state)
+    const reserved = requestReserveMicro(rate, request.max_tokens!, input)
     const spent = accountedSpent(state, host, rate.model)
     if (spent + reserved > Math.floor(rate.cap_rmb * 1_000_000)) {
       const entries = state.entries.filter(row => row.host === host && row.model === rate.model)
@@ -214,11 +223,12 @@ export function reserveModelRequest(url: string, body: string, policyPath = proc
     }
     state.entries.push({ id, model: rate.model, host, at: new Date().toISOString(), home: process.env.PROMA_HOME,
       ...(waitedMs > 0 ? { budget_wait_ms: waitedMs } : {}),
-      input_tokens_limit: rate.context_tokens, output_tokens_limit: request.max_tokens,
+      input_tokens_limit: input, output_tokens_limit: request.max_tokens,
       reserved_micro_rmb: reserved, charged_micro_rmb: reserved, status: 'reserved' })
   }) } finally { releaseEpoch() }
   return {
     settle(usage?: Usage, completed = false, rejection?: 'rejected_before_generation') {
+      let exceeded = false
       mutate(state => {
         const entry = state.entries.find(row => row.id === id)
         if (!entry || entry.status !== 'reserved') return fail('MONETARY_RESERVATION_INVALID')
@@ -236,7 +246,10 @@ export function reserveModelRequest(url: string, body: string, policyPath = proc
         const actual = micro(usage.input_tokens! + (usage.cache_creation_input_tokens ?? 0), rate.input_rmb_per_million)
           + micro(usage.cache_read_input_tokens ?? 0, rate.cache_rmb_per_million) + micro(usage.output_tokens!, rate.output_rmb_per_million)
         entry.charged_micro_rmb = actual; entry.status = 'reported'; entry.usage = usage
+        exceeded = input > (entry.input_tokens_limit ?? rate.context_tokens)
+        if (exceeded) entry.input_envelope_exceeded = true
       })
+      if (exceeded) fail('MONETARY_USAGE_EXCEEDS_RESERVATION')
     },
   }
 }
@@ -259,7 +272,7 @@ export async function reserveModelRequestWhenAvailable(url: string, body: string
       const state = JSON.parse(readFileSync(`${policyPath}.state.json`, 'utf8')) as State
       const entries = state.entries.filter(row => row.host === host && row.model === request.model)
       const settled = accountedSpent(state, host, rate.model, true)
-      const needed = micro(rate.context_tokens, rate.input_rmb_per_million) + micro(request.max_tokens, rate.output_rmb_per_million)
+      const needed = requestReserveMicro(rate, request.max_tokens, inputLimit(url, body, rate, state))
       if (!entries.some(row => row.status === 'reserved') || settled + needed > Math.floor(rate.cap_rmb * 1_000_000)) throw error
       if (Date.now() - started >= 120_000) throw new MonetaryBudgetError('MONETARY_RESERVATION_WAIT_TIMEOUT')
       queued = true
@@ -296,13 +309,15 @@ export async function fetchWithMonetaryBudget(url: string, init: RequestInit, fe
 
 /** Conservative scheduling quote only; physical admission remains atomic above. */
 export function quoteMonetaryWork(baseUrl:string|undefined,model:string|undefined,output:number,policyPath=process.env.BLOMA_MONETARY_POLICY,
- minimumOutput=MINIMUM_FITTED_OUTPUT_TOKENS){
+ minimumOutput=MINIMUM_FITTED_OUTPUT_TOKENS,body?:string){
  if(!policyPath||!baseUrl||!model)return
  monetaryInputBlocked(baseUrl,model,policyPath) // validates policy/state without mutation
  const policy=JSON.parse(readFileSync(policyPath,'utf8').replace(/^\uFEFF/,'')) as Policy
  const host=new URL(baseUrl).host,rate=policy.models.find(r=>r.host===host&&r.model===model)!
  if(!integer(output)||!output||output>rate.context_tokens||!integer(minimumOutput)||minimumOutput>rate.context_tokens)fail('MONETARY_OUTPUT_LIMIT_REQUIRED')
- const spent=existsSync(policyPath+'.state.json')?accountedSpent(JSON.parse(readFileSync(policyPath+'.state.json','utf8')),host,model):0
- return{remaining_micro_rmb:Math.max(0,Math.floor(rate.cap_rmb*1e6)-spent),request_micro_rmb:requestReserveMicro(rate,output),
-   minimum_request_micro_rmb:requestReserveMicro(rate,Math.max(MINIMUM_FITTED_OUTPUT_TOKENS,minimumOutput))}
+ const state:State=existsSync(policyPath+'.state.json')?JSON.parse(readFileSync(policyPath+'.state.json','utf8')):{version:1,policy_hash:'',entries:[]}
+ const spent=accountedSpent(state,host,model)
+ const input=body===undefined?rate.context_tokens:inputLimit(baseUrl,body,rate,state)
+ return{remaining_micro_rmb:Math.max(0,Math.floor(rate.cap_rmb*1e6)-spent),request_micro_rmb:requestReserveMicro(rate,output,input),
+   minimum_request_micro_rmb:requestReserveMicro(rate,Math.max(MINIMUM_FITTED_OUTPUT_TOKENS,minimumOutput),input)}
 }

@@ -164,7 +164,7 @@ it.each([{ values: [0, 1, 2, 5], completed: true }, { values: [0, 0, 0, 0], comp
     state: readSoftwareRunState(project.project_id), app: readFileSync(join(project.root_path, 'app.cjs'), 'utf8') })).toBe(completed)
   expect(calls).toBe(completed ? 8 : 6)
   if (completed) expect(readProjectAttempts(project.project_id).total['lean-repair']).toBe(3)
-  else expect(readSoftwareRunState(project.project_id)).toMatchObject({ status: 'blocked', failure: { repeats: 3 } })
+  else expect(readSoftwareRunState(project.project_id)).toMatchObject({ status: 'blocked', stop_code: 'no_progress', failure: { repeats: 3 } })
 }, 150000)
 
 it('stops unchanged reruns but allows an actual source revision or changed observation within the same budget', () => {

@@ -176,7 +176,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   const originalSource=softwareVerificationFingerprint(project.root_path)
   const runId = randomUUID()
   let assignment: ReturnType<typeof beginProjectAssignment> | undefined
-  const checkpoint = (status: SoftwareRunStatus, patch: { error?: string; candidateId?: string; source?: string; check?: { path: string; sha256: string } } = {}) => {
+  const checkpoint = (status: SoftwareRunStatus, patch: { error?: string; stop_code?: string; candidateId?: string; source?: string; check?: { path: string; sha256: string } } = {}) => {
     assignment?.checkpoint(status, patch)
     saveSoftwareRunState({ projectId: input.projectId, sessionId: input.sessionId, runId, status, ...patch })
   }
@@ -198,7 +198,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     const window=currentFundedExecutionWindow()
     const thinking=body.thinking?.type==='enabled'?body.thinking.budget_tokens:undefined
     const minimumOutput=Math.max(window?.minimumOutputTokens??0,thinking===undefined?0:thinking+1)
-    const quote=quoteMonetaryWork(request.url,body.model,body.max_tokens,policyPath,minimumOutput)
+    const quote=quoteMonetaryWork(request.url,body.model,body.max_tokens,policyPath,minimumOutput,request.body)
     const mandatory=1+(brief.lean_brief?.ui==='required'?1:0)
     const remaining=quote?Math.min(quote.remaining_micro_rmb,window?Math.floor(window.remainingRmb*1e6):Infinity):undefined
     // Requests run serially and settle before the next dispatch. Keep room
@@ -230,9 +230,9 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     if(type.startsWith('delegation_'))recordEvaluationEvent(input.projectId,type,payload)
     deps.publish(input, type, payload)
   }
-  const blocked = (reason: string, confirmation = false, state: SoftwareRunStatus = 'blocked') => {
+  const blocked = (reason: string, confirmation = false, state: SoftwareRunStatus = 'blocked', stopCode?: string) => {
     assignment?.assertCurrent()
-    if (/\b(?:MONETARY_(?:BUDGET|OPERATION)_EXHAUSTED|HARNESS_(?:REQUEST|OUTPUT)_BUDGET_EXHAUSTED|REQUEST_BUDGET_EXHAUSTED)\b/.test(reason)) {
+    if (stopCode && /^(?:MONETARY_(?:BUDGET|OPERATION)_EXHAUSTED|HARNESS_(?:REQUEST|OUTPUT)_BUDGET_EXHAUSTED|REQUEST_BUDGET_EXHAUSTED)$/.test(stopCode)) {
       try {
         const observed = retainedDebugVersion(input.projectId, input.sessionId)
         const current = observed && softwareVerificationFingerprint(project.root_path)
@@ -241,7 +241,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     }
     updateProject(input.projectId, { status: 'active', current_stage: confirmation ? 'blocked_for_user_decision' : 'generating_mvp', desktop_phase: confirmation ? undefined : 'desktop-implement',
       desktop_blocked: { reason: 'verification-incomplete', note: reason, at: new Date().toISOString() } })
-    checkpoint(confirmation ? 'waiting_user' : state, { error: reason })
+    checkpoint(confirmation ? 'waiting_user' : state, { error: reason, stop_code: stopCode })
     if (confirmation) emit('stage_changed', { stage: 'blocked_for_user_decision' })
     deps.persistAssistant(input.sessionId, reason)
     emit('message_delta', { text: reason }); deps.complete(input.sessionId, input.projectId, 'incomplete')
@@ -298,14 +298,14 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     const admission = budget.admission()
     if (!admission.allowed) {
       const registered = brief.lean_brief.ui === 'required' ? guiSuitePath(input.projectId) : cliSuitePath(input.projectId)
-      if (!existsSync(registered)) { blocked(leanBudgetStopMessage(input.projectId, 'desktop-implement', admission.reason!)); return }
+      if (!existsSync(registered)) { blocked(leanBudgetStopMessage(input.projectId, 'desktop-implement', admission.reason!), false, 'blocked', admission.reason); return }
       if(!continuation&&!(await recentSoftwareVerification(input.projectId,input.requestId,signal))){blocked('本轮新请求尚未由模型处理，现有测试只覆盖此前确认的目标，不能据此宣称新请求已完成。进度和预算已保留。');return}
       initialBudgetStop = admission.reason
     }
     if(!initialBudgetStop&&monetaryInputBlocked(input.env.ANTHROPIC_BASE_URL,input.env.ANTHROPIC_MODEL)){
       const registered=brief.lean_brief.ui==='required'?guiSuitePath(input.projectId):cliSuitePath(input.projectId)
-      if(!existsSync(registered)){blocked('当前金额保护连保守输入预留都无法放行，尚未发出模型请求。现有验收规则缺失，程序和账本已保留；不能跳过检查交付。');return}
-      if(!continuation&&!(await recentSoftwareVerification(input.projectId,input.requestId,signal))){blocked('当前金额保护未放行模型，本轮新请求尚未处理；不能用旧版测试替代新增或修改目标的验收。已有程序和账本已保留。');return}
+      if(!existsSync(registered)){blocked('当前金额保护连保守输入预留都无法放行，尚未发出模型请求。现有验收规则缺失，程序和账本已保留；不能跳过检查交付。',false,'blocked','MONETARY_BUDGET_EXHAUSTED');return}
+      if(!continuation&&!(await recentSoftwareVerification(input.projectId,input.requestId,signal))){blocked('当前金额保护未放行模型，本轮新请求尚未处理；不能用旧版测试替代新增或修改目标的验收。已有程序和账本已保留。',false,'blocked','MONETARY_BUDGET_EXHAUSTED');return}
       initialBudgetStop='MONETARY_BUDGET_EXHAUSTED'
       emit('message_delta',{text:'当前金额保护无法放行新的模型请求；已有冻结测试，我先停止模型调用，执行免费的宿主验收。只有实际通过才交付。'})
     }
@@ -613,12 +613,12 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
         const registered = brief.lean_brief.ui === 'required' ? guiSuitePath(input.projectId) : cliSuitePath(input.projectId)
         if (runSignal.aborted || !admissionStopped || !existsSync(registered)) throw detailedError
         if(!continuation&&originalSource===softwareVerificationFingerprint(project.root_path)&&!(await recentSoftwareVerification(input.projectId,input.requestId,runSignal)))throw detailedError
-        modelBudgetStop = reason
+        modelBudgetStop = admissionCode
         emit('message_delta', { text: `${monetaryStopMessage(detailedError) ?? (admissionCode === 'MONETARY_OPERATION_EXHAUSTED' ? '当前操作的费用预留未放行请求，进度已保留。' : admissionCode === 'HARNESS_OUTPUT_BUDGET_EXHAUSTED' ? '当前累计输出额度未放行请求，进度已保留。' : '当前请求次数额度未放行请求，进度已保留。')}已有验收规则，我会停止模型调用，继续运行宿主检查；只有实际通过才交付。` })
       }
       initial = false
       if (scopePending) { checkpoint('waiting_user'); deps.complete(input.sessionId, input.projectId, 'incomplete'); return }
-      if (!modelBudgetStop && !hostCompleted && result?.status !== 'completed') { blocked(result?.status === 'cancelled' ? '已停止，程序和现场已保留。' : `制作尚未完成（${result?.termination_detail?.reason ?? result?.status}），可沿当前现场继续。`, false, result?.status === 'cancelled' ? 'cancelled' : 'blocked'); return }
+      if (!modelBudgetStop && !hostCompleted && result?.status !== 'completed') { blocked(result?.status === 'cancelled' ? '已停止，程序和现场已保留。' : `制作尚未完成（${result?.termination_detail?.reason ?? result?.status}），可沿当前现场继续。`, false, result?.status === 'cancelled' ? 'cancelled' : 'blocked', result?.termination_detail?.reason); return }
       // Integration checks own a quiet tree. Never race outstanding writers or dev servers.
       await settleSoftwareCommands(input.projectId, input.sessionId, runSignal)
       partner.suspend()
@@ -636,7 +636,8 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
         // The agent tool and final delivery share one verifier. Every fresh
         // attempt invalidates earlier receipts, including failures at closure.
         checkpoint('verifying', { source: softwareVerificationFingerprint(project.root_path) })
-        await beforeVerification({projectId:input.projectId,sessionId:input.sessionId,requestId:input.requestId,signal:runSignal,state:createToolState()})
+        if (modelBudgetStop) applyApprovedNativeCorrections(input.projectId, runSignal)
+        else await beforeVerification({projectId:input.projectId,sessionId:input.sessionId,requestId:input.requestId,signal:runSignal,state:createToolState()})
         const checked = await verifySoftwareCandidate(input.projectId, input.requestId, runSignal)
         if (awaitingAssistedAcceptance(checked) && checked.candidate) {
           checkpoint('waiting_user',{candidateId:checked.candidate.id,source:checked.candidate.source.digest,
@@ -646,7 +647,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
           deps.persistAssistant(input.sessionId,text);emit('message_delta',{text});deps.complete(input.sessionId,input.projectId,'incomplete')
           return
         }
-        if (checked.independent?.semantics?.ready === false) {
+        if (!modelBudgetStop && checked.independent?.semantics?.ready === false) {
           if(await recoverIndependentDesign()) {
             task='独立验收争议已核对。读取当前冻结独立案例，更新必要控件映射并重新verify_app。'
             continue
@@ -654,7 +655,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
           await waitForIndependentDesign(checked.independent.semantics)
           return
         }
-        if(checked.evidence_valid&&checked.core?.status==='passed'&&checked.launch?.passed
+        if(!modelBudgetStop&&checked.evidence_valid&&checked.core?.status==='passed'&&checked.launch?.passed
           &&checked.independent?.status==='unverified'&&!checked.independent.case_results?.length){
           blocked('程序的本机检查和启动已通过，可以独立试用当前候选。宿主验收准备尚未完成：'+checked.independent.error+'。此项由宿主处理，不要求制作方为此修改业务功能。',false,'waiting_environment')
           return
@@ -718,13 +719,13 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
       }
       if (failure) {
         const summary = (failureSummary || failure).trim().slice(0, 600)
-        if (modelBudgetStop) { blocked(`${modelBudgetStop.startsWith('MONETARY_') ? '当前费用预留不足以放行下一次调用' : modelBudgetStop === 'HARNESS_OUTPUT_BUDGET_EXHAUSTED' ? '当前累计输出额度未放行调用' : '当前请求次数额度未放行调用'}，宿主检查尚未通过。\n\n${summary}`); return }
+        if (modelBudgetStop) { blocked(`${modelBudgetStop.startsWith('MONETARY_') ? '当前费用预留不足以放行下一次调用' : modelBudgetStop === 'HARNESS_OUTPUT_BUDGET_EXHAUSTED' ? '当前累计输出额度未放行调用' : '当前请求次数额度未放行调用'}，宿主检查尚未通过。\n\n${summary}`, false, 'blocked', modelBudgetStop); return }
         if (core.status === 'environment_blocked' && !cleanEnvironmentPending) { blocked(summary); return }
         {
           const progress = recordSoftwareRepair({ projectId: input.projectId, sessionId: input.sessionId, runId, error: failure,category:failureCategory, failureFingerprint,
             source: softwareVerificationFingerprint(project.root_path), candidateId: candidate?.id,
             observations: { gui: core.host_gui?.steps, cli: core.host_cli?.cases } })
-          if (!progress.allowed) { blocked(`连续 ${progress.repeats} 次验证发现同一问题，已停止自动重试。\n\n${summary}`); return }
+          if (!progress.allowed) { blocked(`连续 ${progress.repeats} 次验证发现同一问题，已停止自动重试。\n\n${summary}`, false, 'blocked', 'no_progress'); return }
         }
         const attempt = consumeProjectAttempt(input.projectId, 'lean-repair', undefined)
         if (!attempt.allowed) { blocked(summary); return }
@@ -733,7 +734,11 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
         continue
       }
       const qualityGap = await quality.gate(runSignal)
-      if (qualityGap) { await blockQualityGap(qualityGap); return }
+      if (qualityGap) {
+        if (modelBudgetStop) blocked(qualityGap, false, 'blocked', modelBudgetStop)
+        else await blockQualityGap(qualityGap)
+        return
+      }
       if (prdScopeFingerprint(readPrdBackplane(input.projectId)) !== scope || versionOf() !== version) {
         blocked('验证期间目标或产物发生变化，本次通过记录未用于交付。'); return
       }
@@ -798,7 +803,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     blocked(runSignal.aborted ? '执行已停止或到达运行时限，已有结果与用量记录保留。'
       : monetaryNotice ? `${reason}：${monetaryNotice}`
       : /^HARNESS_(?:REQUEST|OUTPUT)_BUDGET_EXHAUSTED$/.test(reason) ? leanBudgetStopMessage(input.projectId, 'desktop-implement', reason)
-      : `当前执行受阻：${reason}`, false, runSignal.aborted ? 'interrupted' : 'blocked')
+      : `当前执行受阻：${reason}`, false, runSignal.aborted ? 'interrupted' : 'blocked', runSignal.aborted || !/^[A-Z][A-Z_]+$/.test(reason) ? undefined : reason)
   } finally {
     partner.suspend()
     runSignal.removeEventListener('abort', cancelChildren)

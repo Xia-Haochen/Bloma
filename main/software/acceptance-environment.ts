@@ -122,8 +122,10 @@ export async function prepareAcceptanceEnvironment(input: {
       if (segment > 0) return // A restart must prove persisted configuration; never reset business data or re-save settings.
       try {
         input.signal?.throwIfAborted()
+        const entryUrl = page.url()
         const field = page.locator(settings.endpoint)
-        if (settings.open && !await field.isVisible()) await page.locator(settings.open).click()
+        const openedSettings = settings.open && !await field.isVisible()
+        if (openedSettings) await page.locator(settings.open!).click()
         if (settings.protocol) await page.locator(settings.protocol).selectOption(String(llm!.protocol))
         await field.fill(endpoint)
         const modelField = page.locator(settings.model)
@@ -133,6 +135,14 @@ export async function prepareAcceptanceEnvironment(input: {
         await page.locator(settings.save).click()
         const ready = page.locator(settings.ready.selector)
         await ready.filter({hasText:settings.ready.contains}).waitFor({state:'visible',timeout:5000})
+        // Provisioning is outside the case. Reset its navigation without
+        // changing the isolated data directory or saving settings again.
+        if (entryUrl !== page.url()) {
+          const navigation = await page.goto(entryUrl, { waitUntil: 'load', timeout: 15000 })
+          if (!navigation) await page.reload({ waitUntil: 'load', timeout: 15000 })
+        } else if (openedSettings) {
+          await page.reload({ waitUntil: 'load', timeout: 15000 })
+        }
         input.signal?.throwIfAborted()
         prepared = true; evidence.readiness = 'ready'
       } catch (error) {

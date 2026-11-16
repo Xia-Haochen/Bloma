@@ -75,6 +75,7 @@ export function verificationReportView(result:SoftwareVerification,options:{hist
     freshness:options.historical?'historical_not_revalidated':'current_observation',usable_for_delivery:false,
     candidate_id:result.candidate?.id,source:result.candidate?.source.digest,input_identity:result.input_identity,identity_protocol:'runtime_inventory_and_verification_inputs_v1',
     requirements:result.requirements?.map(row=>({...row,evidence:row.evidence.map(item=>({...item,detail:pv(item.detail)}))})),
+    independent_mapping:result.independent_mapping && { ...result.independent_mapping, detail:pv(result.independent_mapping.detail) },
     missing_evidence:[...(!result.input_identity?['input_identity_not_recorded']:[]),...(failure&&failure.expected===undefined?['expected_assertion_not_recorded']:[]),...(failure?['root_cause_not_confirmed']:[])],
     observation:facts&&{...facts,expected:pv(facts.expected),actual:pv(facts.actual)},
     diagnosis:failure?.diagnosis??(failure?{certainty:'unknown',root_cause_confirmed:false}:undefined),
@@ -143,7 +144,7 @@ export function verificationResponse(projectId:string,result:SoftwareVerificatio
       }
     }catch(failure){quality={status:'unavailable',error:redactSoftwareOutput(String(failure)),details}}
   }
-  return {status:result.status,summary:redactSoftwareOutput(result.summary).slice(0,1600),reused:Boolean(result.reused),requirements:view.requirements?.map(({id,status,next_owner})=>({id,status,next_owner})),quality,
+  return {status:result.status,summary:redactSoftwareOutput(result.summary).slice(0,1600),reused:Boolean(result.reused),requirements:view.requirements?.map(({id,status,next_owner})=>({id,status,next_owner})),independent_mapping:view.independent_mapping,quality,
     trial:result.candidate&&result.security?.passed&&result.launch?.passed&&result.evidence_valid===true
       ?{available:true,candidate_id:result.candidate.id,qualification:'unverified_test_data',note:'可通过独立试用入口体验此候选；验收待办和交付状态保持独立。'}:undefined,
     failure,

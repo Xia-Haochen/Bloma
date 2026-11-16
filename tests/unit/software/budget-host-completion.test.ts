@@ -18,6 +18,7 @@ import { debugWorkspace } from '../../../main/software/debug-workspace'
 import { softwareVerificationFingerprint } from '../../../main/desktop/verification-fingerprint'
 import { buildLeanCliTool } from '../../../main/desktop/lean-cli-check'
 import { createToolState } from '../../../main/agent/loop/agent-loop'
+import { readSoftwareRunState } from '../../../main/software/run-state'
 const advisory = vi.hoisted(()=>({enabled:false}))
 vi.mock('../../../main/software/engineering-partner',async original=>{
   const actual=await original<typeof import('../../../main/software/engineering-partner')>()
@@ -83,6 +84,9 @@ it.each([{ output: 5, rules: true, cancel: false, passed: true }, { output: 999,
   expect(Boolean(await activeSoftwareRelease(project.project_id))).toBe(false)
   if (passed) expect(findProject(project.project_id).desktop_blocked?.note).toContain('QUALITY_REVIEW_REQUIRED')
   if (cancel) expect(existsSync(join(project.root_path, '00_VERIFY/launch-smoke.json'))).toBe(false)
+  if (!cancel) expect(readSoftwareRunState(project.project_id)).toMatchObject({
+    status: 'blocked', stop_code: monetary ? 'MONETARY_BUDGET_EXHAUSTED' : 'REQUEST_BUDGET_EXHAUSTED',
+  })
   if (monetary && !rules) expect(findProject(project.project_id).desktop_blocked?.note).toContain('上次宿主观察之后的修改')
 }, 60000)
 

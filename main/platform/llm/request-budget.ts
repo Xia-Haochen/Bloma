@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { MonetaryBudgetError } from './monetary-budget'
 import { activeMonetaryPolicyPath } from './monetary-epoch'
+import { monetaryInputEnvelope, supportsTextEnvelope } from './monetary-input'
 import { experimentOutputTokens } from './experiment-output-limit'
 import type { SDKQuery } from '../../orchestration/stages/orchestration-contracts'
 import type { SDKMessage } from '../../../shared/types'
@@ -45,13 +46,14 @@ export function createRequestBudget(env: Record<string, string>, limits: Limits)
         requestGuard: request => {
           options.requestGuard?.(request)
           if (reservations.length >= limits.requests) throw new MonetaryBudgetError('REQUEST_BUDGET_EXHAUSTED')
-          const body = JSON.parse(request.body), host = new URL(request.url).host
+          const body = JSON.parse(request.body), url = new URL(request.url), host = url.host
           if (!valid(body.max_tokens) || !body.max_tokens || body.max_tokens > outputTokens) throw new MonetaryBudgetError('REQUEST_OUTPUT_LIMIT')
           const matches = rates?.filter(row => row.host === host && row.model === body.model)
           if (rates && matches?.length !== 1) throw new MonetaryBudgetError('MONETARY_MODEL_NOT_ALLOWED')
           const rate = matches?.[0]
           const images = /"type":"(?:image|image_url)"/.test(request.body)
-          const inputUpper = rate ? (images ? rate.context_tokens : Math.min(rate.context_tokens, Buffer.byteLength(request.body) + 4096)) : 0
+          const inputUpper = !rate ? 0 : supportsTextEnvelope(rate) ? monetaryInputEnvelope(url, request.body, rate)
+            : images ? rate.context_tokens : Math.min(rate.context_tokens, Buffer.byteLength(request.body) + 4096)
           const upperMicro = rate ? Math.ceil(inputUpper * rate.input_rmb_per_million) + Math.ceil(body.max_tokens * rate.output_rmb_per_million) : 0
           if (rate && used() + upperMicro > Math.floor(limits.rmb * 1e6)) throw new MonetaryBudgetError('MONETARY_OPERATION_EXHAUSTED')
           latest = { upperMicro, rate, reported: false, started:false }; reservations.push(latest)

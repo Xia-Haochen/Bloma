@@ -27,7 +27,7 @@ import { fileDigest, prepareSoftwareRelease, readSoftwareCandidate, runtimeInven
 import { frozenNativeGuiVersion } from './native-gui-tests'
 import { verificationFailure, type VerificationFailure } from './verification-diagnostics'
 import { independentDesignVersion } from './independent-design'
-import { independentAdapterVersion, verifyIndependentDesign } from './independent-verification'
+import { independentAdapterPreflight, independentAdapterVersion, verifyIndependentDesign } from './independent-verification'
 import { recordEvaluationEvent } from './harness-evaluation'
 import { capabilityBindingVersion } from './capability-bindings'
 import { recordIndependentFindings, independentChallengeVersion } from './independent-quality'
@@ -37,6 +37,7 @@ import {assessCandidateRequirements,type RequirementAssessment} from './requirem
 
 export interface SoftwareVerification { status: 'passed' | 'failed' | 'unverified' | 'environment_blocked'; summary: string; candidate?: SoftwareRelease;
   requirements?: RequirementAssessment[]
+  independent_mapping?: ReturnType<typeof independentAdapterPreflight>
   evidence_valid?: boolean
   completed_at?:number
   input_identity?: {source:string;scope:string;rules:string;environment:string;request_id:string;operation_id?:string}
@@ -182,6 +183,10 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
     const security = result.security = runSecurityScan({ project_id: projectId, root_path: candidate.root, profile: 'local-software' })
     writeTextFileAtomic(join(candidate.root, '00_VERIFY/security-scan.json'), JSON.stringify(security))
     if (!security.passed) { result.status = 'failed'; result.summary = security.issues.filter(issue => ['high', 'critical'].includes(issue.severity)).map(issue => `${issue.file}:${issue.line} ${issue.user_visible_summary}`).join('\n'); return result }
+    // Surface mapping problems even when a native bootstrap failure prevents B.
+    // The recorded suites still decide the actual outcome.
+    try { result.independent_mapping = independentAdapterPreflight(projectId, candidate.root) }
+    catch { /* The existing independent verifier reports design/setup errors. */ }
     if (result.native_plan) result.native_plan.execution = 'attempted'
     const core = result.core = await runCoreVerification({ projectId, sandboxRoot: candidate.root, signal })
     const localPending = core.local_status === 'passed' && core.distribution?.status === 'environment_blocked'

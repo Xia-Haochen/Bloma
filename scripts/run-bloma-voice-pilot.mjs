@@ -64,7 +64,7 @@ if (funding) {
   assert.equal(funding.cap_rmb,cap)
   assert.ok(walletEpoch,'Supply the same monetary epoch used to activate the extended wallet')
 }
-assert.ok(cap-carriedRmb>=2.359296,'Authorized wallet cannot cover an initial full-input reserve')
+assert.ok(cap > carriedRmb, 'Authorized wallet has no remaining headroom')
 const source = command('git','rev-parse','HEAD')
 const build = hash(readFileSync(join(repo,'dist-main/main/index.js')))
 write('authorization.json', {user_text:funding?.user_text??'重新来好吧，盯着点', cap_rmb:cap, monetary_policy:policy,
@@ -114,7 +114,7 @@ try {
     if (!balance.is_available || !models.data.some(model=>model.id==='deepseek-flash')) throw Error('DeepSeek unavailable')
     return Number(balance.balance_infos.find(row=>row.currency==='CNY')?.total_balance)
   },channel.api_key).then(balance => {
-    assert.ok(balance >= 2.359296,'Provider balance cannot cover the initial full-input reserve')
+    assert.ok(Number.isFinite(balance) && balance > 0, 'Provider wallet has no available balance')
     if(funding)assert.ok(cap-carriedRmb<=balance+1e-6,'Live provider balance fell below the authorized remaining budget')
     note('provider_preflight',{protocol:'Anthropic Messages',model:'deepseek-flash',balance_rmb:balance,local_cap_rmb:cap})
   })
@@ -166,9 +166,11 @@ try {
     if (latestProject?.desktop_blocked && !ledger.some(row=>row.status==='reserved')) {
       const statePath=join(runHome,'software-run-states',latestProject.project_id+'.json')
       const state=existsSync(statePath)?read(statePath):undefined
-      if(state?.status==='blocked' && /no_progress|金额保护|MONETARY_(?:BUDGET|OPERATION)_EXHAUSTED/.test(state.error??'')){
-        terminal=/金额保护|MONETARY_/.test(state.error)?'budget_exhausted':'agent_error'
-        note('bloma_terminal',{status:state.status,reason:state.error})
+      if(state?.status==='blocked'){
+        const budgetStop = ['MONETARY_BUDGET_EXHAUSTED','MONETARY_OPERATION_EXHAUSTED',
+          'HARNESS_REQUEST_BUDGET_EXHAUSTED','HARNESS_OUTPUT_BUDGET_EXHAUSTED','REQUEST_BUDGET_EXHAUSTED'].includes(state.stop_code)
+        terminal=budgetStop?'budget_exhausted':'agent_error'
+        note('bloma_terminal',{status:state.status,stop_code:state.stop_code,reason:state.error})
         break
       }
     }
