@@ -104,15 +104,13 @@ try {
     '统一环境：Windows 11、Node 22.22.2、Electron 39.8.10、Python 3.13.7。',
     '真实业务模型：deepseek-flash，高思考，单次输出上限 4096，OpenAI 兼容协议。'
   ].join('\n'))
-  const input = page.locator('textarea[aria-label="消息输入"]:visible').first()
-  const send = page.locator('button[aria-label="发送消息"]:visible').first()
+  const input = page.getByRole('textbox',{name:'你的软件想法'})
+  const send = page.locator('button[data-ai-id="create-project-button"]')
   await input.waitFor({timeout:30000})
   assert.doesNotMatch(await input.getAttribute('placeholder') ?? '', /还没有连接/)
-  await page.locator('input[aria-label="选择附件文件"]').first().setInputFiles(file)
-  await page.getByText('公开输入与环境.txt',{exact:false}).first().waitFor()
-  await input.fill(text)
-  assert.equal(await input.inputValue(),text)
-  await page.waitForFunction(()=>!document.querySelector('button[aria-label="发送消息"]')?.disabled)
+  const submission=text+'\n\n## 本次公开输入与环境\n\n'+readFileSync(file,'utf8')
+  await input.fill(submission)
+  assert.equal(await input.inputValue(),submission)
   recordings = page.video()
   assert.ok(recordings,'UI video capture unavailable')
   bench('event',root,'start','Submitted frozen participant task and public input details')
@@ -125,7 +123,7 @@ try {
   }, study.wall_limit_seconds*1000)
   timer.unref()
   await send.click()
-  note('request_submitted',{task_sha256:hash(text),pid:app.process().pid})
+  note('request_submitted',{task_sha256:hash(text),submission_sha256:hash(submission),pid:app.process().pid})
   let previous
   while (Date.now() < deadline && !page.isClosed()) {
     const projects = join(runHome,'projects.json')
