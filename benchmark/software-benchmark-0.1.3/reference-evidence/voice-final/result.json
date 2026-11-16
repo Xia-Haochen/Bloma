@@ -1,0 +1,41 @@
+{
+  "mode": "voice",
+  "started_at": "2026-11-16T06:30:52.633Z",
+  "checks": [
+    {
+      "name": "R1_silent_WAV_no_text_no_request",
+      "status": "passed"
+    },
+    {
+      "name": "B1_standard_WAV_real_ASR_B2_request_history_B3_natural_media_end_no_overlap",
+      "status": "passed",
+      "human_listening": "pending",
+      "physical_microphone": "user assured, not measured",
+      "live_recall": "separate live run"
+    },
+    {
+      "name": "R2_503_401_then_settings_repair_history_preserved",
+      "status": "passed"
+    },
+    {
+      "name": "P1_P2_full_process_restart_saved_credential_history_continue",
+      "status": "passed"
+    },
+    {
+      "name": "negative_product_false_ended_truncation_rejected",
+      "status": "passed",
+      "observed": {
+        "event": "ended",
+        "at": 1794810750681,
+        "time": 0.494886,
+        "duration": 9.4515,
+        "muted": false,
+        "volume": 1,
+        "rate": 1
+      }
+    }
+  ],
+  "scope": "Actual Electron UI, local controlled service, process restart and exported artifacts. Live-provider semantics, physical microphone and human listening are separate.",
+  "status": "passed",
+  "finished_at": "2026-11-16T06:32:30.828Z"
+}

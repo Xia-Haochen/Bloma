@@ -1,0 +1,9 @@
+<!doctype html><html lang="zh"><meta charset="utf-8"><title>器材参考应用</title>
+<style>body{font:16px system-ui;margin:24px}input,button{font:inherit;margin:5px;padding:6px}table{border-collapse:collapse}td,th{padding:8px;border:1px solid #bbb}section{margin:18px 0}</style>
+<h1>器材借还</h1>
+<section><input id="files" type="file" multiple accept=".csv"><button id="preview">检查导入</button><button id="commit">确认导入</button><button id="cancel">取消导入</button><button id="export">导出备份</button></section>
+<section><label>器材编号<input id="equipment"></label><label>成员编号<input id="member"></label><label>数量（件）<input id="quantity" type="number" value="1"></label><label>应还日<input id="due" type="date" value="2026-11-20"></label><button id="borrow">借出</button><button id="return">归还</button></section>
+<section><label>新名称<input id="name"></label><button id="rename">修改器材名称</button><label>查询基准日<input id="date" type="date" value="2026-11-16"></label><button id="refresh">查询</button></section>
+<section><button id="add-equipment">新增器材（使用编号、名称、数量）</button><button id="add-member">新增成员（使用成员编号、名称）</button><button id="rename-member">修改成员名称</button><label>成员筛选<input id="filter-member"></label><button id="filter">筛选未还</button></section>
+<p id="status" role="status"></p><div id="inventory"></div><h2>成员</h2><div id="members"></div><h2>借还明细</h2><div id="loans"></div><h2>成员未还</h2><div id="outstanding"></div><h2>逾期记录</h2><div id="overdue"></div>
+<script src="equipment-renderer.js"></script></html>
