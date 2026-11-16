@@ -229,16 +229,17 @@ describe('real upstream Pi AgentSession integration', () => {
     expect(JSON.stringify(observed)).not.toContain('PRIVATE_');expect(readFileSync(nativeFile(),'utf8')).toContain('actual seed=100027')
   })
   it.each([true,false])('distinguishes changing static findings from shifted line numbers (progress=%s)',async progress=>{
-    const q=scripted([[call('one','verify_app')],[call('two','verify_app')],[call('three','verify_app')],[text('continue after actual repairs')]])
+    const attempts=progress?3:8
+    const q=scripted([...Array.from({length:attempts},(_,i)=>[call('check-'+i,'verify_app')]),[text('continue after actual repairs')]])
     let checks=0
-    const result=await runAgentLoop(input(q.query,{tools:[tool('verify_app',async()=>{
+    const result=await runAgentLoop(input(q.query,{maxTurns:10,tools:[tool('verify_app',async()=>{
       checks++
       const observed={status:'failed',summary:'rule hits',security:{passed:false,issues:Array.from({length:progress?4-checks:3},(_,i)=>({file:'app.js',category:'unsafe_dom',severity:'high',line:i+checks*100,user_visible_summary:'rule hit'}))}} as never
       return{output:'static findings',isError:true,feedback:verificationToolFeedback(observed)}
     })]}))
-    expect(checks).toBe(3)
+    expect(checks).toBe(attempts)
     if(progress){expect(result.status).toBe('completed');expect(q.received).toHaveLength(4)}
-    else{expect(result.termination_detail).toMatchObject({reason:'no_progress',observed:3});expect(q.received).toHaveLength(3)}
+    else{expect(result.termination_detail).toMatchObject({reason:'no_progress',observed:8});expect(q.received).toHaveLength(8)}
   })
 
   it('stops repeated host closeout failures even when the initiating model tool succeeds',async()=>{
@@ -246,9 +247,9 @@ describe('real upstream Pi AgentSession integration', () => {
     const failed=verificationToolFeedback({status:'failed',summary:'wrong total',core:{host_cli:{cases:[{name:'total',passed:false,exit_code:0,expected:{stdout:'4',exit_code:0},actual:'5'}]}}} as never)
     const result=await runAgentLoop(input(q.query,{maxTurns:8,tools:[tool('start_quality_review',async()=>({output:'review handed to host'}))],
       afterTools:async()=>({feedback:'QUALITY_CLOSEOUT_CHECK_REQUIRED: wrong total',verification:failed})}))
-    expect(q.received).toHaveLength(3)
-    expect(result.termination_detail).toMatchObject({reason:'no_progress',observed:3})
-    expect(result.toolCalls).toHaveLength(3)
+    expect(q.received).toHaveLength(8)
+    expect(result.termination_detail).toMatchObject({reason:'no_progress',observed:8})
+    expect(result.toolCalls).toHaveLength(8)
   })
   it('clears the host closeout failure count only after an actual passing host observation',async()=>{
     const q=scripted([[call('one','start_quality_review')],[call('two','start_quality_review')],[call('three','start_quality_review')],[call('four','start_quality_review')],[call('five','start_quality_review')],[text('done')]])

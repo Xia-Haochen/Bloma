@@ -243,7 +243,7 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
       if (status !== 'completed') return true
       const calls = toolCalls.filter(call => call.turn === turns)
       const protocolFailure = protocolGuard(calls)
-      if(protocolFailure){status='budget_exhausted';termination={reason:'no_progress',limit:3,observed:protocolFailure.count};publishHostNotice('相同工具拒因或验收失败证据已重复三次，停止当前执行并保留记录；先诊断，不继续原样重试：'+protocolFailure.key);return true}
+      if(protocolFailure){status='budget_exhausted';termination={reason:'no_progress',limit:protocolFailure.limit,observed:protocolFailure.count};publishHostNotice('相同版本的工具拒因或验收失败已达到重复上限，停止当前执行并保留记录；先诊断，不继续原样重试：'+protocolFailure.key);return true}
       if (toolResults.length && input.afterTools && !pendingSteerCount(input.sessionId)) {
         const handoff = await input.afterTools(ctx, calls)
         // Host checks run after the model tool has returned successfully. Feed
@@ -253,7 +253,7 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
         if(handoff?.verification){
           const repeated=protocolGuard([{name:'__host_after_tools_verification',turn:turns,
             status:handoff.verification.verification==='passed'?'ok':'error',failureKey:toolFailureKey('__host_after_tools_verification',hostFacts!)}])
-          if(repeated){status='budget_exhausted';termination={reason:'no_progress',limit:3,observed:repeated.count};publishHostNotice('同一个检查问题连续出现三次，已停止这轮制作并保留记录，需要先查清原因再继续。');return true}
+          if(repeated){status='budget_exhausted';termination={reason:'no_progress',limit:repeated.limit,observed:repeated.count};publishHostNotice('同一版本的检查失败已达到重复上限，已停止这轮制作并保留记录，需要先查清原因再继续。');return true}
         }
         if (handoff?.complete && (!handoff.verification||handoff.verification.verification==='passed') && !pendingSteerCount(input.sessionId)) return true
         if (handoff?.feedback) activeSession.agent.steer({ role: 'user', content: (hostFacts?hostFacts+'\n':'')+handoff.feedback, timestamp: Date.now() })

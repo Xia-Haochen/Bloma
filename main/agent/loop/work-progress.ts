@@ -34,7 +34,8 @@ export function createProtocolFailureGuard(){
       if(call.status!=='error'||!call.failureKey||!(/^(TOOL_SCHEMA_INVALID|TOOL_PROTOCOL_REFUSAL|HOST_VERIFICATION_FAILURE):/.test(call.failureKey)||call.name==='submit_quality_findings'))continue
       const key=call.name+':'+call.failureKey,count=(failures.get(key)??0)+1;failures.set(key,count)
       if(failures.size>32)failures.delete(failures.keys().next().value!)
-      if(count>=3)return{key,count}
+      const limit = call.failureKey.startsWith('HOST_VERIFICATION_FAILURE:') ? 8 : 3
+      if(count>=limit)return{key,count,limit}
     }
   }
 }

@@ -4,7 +4,7 @@ import { getPromaHome } from '../../storage/config-paths'
 import { createRequire } from 'node:module'
 import { buildDriverEnv, execFileDriverSpawn, resolveDriverVenvCommand } from '../desktop/process-driver'
 import { managedRuntime, managedRuntimeDirectories } from './runtime-bindings'
-import { capabilityEnvironment } from './capability-bindings'
+import { capabilityEnvironment, windowsRuntimePath } from './capability-bindings'
 import { electronEntry, isLocalElectronAlias } from './electron-entry'
 import { ownedDirectory } from './owned-directory'
 
@@ -69,7 +69,7 @@ export function softwareEnvironment(projectId: string, dataDir?: string, root?:s
   const clean = buildDriverEnv({ env_whitelist: [] } as never, process.env), directories = managedRuntimeDirectories(projectId)
   return { ...clean, ...(directories.length ? { PATH: [...directories, clean.PATH ?? clean.Path ?? ''].join(process.platform === 'win32' ? ';' : ':') } : {}),
     BLOMA_RUNTIME_PROJECT: projectId, BLOMA_SPEECH_OFFLINE:'1', ...capabilityEnvironment(projectId,root),
-    HOME: home, USERPROFILE: home, APPDATA: appdata, LOCALAPPDATA: localappdata,
+    HOME: home, USERPROFILE: windowsRuntimePath(home), APPDATA: appdata, LOCALAPPDATA: localappdata,
     TEMP: temporary, TMP: temporary, XDG_CACHE_HOME: cache, PIP_CACHE_DIR: pipCache, UV_CACHE_DIR: uvCache,
     APP_DATA_DIR: isolatedData, BROWSER: 'none', CI: '1',
     npm_config_cache: npmCache, npm_config_audit: 'false', npm_config_fund: 'false',

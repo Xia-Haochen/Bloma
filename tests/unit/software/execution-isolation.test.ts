@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, realpathSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { tmpdir } from 'node:os'
 import { bindSoftwareProfile, executeSoftwareCommand, softwareEnvironment } from '../../../main/software/command-runtime'
@@ -10,6 +10,18 @@ function temporary() { const root = mkdtempSync(join(tmpdir(), 'bloma-execution-
 afterEach(() => { vi.unstubAllEnvs(); for (const root of directories.splice(0)) rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }) })
 function setup() { const home = temporary(); vi.stubEnv('PROMA_HOME', home); return home }
 const keys = ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'XDG_CACHE_HOME', 'npm_config_cache', 'PIP_CACHE_DIR', 'UV_CACHE_DIR', 'APP_DATA_DIR']
+it.skipIf(process.platform!=='win32')('uses a native-compatible alias of the same long isolated profile',()=>{
+ setup()
+ const base=temporary(),root=join(base,'nested-project-'.repeat(6),'long-session-'.repeat(4))
+ mkdirSync(root,{recursive:true})
+ const first=softwareEnvironment('long-profile',join(root,'data'))
+ expect(first.HOME.length).toBeGreaterThan(160)
+ expect(realpathSync.native(first.USERPROFILE)).toBe(realpathSync.native(first.HOME))
+ expect(first.USERPROFILE.length).toBeLessThan(first.HOME.length)
+ writeFileSync(join(first.USERPROFILE,'profile-check'),'isolated')
+ expect(readFileSync(join(first.HOME,'profile-check'),'utf8')).toBe('isolated')
+ expect(softwareEnvironment('long-profile',join(root,'data')).USERPROFILE).toBe(first.USERPROFILE)
+})
 it('runs two actual Node children with separate host-selected worktree data, home, temp and mutable package caches', async () => {
  const home = setup(), a = temporary(), b = temporary()
  const code = `const fs=require('node:fs'),path=require('node:path');const keys=${JSON.stringify(keys)};const result=Object.fromEntries(keys.map(key=>[key,process.env[key]]));for(const value of Object.values(result)){fs.mkdirSync(value,{recursive:true});fs.writeFileSync(path.join(value,'proof-'+process.argv[1]),process.argv[1])}console.log(JSON.stringify(result))`

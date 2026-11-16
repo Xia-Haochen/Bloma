@@ -37,7 +37,7 @@ export function bindSpeechCapability(projectId:string,speech:SpeechCapabilityBin
   validateBinding({version:1,speech});writeTextFileAtomic(path(projectId),JSON.stringify({version:1,speech}))
 }
 
-const windowsPythonPaths = new Map<string,string>()
+const windowsRuntimePaths = new Map<string,string>()
 const shortPathScript = `
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -58,28 +58,30 @@ public static class BlomaSpeechPath {
 `
 
 export function speechPythonPath(root:string) {
-  const windows = process.platform === 'win32'
-  const python = join(root,'.venv',windows ? 'Scripts/python.exe' : 'bin/python')
-  // Leave headroom for native wheel paths under .venv, which include the
-  // package and ABI suffix even when the entry executable itself is short.
-  if (!windows || python.length < 160 || !existsSync(python)) return python
-  const canonical = realpathSync.native(python)
-  const cached = windowsPythonPaths.get(canonical)
+  return windowsRuntimePath(join(root,'.venv',process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'))
+}
+
+/** Use a verified short alias of the same owned file or directory for native Windows APIs. */
+export function windowsRuntimePath(file:string) {
+  // Leave headroom for native library and Windows speech profile suffixes.
+  if (process.platform !== 'win32' || file.length < 160 || !existsSync(file)) return file
+  const canonical = realpathSync.native(file)
+  const cached = windowsRuntimePaths.get(canonical)
   if (cached && existsSync(cached) && realpathSync.native(cached) === canonical) return cached
-  let result = python
+  let result = file
   try {
     const systemRoot = process.env.SystemRoot ?? process.env.windir
-    if (!systemRoot) return python
+    if (!systemRoot) return file
     const shell = join(systemRoot,'System32','WindowsPowerShell','v1.0','powershell.exe')
     const command = Buffer.from(shortPathScript,'utf16le').toString('base64')
     const alias = execFileSync(shell,['-NoProfile','-NonInteractive','-EncodedCommand',command],{
-      env:{SystemRoot:systemRoot,TEMP:process.env.TEMP,TMP:process.env.TMP,BLOMA_SPEECH_PATH_TO_SHORTEN:python},
+      env:{SystemRoot:systemRoot,TEMP:process.env.TEMP,TMP:process.env.TMP,BLOMA_SPEECH_PATH_TO_SHORTEN:file},
       encoding:'utf8',windowsHide:true,timeout:5000,maxBuffer:32768,
     }).trim()
-    if (isAbsolute(alias) && alias.length < python.length && realpathSync.native(alias) === canonical) result = alias
+    if (isAbsolute(alias) && alias.length < file.length && realpathSync.native(alias) === canonical) result = alias
   } catch { /* A volume without DOS aliases keeps the declared interpreter. */ }
-  if (windowsPythonPaths.size >= 64) windowsPythonPaths.clear()
-  windowsPythonPaths.set(canonical,result)
+  if (windowsRuntimePaths.size >= 64) windowsRuntimePaths.clear()
+  windowsRuntimePaths.set(canonical,result)
   return result
 }
 

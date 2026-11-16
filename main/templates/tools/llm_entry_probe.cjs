@@ -39,7 +39,7 @@ async function probe(root, spec) {
     if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) throw Error('registered module outside product')
     const module = await import(pathToFileURL(file).href), Constructor = module[spec.factory] ?? module.default?.[spec.factory]
     const instance = new Constructor(), method = instance[spec.method].bind(instance)
-    const config = { endpoint: `http://127.0.0.1:${port}/v1`, model: 'host-test-model', api_key: 'host-test-key', provider: 'real', timeout: 2,...(vision||spec.protocol?{network:'loopback'}:{}),...(spec.protocol?{protocol:spec.protocol}:{}) }
+    const config = { endpoint: `http://127.0.0.1:${port}/v1`, model: 'host-test-model', api_key: 'host-test-key', provider: 'real', timeout: 2000,...(vision||spec.protocol?{network:'loopback'}:{}),...(spec.protocol?{protocol:spec.protocol}:{}) }
     const validRequest=request=>request?.path===(anthropic?'/v1/messages':'/v1/chat/completions')&&request.auth===(anthropic?'host-test-key':'Bearer host-test-key')&&(!anthropic||request.version==='2023-06-01')&&request.body.model==='host-test-model'
     const invoke = async (config,index=0) => {
       let timer
@@ -49,6 +49,7 @@ async function probe(root, spec) {
         return typeof response === 'string' ? JSON.parse(response) : response
       } finally { clearTimeout(timer) }
     }
+    // Node clients use milliseconds. The outer timer bounds the whole invocation.
     const tests = []
     for (const [name, status, malformed, kind] of [['real_request', 200, false, 'success'], ['auth_error', 401, false, 'auth_error'],
       ['model_error', 404, false, 'model_error'], ['rate_limited', 429, false, 'rate_limited'], ['invalid_response', 200, true, 'invalid_response']]) {

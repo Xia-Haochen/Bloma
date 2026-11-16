@@ -8,6 +8,18 @@ import {verificationReportView,readVerificationReport,verificationToolFeedback,v
 import {observedQualityFinding} from '../../../main/software/quality-closeout'
 import {freezeNativeGuiTests,frozenNativeGuiVersion,NativeTestContractError} from '../../../main/software/native-gui-tests'
 import type {SoftwareVerification} from '../../../main/software/verification'
+import {createProtocolFailureGuard,toolFailureKey} from '../../../main/agent/loop/work-progress'
+import {formatToolFeedback} from '../../../shared/tool-feedback'
+it('lets repaired source versions retry the same failed requirement while bounding unchanged retries',()=>{
+  const guard=createProtocolFailureGuard()
+  const observation=(source:string)=>{
+    const feedback=verificationToolFeedback({status:'failed',summary:'same failed requirement',candidate:{source:{digest:source}}} as SoftwareVerification)
+    return [{name:'verify_app',turn:1,status:'error' as const,failureKey:toolFailureKey('verify_app',formatToolFeedback(feedback,''))}]
+  }
+  for(let i=0;i<12;i++)expect(guard(observation('source-'+i))).toBeUndefined()
+  for(let i=0;i<7;i++)expect(guard(observation('unchanged'))).toBeUndefined()
+  expect(guard(observation('unchanged'))).toMatchObject({count:8,limit:8})
+})
 import {toolRecovery,persistentBudgetBlocked} from '../../../shared/tool-feedback-policy'
 import {safeToolFeedback,toolFeedbackLabel,type ToolFeedback} from '../../../shared/tool-feedback'
 import {createProject} from '../../../main/project/project-service'
