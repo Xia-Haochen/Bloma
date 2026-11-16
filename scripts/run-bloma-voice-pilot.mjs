@@ -2,13 +2,14 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
-import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { _electron } from 'playwright'
 
-const [root, pack, assets, channelHome, previousProfile, speechPython] = process.argv.slice(2).map(value => resolve(value))
+const [root, pack, assets, channelHome, previousProfile, speechPython, productionInput, wallet] = process.argv.slice(2).map(value => resolve(value))
+assert.ok(productionInput && wallet, 'Supply the production-only task directory and the authorized wallet directory')
 const repo = process.cwd()
 const require = createRequire(import.meta.url)
 const read = path => JSON.parse(readFileSync(path, 'utf8'))
@@ -29,7 +30,15 @@ const materials = join(root, 'voice-inputs')
 mkdirSync(runHome)
 mkdirSync(profile)
 cpSync(join(previousProfile, 'Local State'), join(profile, 'Local State'))
-cpSync(join(pack, 'inputs/voice'), materials, { recursive: true })
+const publicFiles = ['01-name.wav', '02-budget.wav', '03-recall.wav', 'silence.wav']
+assert.deepEqual(readdirSync(productionInput).sort(), ['inputs', '任务正文.md'].sort())
+assert.deepEqual(readdirSync(join(productionInput,'inputs')).sort(), publicFiles)
+cpSync(join(productionInput, 'inputs'), materials, { recursive: true })
+const text = readFileSync(join(productionInput,'任务正文.md'),'utf8').trim()
+assert.doesNotMatch(text, /[BRPU][1-3][（(]|fail_next|changed-key|预算300|预期答案|评分细则/)
+write('production-input-manifest.json', {task_sha256:hash(text), files:Object.fromEntries(publicFiles.map(file=>[
+  file, hash(readFileSync(join(materials,file)))
+]))})
 const channels = read(join(channelHome, 'bloma-channels.json'))
 const channel = channels.channels.find(row => row.enabled && row.provider_type === 'deepseek' && row.models.some(model => model.id === 'deepseek-flash' && model.enabled))
 assert.ok(channel)
@@ -37,25 +46,31 @@ channel.models = channel.models.filter(model => model.id === 'deepseek-flash')
 Object.assign(channel.models[0], {context_window: 1048576, max_output_tokens: 32768})
 channel.max_tokens = 32768
 writeFileSync(join(runHome, 'bloma-channels.json'), JSON.stringify({version:1,channels:[channel]}))
-const rate = { host:'api.deepseek.com', model:'deepseek-flash', cap_rmb:10, context_tokens:1048576,
-  input_rmb_per_million:2, output_rmb_per_million:8, cache_rmb_per_million:0.04 }
-const policy = join(root, 'monetary-policy.json')
-write('monetary-policy.json', {version:1,models:[rate]})
-write('monetary-policy.json.state.json', {version:1, policy_hash:hash(readFileSync(policy)), entries:[]})
+const policy = join(wallet, 'monetary-policy.json')
+const ledgerAtStart = read(policy+'.state.json')
+assert.equal(ledgerAtStart.policy_hash,hash(readFileSync(policy)))
+assert.deepEqual(read(policy).models, [{host:'api.deepseek.com',model:'deepseek-flash',cap_rmb:10,context_tokens:1048576,
+  input_rmb_per_million:2,output_rmb_per_million:8,cache_rmb_per_million:0.04}])
+assert.ok(ledgerAtStart.entries.every(row=>row.status!=='reserved'),'Wait for previous requests to settle')
+assert.ok(existsSync(join(wallet,'run-result.json')),'Previous attempt must be closed')
+const initialIds = new Set(ledgerAtStart.entries.map(row=>row.id))
+const sum = entries => entries.reduce((total,row)=>total+row.charged_micro_rmb,0)/1e6
+const carriedRmb = sum(ledgerAtStart.entries)
+assert.ok(10-carriedRmb>=2.359296,'Authorized wallet cannot cover an initial full-input reserve')
 const source = command('git','rev-parse','HEAD')
 const build = hash(readFileSync(join(repo,'dist-main/main/index.js')))
-write('authorization.json', {user_text:'可以，单独给这轮10块钱，开始跑Bloma的语音任务吧', cap_rmb:10,
-  existing_ledgers:'retained', pricing_source:'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/'})
+write('authorization.json', {user_text:'重新来好吧，盯着点', cap_rmb:10, monetary_policy:policy,
+  carried_rmb:carriedRmb, pricing_source:'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/'})
 const study = read(join(root, 'study.json'))
 const env = {...process.env, PROMA_HOME:runHome, BLOMA_MONETARY_POLICY:policy,
-  BLOMA_MONETARY_EPOCH_DIR:join(root,'monetary-epochs'), BLOMA_EXPERIMENT_THINKING:'high',
+  BLOMA_MONETARY_EPOCH_DIR:join(wallet,'monetary-epochs'), BLOMA_EXPERIMENT_THINKING:'high',
   BLOMA_BENCHMARK_OUTPUT_CEILING:'32768', BLOMA_BENCHMARK_REQUEST_LOG:join(root,'provider-requests.jsonl'),
   BLOMA_SPEECH_MODEL_DIR:join(assets,'speech-models/sensevoice-int8')}
 delete env.ELECTRON_RUN_AS_NODE
 delete env.BLOMA_DISPATCH_EXPERIMENT
 delete env.BLOMA_EXPERIMENT_UNLIMITED_MONETARY
 const trial = read(join(root, 'trial.json'))
-Object.assign(trial,{system_id:'Bloma',configuration_id:'0.1.3-voice-high',evaluator_id:'Codex pilot operator'})
+Object.assign(trial,{system_id:'Bloma',configuration_id:'0.1.3-voice-production-only-high',evaluator_id:'Codex pilot operator'})
 write('trial.json', trial)
 const controls = read(join(root, 'interventions.json'))
 const note = (kind, info = {}) => {
@@ -93,11 +108,10 @@ try {
     assert.ok(balance >= 2.359296,'Provider balance cannot cover the initial full-input reserve')
     note('provider_preflight',{protocol:'Anthropic Messages',model:'deepseek-flash',balance_rmb:balance,local_cap_rmb:10})
   })
-  const text = readFileSync(join(pack,'participant/voice-conversation.md'),'utf8').trim()
   const file = join(root,'公开输入与环境.txt')
   writeFileSync(file,[
     '本任务的公开语音输入目录：'+materials,
-    '包含三段标准 WAV、空白 WAV 和对应文本。真实业务服务配置由操作者提供。',
+    '包含三段示例 WAV 和一段静音 WAV。业务服务凭据由操作者在设置界面配置。',
     '公共语音资源目录：'+env.BLOMA_SPEECH_MODEL_DIR,
     '公共语音辅助模块：'+join(assets,'speech-tools'),
     '已准备的 Python 环境：'+speechPython,
@@ -109,11 +123,12 @@ try {
   await input.waitFor({timeout:30000})
   assert.doesNotMatch(await input.getAttribute('placeholder') ?? '', /还没有连接/)
   const submission=text+'\n\n## 本次公开输入与环境\n\n'+readFileSync(file,'utf8')
+  writeFileSync(join(root,'Bloma-实际首条输入.txt'),submission)
   await input.fill(submission)
   assert.equal(await input.inputValue(),submission)
   recordings = page.video()
   assert.ok(recordings,'UI video capture unavailable')
-  bench('event',root,'start','Submitted frozen participant task and public input details')
+  bench('event',root,'start','Submitted production-only prompt and public materials matching the team handoff')
   started = true
   deadline = Date.now()+study.wall_limit_seconds*1000
   const timer = setTimeout(async ()=>{
@@ -130,9 +145,11 @@ try {
     if (existsSync(projects)) latestProject=read(projects).projects[0]
     const status = latestProject && {id:latestProject.project_id, stage:latestProject.current_stage,
       phase:latestProject.desktop_phase, status:latestProject.status, root:latestProject.root_path}
-    const ledger = read(policy+'.state.json').entries
+    const walletEntries = read(policy+'.state.json').entries
+    const ledger = walletEntries.filter(row=>!initialIds.has(row.id))
     const progress = {status,requests:ledger.length,reported:ledger.filter(row=>row.status==='reported').length,
-      accounted_upper_rmb:ledger.reduce((total,row)=>total+row.charged_micro_rmb,0)/1e6,deadline:new Date(deadline).toISOString()}
+      accounted_upper_rmb:sum(ledger),wallet_accounted_upper_rmb:sum(walletEntries),carried_rmb:carriedRmb,
+      deadline:new Date(deadline).toISOString()}
     const serialized = JSON.stringify(progress)
     if (serialized!==previous) {write('progress.json',progress);previous=serialized}
     if (status?.phase==='delivered' && status.status==='completed') {terminal='completed';break}
@@ -164,10 +181,12 @@ try {
   if(started) bench('event',root,'stop',terminal)
   try { await app.close() } catch {}
   if (recordings) await recordings.saveAs(join(root,'bloma-run.webm')).catch(()=>{})
-  const entries=read(policy+'.state.json').entries
-  const upper=entries.reduce((sum,row)=>sum+row.charged_micro_rmb,0)/1e6
+  const walletEntries=read(policy+'.state.json').entries
+  const entries=walletEntries.filter(row=>!initialIds.has(row.id))
+  const upper=sum(entries)
   write('run-result.json',{terminal, project_id:latestProject?.project_id, project_path:latestProject?.root_path,
-    requests:entries.length, accounted_upper_rmb:upper, ledger_statuses:entries.reduce((counts,row)=>({...counts,[row.status]:(counts[row.status]??0)+1}),{})})
+    requests:entries.length, accounted_upper_rmb:upper, wallet_accounted_upper_rmb:sum(walletEntries),
+    ledger_statuses:entries.reduce((counts,row)=>({...counts,[row.status]:(counts[row.status]??0)+1}),{})})
   if (started && latestProject?.root_path && existsSync(latestProject.root_path)) {
     try {
       bench('snapshot',latestProject.root_path,join(root,'artifact-manifest.json'))
