@@ -5,7 +5,7 @@
 ## 组员开始前
 
 1. 使用包内 tasks.json、inputs 和对应任务书。核对 MANIFEST.json，运行 node tools/bench.mjs verify-pack。
-2. 全组在包外填写同一份 study.json，统一模型标识、模型版本、推理档位、上下文与输出上限，以及子 Agent 可用模型。填写机器、OS、运行时、权限和预装组件。init会复制空模板到结果目录，开跑前用统一已填写的版本替换。模型无法锁定的产品另列 P 赛道。
+2. 制作模型已确认为 deepseek-flash、高思考，具体参数见MODEL-CONFIG.md。全组在包外填写同一份 study.json，补齐模型实际版本、上下文与输出上限、机器、OS、运行时、权限和预装组件。init会复制模板到结果目录，开跑前用统一已填写的版本替换。模型无法锁定的产品另列 P 赛道。
 3. 每个任务使用新的 Agent 会话、空项目和空数据目录。只把 participant 内该任务的任务书与 inputs 给 Agent。tools、evaluator、calibration、results 放在被测工作区外。
 4. 录屏覆盖需求提交、必要确认、关键故障和最终交付。同步保存完整会话导出、工具记录、调用用量及时间线。
 5. 原样发送任务书。允许固定确认、配置凭据、读标准句子。所有额外提示、代改文件、人工排障都记录到 interventions.json。
