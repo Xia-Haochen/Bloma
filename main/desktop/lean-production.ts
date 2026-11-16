@@ -6,7 +6,7 @@ import {recoverEngineeringMonitor,recordEngineeringMonitor,recentProductionObser
 import {engineeringObservations} from '../software/engineering-workspace'
 import {createToolState} from '../agent/loop/agent-loop'
 import { checkpointProjectHistory } from '../coding/project-git'
-import { locallyVerifiedSoftware } from '../software/verification'
+import { coreChecksReadyForCloseout, locallyVerifiedSoftware } from '../software/verification'
 import {ModelRequestRefusal} from '../platform/llm/model-request-refusal'
 import {applyApprovedNativeCorrections} from '../software/native-gui-registration'
 import {reviewPendingTestCorrections} from '../software/test-correction-review'
@@ -647,7 +647,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
           deps.persistAssistant(input.sessionId,text);emit('message_delta',{text});deps.complete(input.sessionId,input.projectId,'incomplete')
           return
         }
-        if (!modelBudgetStop && checked.independent?.semantics?.ready === false) {
+        if (!modelBudgetStop && coreChecksReadyForCloseout(checked.core) && checked.independent?.semantics?.ready === false) {
           if(await recoverIndependentDesign()) {
             task='独立验收争议已核对。读取当前冻结独立案例，更新必要控件映射并重新verify_app。'
             continue

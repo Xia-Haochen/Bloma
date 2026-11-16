@@ -60,6 +60,11 @@ export function awaitingUserChecks(core?: CoreVerificationResult): boolean {
       || row.verification === 'unverified' && pending.has(row.id)) === true
     && core.distribution?.status === 'passed' && (!core.llm || core.llm.status === 'passed')
 }
+export function coreChecksReadyForCloseout(core?: CoreVerificationResult): boolean {
+  return core?.status === 'passed'
+    || core?.local_status === 'passed' && core.distribution?.status === 'environment_blocked'
+    || awaitingUserChecks(core)
+}
 /** User action is next only after independent checks have finished successfully.
  * Missing service setup is engineering work, not a reason to ask for more audio. */
 export function awaitingAssistedAcceptance(result:SoftwareVerification|undefined):boolean {
@@ -183,7 +188,7 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
     const security = result.security = runSecurityScan({ project_id: projectId, root_path: candidate.root, profile: 'local-software' })
     writeTextFileAtomic(join(candidate.root, '00_VERIFY/security-scan.json'), JSON.stringify(security))
     if (!security.passed) { result.status = 'failed'; result.summary = security.issues.filter(issue => ['high', 'critical'].includes(issue.severity)).map(issue => `${issue.file}:${issue.line} ${issue.user_visible_summary}`).join('\n'); return result }
-    // Surface mapping problems even when a native bootstrap failure prevents B.
+    // Surface mapping problems separately from the case execution results.
     // The recorded suites still decide the actual outcome.
     try { result.independent_mapping = independentAdapterPreflight(projectId, candidate.root) }
     catch { /* The existing independent verifier reports design/setup errors. */ }
@@ -191,20 +196,10 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
     const core = result.core = await runCoreVerification({ projectId, sandboxRoot: candidate.root, signal })
     const localPending = core.local_status === 'passed' && core.distribution?.status === 'environment_blocked'
     const userPending = awaitingUserChecks(core)
-    const coreReady=core.status==='passed'||localPending||userPending
-    let independent: Awaited<ReturnType<typeof verifyIndependentDesign>>|undefined
-    if(coreReady){
-      try { independent=result.independent=await verifyIndependentDesign(projectId,candidate,signal,core) }
-      catch(error){signal?.throwIfAborted();independent=result.independent={status:'unverified',error:String(error)}}
-    }
-    if(!coreReady){result.status=core.status;result.summary=[core.summary,...core.missing].join('\n')}
-    if(independent&&independent.status!=='disabled'&&independent.status!=='passed'){
-      result.status = independent.status
-      result.summary = independent.semantics?.ready === false ? '独立案例的预期或覆盖仍需核对。'
-        : independent.status === 'failed' ? '独立验收发现实际行为未达到预期。'
-        : independent.error&&!independent.case_results?.length||independent.case_results?.some(row=>row.kind==='environment')
-          ? '独立验收环境尚未就绪：'+(independent.error??'请准备声明的服务依赖。')
-          : '独立验收未完成，请查看执行记录。'
+    const coreReady = coreChecksReadyForCloseout(core)
+    if (!coreReady) {
+      result.status = core.status
+      result.summary = [core.summary, ...core.missing].join('\n')
     }
     const launch = result.launch = await runLaunchSmoke(candidate.root, { signal, allowCleanExit: candidate.launch.mode === 'command',projectId })
     const brief = readPrdBackplane(projectId), windowReady = brief.lean_brief?.ui !== 'required'
@@ -213,13 +208,31 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
     if (!launch.passed || !windowReady) {
       result.launch = { ...launch, passed: false }
       result.status = result.status==='failed'?'failed':'unverified'
-      result.summary = `正常启动未通过：${launch.detail}${launch.outputExcerpt?'\n'+launch.outputExcerpt.slice(-4000):''}`
+      const detail = `正常启动未通过：${launch.detail}${launch.outputExcerpt?'\n'+launch.outputExcerpt.slice(-4000):''}`
+      result.summary = coreReady ? detail : result.summary + '\n' + detail
       return result
+    }
+    // The independent suite uses its own cases and isolated data. A failure of
+    // the maker's suite or a separate capability probe cannot cancel its work.
+    await verifyReleaseSource(candidate, signal)
+    let independent: Awaited<ReturnType<typeof verifyIndependentDesign>>
+    try { independent = result.independent = await verifyIndependentDesign(projectId, candidate, signal, core) }
+    catch (error) {
+      signal?.throwIfAborted()
+      independent = result.independent = { status: 'unverified', error: String(error) }
+    }
+    if (independent.status === 'failed' || independent.status === 'unverified') {
+      if (coreReady || independent.status === 'failed') result.status = independent.status
+      const detail = independent.semantics?.ready === false ? '独立案例的预期或覆盖仍需核对。'
+        : independent.status === 'failed' ? '独立验收发现实际行为未达到预期。'
+        : independent.error && !independent.case_results?.length || independent.case_results?.some(row => row.kind === 'environment')
+          ? '独立验收环境尚未就绪：' + (independent.error ?? '请准备声明的服务依赖。')
+          : '独立验收未完成，请查看执行记录。'
+      result.summary = coreReady ? detail : result.summary + '\n' + detail
     }
     await verifyReleaseSource(candidate, signal)
     if ((await verificationInputs(projectId, requestId, signal)).key !== version.key) throw Error('SOFTWARE_VERIFY_INPUT_CHANGED')
-    // An unconfigured B adapter must not suppress independent launch evidence.
-    if(!coreReady||independent?.status==='unverified'||independent?.status==='failed')return result
+    if (!coreReady || independent.status === 'unverified' || independent.status === 'failed') return result
     result.status = userPending ? 'unverified' : localPending ? 'environment_blocked' : 'passed'
     result.summary = userPending ? '自动检查已完成，请在“继续验收”中完成麦克风实测。'
       : localPending ? core.distribution!.detail : '当前候选已登记的本机案例、安全静态检查与正常启动通过；完整实现和真实模型效果尚未由这些检查评定。'

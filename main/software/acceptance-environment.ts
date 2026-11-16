@@ -56,14 +56,14 @@ function validModel(value: unknown): value is string {
   return typeof value === 'string' && value.length <= 256 && !!value.trim() && !/[\u0000-\u001f\u007f]/.test(value)
 }
 
-/** A host-owned dependency lease. No business assertions, product-specific IDs,
- * user data, provider keys or paid route selection are accepted by this API. */
-export async function prepareAcceptanceEnvironment(input: {
-  root: string; features: string[]; requiresLlm: boolean; signal?: AbortSignal
-  requestExpectation?: 'response' | 'none'
+interface AcceptanceSetupInput {
+  root: string
+  features: string[]
+  requiresLlm: boolean
   useDeclaredSettingsOnly?: boolean
-}): Promise<AcceptanceEnvironment> {
-  input.signal?.throwIfAborted()
+}
+
+function readAcceptanceSetup(input: AcceptanceSetupInput) {
   const manifestPath = join(input.root, 'CORE_CHECK.json')
   let llm: Record<string, unknown> | undefined
   if (existsSync(manifestPath)) {
@@ -77,13 +77,33 @@ export async function prepareAcceptanceEnvironment(input: {
   const required = input.useDeclaredSettingsOnly
     ? hasSettings && (input.requiresLlm || covered || !Array.isArray(covers) || !covers.length)
     : input.requiresLlm || covered
+  if (!required) return undefined
+  if (!llm || llm.input !== undefined || !['openai-chat','anthropic-messages'].includes(String(llm.protocol))) {
+    return fail('ACCEPTANCE_ENVIRONMENT_PROTOCOL_UNSUPPORTED: 首期支持已声明协议的文本对话依赖')
+  }
+  return { llm, settings: settingsBinding(llm.settings), anthropic: llm.protocol === 'anthropic-messages' }
+}
+
+/** Validate the same declared setup as the executor, without opening a service or test process. */
+export function checkAcceptanceSetup(input: AcceptanceSetupInput): void {
+  readAcceptanceSetup(input)
+}
+
+/** A host-owned dependency lease. No business assertions, product-specific IDs,
+ * user data, provider keys or paid route selection are accepted by this API. */
+export async function prepareAcceptanceEnvironment(input: AcceptanceSetupInput & {
+  signal?: AbortSignal
+  requestExpectation?: 'response' | 'none'
+}): Promise<AcceptanceEnvironment> {
+  input.signal?.throwIfAborted()
+  const setup = readAcceptanceSetup(input)
+  const required = Boolean(setup)
   const evidence: AcceptanceEnvironmentEvidence = { version: 1, mode: required ? 'controlled_service' : 'isolated_local',
-    configuration_digest: hash({ version: 1, llm: required ? llm ?? null : null, requestExpectation:input.requestExpectation??'response' }), readiness: 'ready',
+    configuration_digest: hash({ version: 1, llm: setup?.llm ?? null, requestExpectation:input.requestExpectation??'response' }), readiness: 'ready',
     ...(required?{request_expectation:input.requestExpectation??'response'}:{}),
     external_model_effects: required ? 'unverified' : 'not_required', requests: [], ...(required?{instance_id:randomUUID()}:{}) }
-  if (!required) return { prepare: async () => {}, assess: () => {}, isControlledResponse: () => false, evidence: () => structuredClone(evidence), close: async () => {} }
-  if (!llm || llm.input !== undefined || !['openai-chat','anthropic-messages'].includes(String(llm.protocol))) return fail('ACCEPTANCE_ENVIRONMENT_PROTOCOL_UNSUPPORTED: 首期支持已声明协议的文本对话依赖')
-  const settings = settingsBinding(llm.settings), anthropic = llm.protocol === 'anthropic-messages'
+  if (!setup) return { prepare: async () => {}, assess: () => {}, isControlledResponse: () => false, evidence: () => structuredClone(evidence), close: async () => {} }
+  const { settings, anthropic, llm } = setup
   const token = randomUUID(), responses: string[] = []
   let model: string | undefined
   let prepared = false, closed = false
@@ -143,7 +163,7 @@ export async function prepareAcceptanceEnvironment(input: {
         if (openedSettings) await page.locator(settings.open!).click()
         if (settings.protocol) {
           step = '设置协议（settings.protocol）'
-          await page.locator(settings.protocol).selectOption(String(llm!.protocol))
+          await page.locator(settings.protocol).selectOption(String(llm.protocol))
         }
         step = '填写服务地址（settings.endpoint）'
         await field.fill(endpoint)

@@ -25,3 +25,12 @@ it('never presents invalidated observations as current requirement passes',()=>{
  const result={status:'unverified',evidence_valid:false,core:{status:'passed'}} as SoftwareVerification
  expect(assessCandidateRequirements(['F-001'],result)[0]).toMatchObject({status:'unverified',next_owner:'host'})
 })
+it('retains a missing mandatory independent scenario beside a passing base case', () => {
+  const result = { status:'unverified', core:{status:'passed'}, independent:{
+    status:'unverified', case_results:[{id:'save',feature:'F-001',status:'passed',kind:'none'}],
+    semantics:{coverage:[{feature:'F-001',category:'reopen',status:'missing'}]},
+  }} as SoftwareVerification
+  expect(assessCandidateRequirements(['F-001'],result)[0]).toMatchObject({
+    status:'unverified',next_owner:'host',evidence:expect.arrayContaining([{source:'independent',name:'reopen',status:'missing'}]),
+  })
+})

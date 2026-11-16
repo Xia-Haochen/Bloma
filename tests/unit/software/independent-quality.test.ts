@@ -16,6 +16,7 @@ import { verifySoftwareCandidate, recentSoftwareVerification } from '../../../ma
 import { createQualityReview, readQualityLedger } from '../../../main/software/quality-review'
 import { createSoftwareCollaborationPolicy } from '../../../main/software/collaboration-policy'
 import { buildLeanGuiTool } from '../../../main/desktop/lean-gui-tool'
+import { guiSuitePath } from '../../../main/desktop/gui-acceptance'
 import { createToolState } from '../../../main/agent/loop/agent-loop'
 import { closeAllDebugSessions } from '../../../main/software/debug-sessions'
 import { enterDesktopLine } from '../../../main/desktop/desktop-route'
@@ -142,7 +143,19 @@ it('wrong or unknown business expectations remain disputes and stop an explicitl
   expect(findProject(project.project_id).desktop_blocked?.note).toContain('工程处理阶段')
   expect(prdScopeFingerprint(readPrdBackplane(project.project_id))).toBe(briefHash)
 }, 90000)
-it('missing static adapter controls are unverified harness findings, not reproduced product defects', async () => {
+it('runs independent browser scenarios when the local suite is missing and withholds delivery', async () => {
+  await freeze()
+  writeFileSync(join(project.root_path,'index.html'), html(false))
+  rmSync(guiSuitePath(project.project_id))
+  const result = await verifySoftwareCandidate(project.project_id, 'independent-without-local-suite', ctx().signal, true)
+  expect(result.core?.status).toBe('unverified')
+  expect(result.launch?.passed).toBe(true)
+  expect(result.independent?.status, result.summary).toBe('passed')
+  expect(result.independent?.case_results?.map(row => row.status)).toEqual(['passed','passed','passed','passed','passed'])
+  expect(result.status).toBe('unverified')
+  expect(await recentSoftwareVerification(project.project_id, 'independent-without-local-suite')).toBeUndefined()
+}, 90000)
+it('keeps missing static adapter controls in verification evidence without creating a product suspicion', async () => {
   await freeze(); writeFileSync(join(project.root_path, 'index.html'), html(false))
   const file = join(project.root_path, 'INDEPENDENT_ADAPTER.json'), adapter = JSON.parse(readFileSync(file, 'utf8')); delete adapter.controls.nameA; writeFileSync(file, JSON.stringify(adapter))
   const result = await verifySoftwareCandidate(project.project_id, 'r', ctx().signal, true)
@@ -150,8 +163,7 @@ it('missing static adapter controls are unverified harness findings, not reprodu
   expect(result.independent_mapping).toMatchObject({
     status: 'mapping_pending', detail: expect.stringContaining('"missing":["nameA"]'),
   })
-  expect(readQualityLedger(project.project_id).findings[0].disposition).toBe('suspected')
-  expect(readQualityLedger(project.project_id).findings[0].checks.some(c => c.outcome === 'failed')).toBe(false)
+  expect(readQualityLedger(project.project_id).findings).toEqual([])
 }, 90000)
 it('rejects cross-object input oracles, invented literal values, cosmetic coverage labels and terminal restarts without changing frozen proposals', () => {
   const brief = readPrdBackplane(project.project_id)

@@ -165,7 +165,7 @@ export async function verifyIndependentDesign(projectId:string,candidate:Softwar
       const assertion=observed.status==='failed'&&(step?.kind==='expect'||step?.kind==='expect_audio')&&observed.error?.startsWith(`GUI_ASSERTION_FAILED:${step.id}`)
       const runtime=observed.failure_kind==='runtime'
       const environmentBlocked=observed.error?.startsWith('ACCEPTANCE_ENVIRONMENT_')===true
-      const status=observed.status==='passed'?'passed':assertion||runtime?'failed':'unverified'
+      const status=environmentBlocked?'unverified':observed.status==='passed'?'passed':assertion||runtime?'failed':'unverified'
       cases.push({id:item.id,feature:item.feature,status,kind:status==='passed'?'none':environmentBlocked?'environment':runtime?'product_runtime':assertion?'product_assertion':failed?'adapter':'environment',steps:observed.steps,error:observed.error,evidence_warnings:observed.evidence_warnings,expected_source:trustedAcceptance(brief,requirement),environment:environmentEvidence})
       if (failed && !diagnostic) {
         const source = comparisons[failed.id]

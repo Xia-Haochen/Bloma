@@ -15,6 +15,7 @@ import {existsSync,readFileSync} from 'node:fs'
 import {guiSuitePath,parseGuiSuite} from '../desktop/gui-acceptance'
 import {NativeTestContractError} from './native-gui-tests'
 import {proposeTestTransaction} from './test-corrections'
+import { checkAcceptanceSetup } from './acceptance-environment'
 
 export function buildSoftwareVerifyTool(projectId: string, policy: ReturnType<typeof createSoftwareCollaborationPolicy>, previewChanged?: (url?: string) => void, beforeVerify?:(ctx:import('../agent/loop/agent-loop').ToolContext)=>Promise<void>): AgentLoopTool {
   return { name: 'verify_app', description: '运行当前程序的正式检查。首次用script登记GUI案例，后续修改程序或测试后无参数复验；宿主自动登记适配并审查需要裁定的测试修订。案例名含F编号，restart=true执行initial和reopened。保留已确认业务预期。按requirements、failure和quality处理具体待办，宿主负责交付。',
@@ -30,7 +31,8 @@ export function buildSoftwareVerifyTool(projectId: string, policy: ReturnType<ty
           next: '先用read_process等待已有命令结果，再验收；宿主没有停止命令或冻结当前草稿。' }),
           feedback: { schema_version: 1, source: 'host', scope: 'command_wait', execution: 'running', verification: 'unverified', recovery: 'inspect' } }
         if(input.script===undefined&&input.restart!==undefined)throw Error('SOFTWARE_VERIFY_INPUT_INVALID: restart与script一起提供')
-        const launch = requireLaunchDeclaration(findProject(projectId).root_path,'SOFTWARE_VERIFY_CONFIRMED_ENTRY_REQUIRED')
+        const root = findProject(projectId).root_path
+        const launch = requireLaunchDeclaration(root,'SOFTWARE_VERIFY_CONFIRMED_ENTRY_REQUIRED')
         assertSoftwareDelivery(readPrdBackplane(projectId), launch)
         await closeDebugSessions(projectId, ctx.sessionId); await stopSoftwareSession(projectId, ctx.sessionId); previewChanged?.()
         applyApprovedNativeCorrections(projectId,ctx.signal)
@@ -40,7 +42,9 @@ export function buildSoftwareVerifyTool(projectId: string, policy: ReturnType<ty
           if(typeof script!=='string'||input.restart!==undefined&&typeof input.restart!=='boolean')throw Error('GUI_NATIVE_INPUT_INVALID')
           try{registerNativeGuiTests(projectId,script,input.restart===undefined?previous?.restart??false:input.restart===true)}
           catch(error){
-            if(!(error instanceof NativeTestContractError)||!beforeVerify||!error.readOriginal||!error.correctionEntry)throw error
+            if(!(error instanceof NativeTestContractError)||!beforeVerify||!previous||!error.readOriginal||!error.correctionEntry)throw error
+            checkAcceptanceSetup({ root, features: previous.cases.map(row => row.feature),
+              requiresLlm: false, useDeclaredSettingsOnly: true })
             proposeTestTransaction(projectId,{contract_digest:error.readOriginal.arguments.contract_digest,
               script:error.correctionEntry,reason:'verify_app发现当前测试修订，宿主核对确认预期、隔离执行并复验。'})
             await beforeVerify(ctx)

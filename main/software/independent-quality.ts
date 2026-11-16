@@ -129,6 +129,22 @@ export async function recordIndependentFindings(projectId: string, candidate: So
   const ledger = readQualityLedger(projectId)
   const record = readIndependentDesign(projectId)
   const brief=readPrdBackplane(projectId)
+  // Older hosts promoted setup/selector failures into suspected product
+  // defects. Their observations remain history, but cannot require a separate
+  // product investigation once the verifier itself reports the setup gap.
+  for (const finding of ledger.findings) {
+    if (!finding.independent || finding.category !== 'independent_behavior' || finding.challenge
+      || finding.disposition === 'superseded' || !finding.checks.length) continue
+    const setupOnly = finding.checks.every(check => {
+      if (check.outcome !== 'unverified') return false
+      try { return ['environment', 'adapter'].includes(JSON.parse(check.observation ?? '{}').case?.kind) }
+      catch { return false }
+    })
+    if (setupOnly) {
+      finding.disposition = 'superseded'
+      finding.unknowns = '原记录只有验收环境或适配问题，当前待办以独立执行回执为准。'
+    }
+  }
   for (const finding of ledger.findings.filter(f => f.independent && f.independent.design_version !== result.design_version && f.disposition !== 'superseded')) {
     const requirement=brief.requirements.find(r=>r.id===finding.requirement)
     // A fresh B proposal cannot erase a reproduced defect under the same
@@ -136,6 +152,7 @@ export async function recordIndependentFindings(projectId: string, candidate: So
     if(!requirement||trustedAcceptance(brief,requirement)!==finding.expected_source){finding.disposition = 'superseded'; finding.unknowns = '确认需求已移除或预期已改变；旧意见保留，不计为修复关闭。'}
   }
   for (const observed of result.case_results) {
+    if (observed.kind === 'environment' || observed.kind === 'adapter') continue
     const mode=observed.environment?.mode??'isolated_local'
     // Keep independently reproduced environments in separate findings. A mode
     // change must neither erase an older failure nor make the new one unclosable.

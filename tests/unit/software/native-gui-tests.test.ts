@@ -1,5 +1,5 @@
 import {qualityTestSources} from '../../../main/software/quality-ledger'
-import {proposeTestTransaction,applyApprovedTestCorrections} from '../../../main/software/test-corrections'
+import {proposeTestTransaction,applyApprovedTestCorrections,testCorrectionView} from '../../../main/software/test-corrections'
 import {reviewPendingTestCorrections} from '../../../main/software/test-correction-review'
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -291,6 +291,13 @@ it.each([true,false])('automatically reviews a test repair through verify_app an
  const first=await tool.execute({script:'tests/acceptance.mjs',restart:true},ctx)
  expect(first.isError).toBe(true);expect(reviews).toBe(0)
  writeFileSync(join(root,'tests/acceptance.mjs'),broken.replace("'typo.txt'","'note.txt'"))
+ const manifest = join(root, 'CORE_CHECK.json')
+ writeFileSync(manifest, JSON.stringify({ llm: { protocol: 'openai-chat', covers: ['F-001'], settings: {} } }))
+ const blocked = await tool.execute({}, ctx)
+ expect(JSON.parse(blocked.output).failure).toMatchObject({ category:'environment', code:'ACCEPTANCE_ENVIRONMENT_SETTINGS_INVALID' })
+ expect(reviews).toBe(0)
+ expect(testCorrectionView(id).proposals).toEqual([])
+ rmSync(manifest)
  const fixed=await tool.execute({},ctx)
  expect(fixed.isError,fixed.output).toBe(!approve)
  expect(reviews).toBe(1)
