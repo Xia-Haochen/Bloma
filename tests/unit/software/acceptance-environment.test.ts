@@ -36,7 +36,7 @@ el('configure').onclick=async()=>{await fetch('/configure',{method:'POST',body:J
 el('send').onclick=async()=>{const r=await(await fetch('/reply',{method:'POST',body:JSON.stringify({text:el('say').value})})).json();el('reply').textContent=r.choices?.[0]?.message.content||'missing';localStorage.setItem('reply',el('reply').textContent)};</script>`)
 })
 afterEach(()=>{if(previous===undefined)delete process.env.PROMA_HOME;else process.env.PROMA_HOME=previous;rmSync(home,{recursive:true,force:true,maxRetries:5,retryDelay:100})})
-const prepare=(signal?:AbortSignal)=>prepareAcceptanceEnvironment({root:project.root_path,features:['F-001'],requiresLlm:true,supportsControlledOutput:true,signal})
+const prepare=(signal?:AbortSignal)=>prepareAcceptanceEnvironment({root:project.root_path,features:['F-001'],requiresLlm:true,signal})
 const suite=():GuiAcceptanceSuite=>({version:1,scope_hash:'a'.repeat(64),covers:['F-001'],steps:[
   {id:'input',kind:'fill',selector:'#say',value:'first input'}, {id:'send',kind:'click',selector:'#send'},
   {id:'reply',kind:'expect',selector:'#reply',nonempty:true},
@@ -86,10 +86,46 @@ it('does not accept a static nonempty reply without actually calling the prepare
   const env=await prepare()
   try{const result=await observe(env);expect(result.status).toBe('unverified');expect(result.error).toContain('REQUEST_NOT_OBSERVED')}finally{await env.close()}
 },35000)
-it('blocks missing settings or unsupported model-content expectations before executing a business case',async()=>{
+it('allows fixed settings assertions alongside real controlled replies and preserves the selected model',async()=>{
+  const file=join(project.root_path,'index.html')
+  writeFileSync(file,readFileSync(file,'utf8').replace('<input id="model">','<input id="model" value="deepseek-flash">'))
+  const env=await prepare(),rules=suite()
+  rules.steps.unshift({id:'model-setting',kind:'expect',selector:'#model',property:'value',equals:'deepseek-flash'})
+  try{const result=await observe(env,rules);expect(result.status,JSON.stringify(result)).toBe('passed')}
+  finally{await env.close()}
+},35000)
+it('reports a fixed generated-reply mismatch as missing semantic evidence after observing a real request',async()=>{
+  const env=await prepare(),rules=suite()
+  rules.steps[2]={id:'reply',kind:'expect',selector:'#reply',equals:'a predetermined model reply'}
+  try{
+    const result=await observe(env,rules)
+    expect(result.status).toBe('unverified')
+    expect(result.error).toContain('EXTERNAL_ORACLE_REQUIRED')
+    expect(env.evidence().requests.filter(row=>row.phase==='case')).toHaveLength(1)
+  }finally{await env.close()}
+},35000)
+it('observes zero-request cancellation and rejects an actual request under that same expectation',async()=>{
+  const make=()=>prepareAcceptanceEnvironment({root:project.root_path,features:['F-001'],requiresLlm:true,requestExpectation:'none'})
+  const env=await make()
+  try{
+    const result=await observe(env,{...suite(),steps:[
+      {id:'draft',kind:'fill',selector:'#say',value:'cancel this'},
+      {id:'cancelled',kind:'fill',selector:'#say',value:''},
+      {id:'empty',kind:'expect',selector:'#say',property:'value',equals:''}
+    ]})
+    expect(result.status,JSON.stringify(result)).toBe('passed')
+    expect(env.evidence().requests).toEqual([])
+  }finally{await env.close()}
+  const wrong=await make()
+  try{
+    const result=await observe(wrong)
+    expect(result.status).not.toBe('passed')
+    expect(result.error).toContain('UNEXPECTED_REQUEST')
+  }finally{await wrong.close()}
+},60000)
+it('blocks missing settings before executing a business case',async()=>{
   const llm=spec();delete (llm as {settings?:unknown}).settings;writeFileSync(join(project.root_path,'CORE_CHECK.json'),JSON.stringify({llm}))
   await expect(prepare()).rejects.toThrow('SETTINGS_REQUIRED')
-  await expect(prepareAcceptanceEnvironment({root:project.root_path,features:['F-001'],requiresLlm:true,supportsControlledOutput:false})).rejects.toThrow('EXTERNAL_ORACLE_REQUIRED')
   const diagnosis=verificationFailure({status:'unverified',summary:'environment',independent:{status:'unverified',case_results:[{id:'case',status:'unverified',kind:'environment',steps:[],error:'ACCEPTANCE_ENVIRONMENT_SETTINGS_REQUIRED'}]}} as never)
   expect(diagnosis?.category).toBe('environment');expect(diagnosis?.code).toBe('ACCEPTANCE_ENVIRONMENT_SETTINGS_REQUIRED')
   expect(diagnosis?.next_action).toEqual({tool:'read_production_context',arguments:{topic:'ai-service'}})
@@ -110,7 +146,7 @@ it.each(['openai-chat','anthropic-messages'])('isolates service credentials and 
   const first=await prepare(),second=await prepare()
   const configure=async(env:typeof first)=>{
     const fields:Record<string,string>={}
-    await env.prepare({locator:(selector:string)=>({isVisible:async()=>true,fill:async(value:string)=>{fields[selector]=value},click:async()=>{},filter:()=>({waitFor:async()=>{}})})} as unknown as Page,0)
+    await env.prepare({locator:(selector:string)=>({isVisible:async()=>true,inputValue:async()=>'',fill:async(value:string)=>{fields[selector]=value},click:async()=>{},filter:()=>({waitFor:async()=>{}})})} as unknown as Page,0)
     return fields
   }
   try{

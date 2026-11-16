@@ -253,6 +253,13 @@ export async function observeSoftwareGui(input: { projectId: string; root: strin
         catch (error) {
           result.steps.push({ id: step.id, passed: false, actual: (error as { actual?: unknown }).actual ?? String(error) })
           result.error = error instanceof Error ? error.message : String(error)
+          if (!input.comparisons?.[step.id] && input.environment?.isControlledResponse((error as {actual?:unknown}).actual)) {
+            result.status = 'unverified'
+            result.failure_kind = 'unresolved'
+            result.error = 'ACCEPTANCE_ENVIRONMENT_EXTERNAL_ORACLE_REQUIRED: 精确回复断言与本次通用受控服务回复不符，须提供对应的模型语义证据'
+            await screenshot('gui-'+index+'-failed.png')
+            return result
+          }
           result.status = result.failure_kind==='runtime'||/^GUI_(?:FILE_)?ASSERTION_FAILED:/.test(result.error) ? 'failed' : 'unverified'
           result.failure_kind ??= result.status==='failed'?'assertion':'unresolved'
           await screenshot(`gui-${index}-failed.png`)

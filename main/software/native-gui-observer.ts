@@ -122,7 +122,7 @@ export async function runNativeGuiTests(input: {
     let environment: AcceptanceEnvironment | undefined
     try {
         const prepared = await prepareAcceptanceEnvironment({ root: input.root, features: input.suite.covers,
-            requiresLlm: false, supportsControlledOutput: true, useDeclaredSettingsOnly: true, signal })
+            requiresLlm: false, useDeclaredSettingsOnly: true, signal })
         environment = prepared
         for (const phase of native.restart ? ['initial', 'reopened'] : ['initial']) {
             signal.throwIfAborted();

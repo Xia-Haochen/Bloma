@@ -21,11 +21,13 @@ export interface AcceptanceEnvironmentEvidence {
   instance_id?: string
   readiness: 'ready' | 'blocked'
   external_model_effects: 'not_required' | 'unverified'
+  request_expectation?: 'response' | 'none'
   requests: Array<{ phase: 'setup' | 'case'; valid: boolean; request_hash: string; response_hash?: string }>
 }
 export interface AcceptanceEnvironment {
   prepare(page: Page, segment: number): Promise<void>
   assess(observations: unknown[]): void
+  isControlledResponse(value: unknown): boolean
   evidence(): AcceptanceEnvironmentEvidence
   close(): Promise<void>
 }
@@ -48,7 +50,8 @@ function settingsBinding(value: unknown): LlmSettingsBinding {
 /** A host-owned dependency lease. No business assertions, product-specific IDs,
  * user data, provider keys or paid route selection are accepted by this API. */
 export async function prepareAcceptanceEnvironment(input: {
-  root: string; features: string[]; requiresLlm: boolean; supportsControlledOutput: boolean; signal?: AbortSignal
+  root: string; features: string[]; requiresLlm: boolean; signal?: AbortSignal
+  requestExpectation?: 'response' | 'none'
   useDeclaredSettingsOnly?: boolean
 }): Promise<AcceptanceEnvironment> {
   input.signal?.throwIfAborted()
@@ -63,13 +66,14 @@ export async function prepareAcceptanceEnvironment(input: {
   const required = (!input.useDeclaredSettingsOnly || llm?.settings !== undefined && llm.input === undefined)
     && (input.requiresLlm || Array.isArray(covers) && input.features.some(feature => covers.includes(feature)))
   const evidence: AcceptanceEnvironmentEvidence = { version: 1, mode: required ? 'controlled_service' : 'isolated_local',
-    configuration_digest: hash({ version: 1, llm: required ? llm ?? null : null }), readiness: 'ready',
+    configuration_digest: hash({ version: 1, llm: required ? llm ?? null : null, requestExpectation:input.requestExpectation??'response' }), readiness: 'ready',
+    ...(required?{request_expectation:input.requestExpectation??'response'}:{}),
     external_model_effects: required ? 'unverified' : 'not_required', requests: [], ...(required?{instance_id:randomUUID()}:{}) }
-  if (!required) return { prepare: async () => {}, assess: () => {}, evidence: () => structuredClone(evidence), close: async () => {} }
-  if (!input.supportsControlledOutput) return fail('ACCEPTANCE_ENVIRONMENT_EXTERNAL_ORACLE_REQUIRED: 固定模型内容预期不能用通用受控服务代替，需单独的服务验收环境')
+  if (!required) return { prepare: async () => {}, assess: () => {}, isControlledResponse: () => false, evidence: () => structuredClone(evidence), close: async () => {} }
   if (!llm || llm.input !== undefined || !['openai-chat','anthropic-messages'].includes(String(llm.protocol))) return fail('ACCEPTANCE_ENVIRONMENT_PROTOCOL_UNSUPPORTED: 首期支持已声明协议的文本对话依赖')
   const settings = settingsBinding(llm.settings), anthropic = llm.protocol === 'anthropic-messages'
-  const token = randomUUID(), model = 'bloma-acceptance-text', responses: string[] = []
+  const token = randomUUID(), responses: string[] = []
+  let model = 'bloma-acceptance-text'
   let prepared = false, closed = false
   evidence.readiness = 'blocked'
   const server = createServer((req, res) => {
@@ -122,7 +126,9 @@ export async function prepareAcceptanceEnvironment(input: {
         if (settings.open && !await field.isVisible()) await page.locator(settings.open).click()
         if (settings.protocol) await page.locator(settings.protocol).selectOption(String(llm!.protocol))
         await field.fill(endpoint)
-        await page.locator(settings.model).fill(model)
+        const modelField = page.locator(settings.model)
+        model = (await modelField.inputValue()).trim() || model
+        await modelField.fill(model)
         await page.locator(settings.api_key).fill(token)
         await page.locator(settings.save).click()
         const ready = page.locator(settings.ready.selector)
@@ -136,10 +142,15 @@ export async function prepareAcceptanceEnvironment(input: {
     },
     assess(observations) {
       const requests = evidence.requests.filter(request => request.phase === 'case')
+      if (input.requestExpectation === 'none') {
+        if (requests.length) return fail('ACCEPTANCE_ENVIRONMENT_UNEXPECTED_REQUEST: 本案例要求零请求，但观察到服务调用')
+        return
+      }
       if (!requests.length) return fail('ACCEPTANCE_ENVIRONMENT_REQUEST_NOT_OBSERVED: 未观察到业务步骤调用准备好的服务，不能以非空气泡判通过')
       if (requests.some(request => !request.valid)) return fail('ACCEPTANCE_ENVIRONMENT_REQUEST_INVALID: 实际请求未遵守声明的服务协议')
       if (!observations.some(value => typeof value === 'string' && responses.some(response => value.includes(response)))) return fail('ACCEPTANCE_ENVIRONMENT_RESPONSE_NOT_OBSERVED: 未在业务观察中读回本次服务响应')
     },
+    isControlledResponse: value => typeof value === 'string' && responses.some(response => value.includes(response)),
     evidence: () => structuredClone(evidence), close,
   }
 }

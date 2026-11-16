@@ -23,6 +23,22 @@ it('checks preset role selection through observed identity without inventing con
   proposal.cases[0].steps[2] = {kind:'expect',control:'聊天标题',equals:'林间',oracle:{kind:'literal',quote:'林间'}}
   expect(assessIndependentCases(task,parse()).cases[0].issues).toContain('固定预期不是确认资料中逐字引用的业务值')
 })
+it('binds zero-request expectations to the confirmed case source and rejects malformed service contracts',()=>{
+  const expected='空输入不向模型服务发送请求，界面说明未发送原因'
+  const task=bindAcceptance({...brief,requirements:[{id:'F-001',description:'空输入处理',priority:'P0'}],
+    acceptance:{'F-001':expected}})
+  const item={id:'empty',feature:'F-001',coverage:['normal'],basis:{
+    requirement_hash:requirementEvidenceHash(task,task.requirements[0]),expected_source:expected},
+    service:{requests:'none',source:'不向模型服务发送请求'},
+    steps:[{kind:'fill',control:'input',value:''},{kind:'click',control:'send'},
+      {kind:'expect',control:'notice',equals:'',oracle:{kind:'nonempty',quote:'界面说明未发送原因'}}]}
+  const parse=()=>parseIndependentCases(JSON.stringify({cases:[item]}),['F-001'])
+  expect(assessIndependentCases(task,parse()).cases[0].status).toBe('grounded')
+  item.service.source='unconfirmed'
+  expect(assessIndependentCases(task,parse()).cases[0].issues).toContain('服务请求预期缺少确认需求中的逐字来源')
+  item.service.requests='ignore'
+  expect(parse).toThrow('INDEPENDENT_SERVICE_INVALID')
+})
 it('grounds a cross-feature oracle but never counts a context reference as coverage',()=>{
   const parsed=parseIndependentCases(JSON.stringify(contract()),['F-001','F-002'])
   const result=assessIndependentCases(brief,parsed)

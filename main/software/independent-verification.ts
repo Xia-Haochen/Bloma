@@ -70,14 +70,15 @@ export function independentSuite(projectId:string,root:string,caseIds?:string[])
     if(step.kind==='speech_probe')throw Error('INDEPENDENT_SPEECH_REQUIRES_HOST_PROBE')
     const selector=adapter.controls[step.control]
     if(step.kind==='expect_audio')return{id,kind:'expect_audio' as const,selector,text_selector:step.text_control?adapter.controls[step.text_control]:undefined}
-    if(step.kind==='speech_input')return{id,kind:'upload' as const,selector,path:'input/voice-golden.wav'}
+    if(step.kind==='speech_input')return{id,kind:'upload' as const,selector,path:step.sample==='silence'?'input/voice-silence.wav':'input/voice-golden.wav'}
     if(step.kind==='fill')return{id,kind:'fill' as const,selector,value:step.value}
     if(step.kind==='click')return{id,kind:'click' as const,selector}
     return{id,kind:'expect' as const,selector,property:step.property,
       ...(['nonempty','observed'].includes(step.oracle?.kind ?? '') ? {nonempty:true as const} : {equals:step.equals})}
   }))}
   if (selected.some(item => item.steps.some(step => step.kind === 'speech_input'))) {
-    suite.fixtures = [{path:'input/voice-golden.wav',source:'voice-golden.wav'}]
+    const samples = new Set(selected.flatMap(item=>item.steps.filter(step=>step.kind==='speech_input').map(step=>step.sample==='silence'?'voice-silence.wav':'voice-golden.wav')))
+    suite.fixtures = [...samples].map(source=>({path:'input/'+source,source}))
     return sealGuiFixtures(projectId,join(mainRootDir(),'templates/tools'),suite)
   }
   return suite
@@ -131,8 +132,8 @@ export async function verifyIndependentDesign(projectId:string,candidate:Softwar
         materializeGuiFixtures(projectId,suite,join(temporary,'data'))
         const features=[item.feature,...(item.related??[]).map(row=>row.feature)]
         environment=await prepareAcceptanceEnvironment({root:candidate.root,features,signal,
-          requiresLlm:brief.requirements.some(row=>features.includes(row.id)&&requirementCapabilities(row).has('llm')),
-          supportsControlledOutput:item.steps.every(step=>step.kind!=='expect'||['nonempty','observed'].includes(step.oracle?.kind??''))})
+          requiresLlm:Boolean(item.service)||brief.requirements.some(row=>features.includes(row.id)&&requirementCapabilities(row).has('llm')),
+          requestExpectation:item.service?.requests})
         observed=await observeSoftwareGui({projectId,root:candidate.root,launch:candidate.launch,suite,temporary,screenshotDir:join(base,'evidence'),signal,purpose:'acceptance',comparisons,environment})
         environmentEvidence=environment.evidence()
       } finally {

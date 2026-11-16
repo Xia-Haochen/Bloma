@@ -502,9 +502,9 @@ it('executes Chinese control names across restart and detects corrupted persiste
   expect(bad.status).toBe('failed')
 },90000)
 
-it('supplies host-frozen speech through the real file input and fails when the input is ignored',async()=>{
+it.each(['voice','silence'] as const)('supplies host-frozen %s through the real file input and fails when the input is ignored',async sample=>{
   const proposal=structuredClone(contract),item=proposal.cases[0]
-  item.steps=[{kind:'speech_input',control:'音频输入'},
+  item.steps=[{kind:'speech_input',control:'音频输入',sample},
     {kind:'expect',control:'result',equals:'',oracle:{kind:'nonempty',quote:item.basis!.expected_source}}]
   const design=await prepareIndependentDesign(sharedInput(()=>JSON.stringify(proposal)))
   expect(design.status,design.reason).toBe('frozen')
@@ -514,13 +514,13 @@ it('supplies host-frozen speech through the real file input and fails when the i
   await new Promise<void>(done=>server.close(()=>done()))
   const root=project.root_path
   writeFileSync(join(root,'server.cjs'),`require('http').createServer((q,s)=>{s.setHeader('Content-Type','text/html');s.end(require('fs').readFileSync('index.html'))}).listen(${address.port},'127.0.0.1')`)
-  const html=`<input id="audio" type="file"><output id="result"></output><script>document.querySelector('#audio').onchange=async e=>{const f=e.target.files[0];const bytes=new Uint8Array(await f.arrayBuffer());document.querySelector('#result').textContent=f.name+':'+String.fromCharCode(...bytes.slice(0,4))}</script>`
+  const html=`<input id="audio" type="file"><output id="result"></output><script>document.querySelector('#audio').onchange=async e=>{const f=e.target.files[0];const bytes=new Uint8Array(await f.arrayBuffer());document.querySelector('#result').textContent=f.name+':'+String.fromCharCode(...bytes.slice(0,4))+':'+(bytes.slice(44).some(value=>value!==0)?'nonzero':'silent')}</script>`
   writeFileSync(join(root,'index.html'),html)
   writeFileSync(join(root,'LAUNCH.json'),JSON.stringify({schema_version:2,ui:'browser',command:['node','server.cjs'],url:`http://127.0.0.1:${address.port}`}))
   writeFileSync(join(root,'INDEPENDENT_ADAPTER.json'),JSON.stringify({version:1,design_digest:design.digest,controls:{'音频输入':'#audio',result:'#result'}}))
   const checked=await verifyIndependentDesign(project.project_id,await prepareSoftwareRelease(project.project_id,root),AbortSignal.timeout(30000))
   expect(checked.status,JSON.stringify(checked)).toBe('passed')
-  expect(checked.case_results![0].steps[1].actual).toBe('voice-golden.wav:RIFF')
+  expect(checked.case_results![0].steps[1].actual).toBe(sample==='silence'?'voice-silence.wav:RIFF:silent':'voice-golden.wav:RIFF:nonzero')
   writeFileSync(join(root,'index.html'),'<input id="audio" type="file"><output id="result"></output>')
   const broken=await verifyIndependentDesign(project.project_id,await prepareSoftwareRelease(project.project_id,root),AbortSignal.timeout(30000))
   expect(broken.status,JSON.stringify(broken)).toBe('failed')
