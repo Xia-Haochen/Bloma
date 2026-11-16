@@ -266,6 +266,40 @@ it.skipIf(process.platform!=='win32'||!existsSync(resolve('node_modules/electron
  const checked=await verifySoftwareCandidate(project.project_id,'electron-native',AbortSignal.timeout(120000))
  expect(checked.status,JSON.stringify({summary:checked.summary,gui:checked.core?.host_gui})).toBe('passed');expect(checked.core?.host_gui?.method).toBe('node:test');expect(checked.launch?.passed).toBe(true)
 },150000)
+it.each([true,false])('automatically reviews a test repair through verify_app and respects the independent decision (%s)',async approve=>{
+ const root=project.root_path,id=project.project_id
+ writeFileSync(join(root,'note.txt'),'fixture')
+ const broken=script.replace('assert,phase','assert,app,phase').replace(
+   "await page.locator('#save').click();await expect(page.locator('#list')).toHaveText('Alice')",
+   "await page.locator('#save').click();await expect(page.locator('#list')).toHaveText('Alice');assert.equal(await app.readProductFile('typo.txt'),'fixture')")
+ writeFileSync(join(root,'tests/acceptance.mjs'),broken)
+ let reviews=0
+ const query:import('../../../main/orchestration/stages/orchestration-contracts').SDKQuery=async function*(prompt){
+   reviews++
+   const packet=JSON.parse(prompt)
+   expect(packet.proposed_execution.result.status).toBe('passed')
+   yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify({
+     verdict:approve?'approve':'reject',reason:approve?'文件定位修正，实际隔离执行通过，保留原业务断言':'受控反例：未批准这份修改',
+     assessment:Object.keys(packet.proposal.expected_sources).map(feature=>({feature,preserved:approve,reason:'受控独立裁定'}))
+   })}]}}
+ }
+ const tool=buildSoftwareVerifyTool(id,createSoftwareCollaborationPolicy(id,root,'s'),undefined,async ctx=>{
+   await reviewPendingTestCorrections({projectId:id,sessionId:'s',query,env:{},maxTokens:4096,signal:ctx.signal})
+   applyApprovedNativeCorrections(id,ctx.signal)
+ })
+ const ctx={projectId:id,sessionId:'s',requestId:'auto-test-repair',state:createToolState(),signal:AbortSignal.timeout(120000)}
+ const first=await tool.execute({script:'tests/acceptance.mjs',restart:true},ctx)
+ expect(first.isError).toBe(true);expect(reviews).toBe(0)
+ writeFileSync(join(root,'tests/acceptance.mjs'),broken.replace("'typo.txt'","'note.txt'"))
+ const fixed=await tool.execute({},ctx)
+ expect(fixed.isError,fixed.output).toBe(!approve)
+ expect(reviews).toBe(1)
+ expect((await recentSoftwareVerification(id,ctx.requestId))?.status).toBe(approve?'passed':undefined)
+ if(!approve){
+  expect((await tool.execute({},ctx)).isError).toBe(true)
+  expect(reviews).toBe(1)
+ }
+},150000)
 it('allows locator repairs but freezes input, expected values and helper business logic', () => {
     const base = 'const positive=values=>values.filter(n=>n>0);\n' + script;
     writeFileSync(join(project.root_path, 'tests/acceptance.mjs'), base);

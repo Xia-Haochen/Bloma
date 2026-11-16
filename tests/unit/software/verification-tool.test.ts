@@ -10,7 +10,7 @@ vi.mock('../../../storage/json-store', async original => {
   return { ...actual, writeTextFileAtomic: vi.fn(actual.writeTextFileAtomic) }
 })
 import { writeTextFileAtomic } from '../../../storage/json-store'
-import { findProject } from '../../../main/project/project-service'
+import { findProject,updateProject } from '../../../main/project/project-service'
 import { createEngineeringProject as createProject } from '../../fixtures/engineering-project'
 import { parseLeanBrief } from '../../../main/guide/lean-brief'
 import { readPrdBackplane, markPrdUserConfirmed } from '../../../main/project/prd-store'
@@ -27,6 +27,8 @@ import { frozenGuiFixtureVersion, sealGuiFixtures } from '../../../main/desktop/
 import { installGuiAcceptanceSuite } from '../../../main/desktop/gui-acceptance'
 import { prdScopeFingerprint } from '../../../main/project/requirement-contract'
 import {readVerificationReport} from '../../../main/software/verification-report'
+import {configureIndependentPolicy} from '../../../main/software/independent-policy'
+import {launchSoftwareTrial} from '../../../main/software/trial'
 import * as capabilityResources from '../../../main/software/capability-resources'
 import * as coreVerification from '../../../main/desktop/core-verification'
 import * as speechVerification from '../../../main/desktop/speech-verification'
@@ -92,6 +94,22 @@ it('reuses prepared speech evidence across continuation only while inputs and mi
     writeFileSync(join(root,'app.cjs'),source+'\n// changed')
     expect(await recentSoftwareVerification(id,'r')).toBeUndefined()
   }finally{runCore.mockRestore();microphone.mockRestore();resource.mockRestore();snapshot.mockRestore()}
+},60000)
+it('retains real launch and isolated trial when independent preparation is pending, without granting delivery',async()=>{
+ await setup()
+ const scope=prdScopeFingerprint(readPrdBackplane(project.project_id))
+ updateProject(project.project_id,{ux_confirmation:{prd_fingerprint:scope,design_hash:scope,html_hash:null}})
+ configureIndependentPolicy(project.project_id,{version:1,enabled:true,funding:'project'})
+ const checked=await verifySoftwareCandidate(project.project_id,'pending')
+ expect(checked.status).toBe('unverified')
+ expect(checked.independent?.error).toContain('INDEPENDENT_CURRENT_DESIGN_REQUIRED')
+ expect(checked.core?.status).toBe('passed');expect(checked.launch?.passed).toBe(true)
+ expect(checked.requirements?.[0]).toMatchObject({id:'F-001',status:'unverified',next_owner:'host'})
+ expect(await recentSoftwareVerification(project.project_id,'pending')).toBeUndefined()
+ const trial=await launchSoftwareTrial(project.project_id,undefined,false,checked.candidate!.id)
+ expect(trial.started,trial.detail).toBe(true)
+ expect(trial.trial?.qualification).toBe('unverified_test_data')
+ expect(findProject(project.project_id).status).not.toBe('completed')
 },60000)
 it('reports formal failures before asking any coverage reviewer to inspect the suite',async()=>{
   const source=await setup()

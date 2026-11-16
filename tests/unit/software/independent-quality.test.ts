@@ -127,7 +127,7 @@ it('actual isolated B cases expose cross-object corruption, preserve cancel/erro
   expect(readIndependentDesign(project.project_id)?.digest).toBe(design.digest);expect(calls).toBe(1)
   writeFileSync(join(artifacts,'challenge.json'),JSON.stringify({finding:updated,result:disputed,tool_is_error:challenged.isError},null,2))
 }, 180000)
-it('wrong or unknown business expectations remain disputes, are not executed and stop normal production before A or a new B request', async () => {
+it('wrong or unknown business expectations remain disputes and stop an explicitly requested redesign before implementation', async () => {
   contract.cases = [contract.cases[0]]; contract.cases[0].basis!.expected_source = '未确认的新需求：新增自动备份'
   contract.coverage_notes = (['multi_object', 'exception', 'cancel', 'reopen'] as const).map(category => ({ feature: 'F-001', category, disposition: 'unresolved', reason: '需要核对', source: expected }))
   const briefHash = prdScopeFingerprint(readPrdBackplane(project.project_id)); await freeze(); writeFileSync(join(project.root_path, 'index.html'), html(false))
@@ -136,7 +136,7 @@ it('wrong or unknown business expectations remain disputes, are not executed and
   expect(result.independent?.case_results?.[0]).toMatchObject({ status: 'not_run', kind: 'semantic', steps: [] })
   expect(readQualityLedger(project.project_id).findings[0].disposition).toBe('disputed')
   const model = vi.fn(async function* () { throw Error('A must not implement disputed expectations') })
-  await enterDesktopLine({ projectId: project.project_id, sessionId: 's', requestId: 'new', content: '继续', maxTokens: 4096, signal: ctx().signal }, model, { ANTHROPIC_MODEL: 'model-a' }, { publish: () => {}, persistAssistant: () => {}, persistSystem: () => {}, complete: () => {} })
+  await enterDesktopLine({ projectId: project.project_id, sessionId: 's', requestId: 'new', redesignIndependentCases:true, content: '继续', maxTokens: 4096, signal: ctx().signal }, model, { ANTHROPIC_MODEL: 'model-a' }, { publish: () => {}, persistAssistant: () => {}, persistSystem: () => {}, complete: () => {} })
   expect(model).not.toHaveBeenCalled(); expect(calls).toBe(1)
   expect(findProject(project.project_id).current_stage).toBe('generating_mvp')
   expect(findProject(project.project_id).desktop_blocked?.note).toContain('工程处理阶段')
@@ -181,7 +181,8 @@ it.each(['isolated_local','controlled_service'])('does not close a failure from 
   await recordIndependentFindings(project.project_id,{source:{digest:identity.source}} as never,
     {...result,status:'failed',case_results:[{...row,status:'failed',kind:'product_assertion',steps:[{id:'step',passed:false}]}]} as never,false)
   expect(readQualityLedger(project.project_id).findings).toHaveLength(2)
-  await recordIndependentFindings(project.project_id,{source:{digest:identity.source}} as never,result as never,true)
+  // A repaired case closes even while an unrelated case is still pending.
+  await recordIndependentFindings(project.project_id,{source:{digest:identity.source}} as never,{...result,status:'unverified'} as never,false)
   expect(readQualityLedger(project.project_id).findings.map(f=>f.disposition)).toEqual(['confirmed','closed'])
   if(mode==='controlled_service')row.environment.configuration_digest='previous-config'
   else delete (row as {environment?:unknown}).environment

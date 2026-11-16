@@ -33,8 +33,11 @@ import { capabilityBindingVersion } from './capability-bindings'
 import { recordIndependentFindings, independentChallengeVersion } from './independent-quality'
 import { hasReusableMicrophoneEvidence, microphoneEvidenceVersion, type SpeechVerificationSpec } from '../desktop/speech-verification'
 import { settleObservedQuality } from './quality-settlement'
+import {assessCandidateRequirements,type RequirementAssessment} from './requirement-assessment'
 
 export interface SoftwareVerification { status: 'passed' | 'failed' | 'unverified' | 'environment_blocked'; summary: string; candidate?: SoftwareRelease;
+  requirements?: RequirementAssessment[]
+  evidence_valid?: boolean
   completed_at?:number
   input_identity?: {source:string;scope:string;rules:string;environment:string;request_id:string;operation_id?:string}
   native_plan?: { suite_hash: string; execution: 'not_started' | 'attempted' }
@@ -183,16 +186,20 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
     const core = result.core = await runCoreVerification({ projectId, sandboxRoot: candidate.root, signal })
     const localPending = core.local_status === 'passed' && core.distribution?.status === 'environment_blocked'
     const userPending = awaitingUserChecks(core)
-    if (core.status !== 'passed' && !localPending && !userPending) { result.status = core.status; result.summary = [core.summary, ...core.missing].join('\n'); return result }
-    const independent = result.independent = await verifyIndependentDesign(projectId,candidate,signal,core)
-    if(independent.status!=='disabled'&&independent.status!=='passed'){
+    const coreReady=core.status==='passed'||localPending||userPending
+    let independent: Awaited<ReturnType<typeof verifyIndependentDesign>>|undefined
+    if(coreReady){
+      try { independent=result.independent=await verifyIndependentDesign(projectId,candidate,signal,core) }
+      catch(error){signal?.throwIfAborted();independent=result.independent={status:'unverified',error:String(error)}}
+    }
+    if(!coreReady){result.status=core.status;result.summary=[core.summary,...core.missing].join('\n')}
+    if(independent&&independent.status!=='disabled'&&independent.status!=='passed'){
       result.status = independent.status
       result.summary = independent.semantics?.ready === false ? '独立案例的预期或覆盖仍需核对。'
         : independent.status === 'failed' ? '独立验收发现实际行为未达到预期。'
-        : independent.case_results?.some(row=>row.kind==='environment')
+        : independent.error&&!independent.case_results?.length||independent.case_results?.some(row=>row.kind==='environment')
           ? '独立验收环境尚未就绪：'+(independent.error??'请准备声明的服务依赖。')
           : '独立验收未完成，请查看执行记录。'
-      if(independent.status==='failed')return result
     }
     const launch = result.launch = await runLaunchSmoke(candidate.root, { signal, allowCleanExit: candidate.launch.mode === 'command',projectId })
     const brief = readPrdBackplane(projectId), windowReady = brief.lean_brief?.ui !== 'required'
@@ -200,14 +207,14 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
       || launch.criteria && !launch.criteria.degraded && launch.criteria.window_found && launch.criteria.responsive && launch.criteria.stable && launch.criteria.closed_gracefully
     if (!launch.passed || !windowReady) {
       result.launch = { ...launch, passed: false }
-      result.status = 'unverified'
+      result.status = result.status==='failed'?'failed':'unverified'
       result.summary = `正常启动未通过：${launch.detail}${launch.outputExcerpt?'\n'+launch.outputExcerpt.slice(-4000):''}`
       return result
     }
     await verifyReleaseSource(candidate, signal)
     if ((await verificationInputs(projectId, requestId, signal)).key !== version.key) throw Error('SOFTWARE_VERIFY_INPUT_CHANGED')
     // An unconfigured B adapter must not suppress independent launch evidence.
-    if(independent.status==='unverified')return result
+    if(!coreReady||independent?.status==='unverified'||independent?.status==='failed')return result
     result.status = userPending ? 'unverified' : localPending ? 'environment_blocked' : 'passed'
     result.summary = userPending ? '自动检查已完成，请在“继续验收”中完成麦克风实测。'
       : localPending ? core.distribution!.detail : '当前候选已登记的本机案例、安全静态检查与正常启动通过；完整实现和真实模型效果尚未由这些检查评定。'
@@ -216,25 +223,27 @@ export async function verifySoftwareCandidate(projectId: string, requestId: stri
     signal?.throwIfAborted(); result.status = 'unverified'; result.summary = error instanceof Error ? error.message : String(error); result.failure = verificationFailure(result, error); return result
   } finally {
     try {
-    if (signal?.aborted) { result.status = 'unverified'; result.summary = '验证已取消，当前通过凭据未生效。' }
+    if (signal?.aborted) { result.evidence_valid=false;result.status = 'unverified'; result.summary = '验证已取消，当前通过凭据未生效。' }
     if (result.independent && result.candidate && !signal?.aborted && result.independent.status !== 'disabled') {
       try {
         await verifyReleaseSource(result.candidate, signal)
         if (!version || (await verificationInputs(projectId, requestId, signal)).key !== version.key) throw Error('INDEPENDENT_FINDING_INPUT_CHANGED')
         await recordIndependentFindings(projectId, result.candidate, result.independent, result.status === 'passed', signal)
-      } catch (error) { result.status = 'unverified'; result.summary = String(error) }
+      } catch (error) { result.evidence_valid=false;result.status = 'unverified'; result.summary = String(error) }
     }
     result.failure ??= verificationFailure(result)
-    if (result.candidate && !signal?.aborted && ['passed','failed'].includes(result.status)) {
+    if (result.candidate && !signal?.aborted) {
       try {
         await verifyReleaseSource(result.candidate, signal)
         if (!version || (await verificationInputs(projectId, requestId, signal)).key !== version.key) throw Error('QUALITY_SETTLEMENT_INPUT_CHANGED')
+        if(result.evidence_valid!==false)result.evidence_valid=true
         await settleObservedQuality(projectId, result, signal, qualityIdentityForInputs(projectId,version.input_identity))
-      } catch (error) { result.status = 'unverified'; result.summary = String(error); result.failure = verificationFailure(result, error) }
+      } catch (error) { result.evidence_valid=false;result.status = 'unverified'; result.summary = String(error); result.failure = verificationFailure(result, error) }
     }
     // Even cancellation/write failure invalidates an older PASS. No result may
     // outlive changed rule, fixture, environment, binary or source inputs.
     result.completed_at=Date.now()
+    if(result.candidate)result.requirements=assessCandidateRequirements(readPrdBackplane(projectId).requirements.map(row=>row.id),result)
     const eligible = result.status === 'passed' && !result.security?.issues.some(issue => issue.category === 'external_resource')
     const resultHash=digest(result)
     writeTextFileAtomic(file, JSON.stringify({ version: 1, state: 'complete', key: version?.key ?? '', at: Date.now(), result, result_hash: resultHash, reusable:Boolean(version?.reusable&&eligible) } satisfies Receipt))

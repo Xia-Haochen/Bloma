@@ -132,6 +132,7 @@ export function buildProductionContextTool(projectId: string): AgentLoopTool {
           catch { registrationError='已登记规则无法读取；保留原文件，先核对诊断。协议说明仍可读取。' }
           return { output: JSON.stringify({ launch: SOFTWARE_LAUNCH_GUIDANCE, protocol: '界面测试可直接verify_app({script:"tests/acceptance.mjs"})，不必展开动作表；使用模块参数提供的test/expect/assert。旧steps+acceptance_refs仍兼容，kind不是action，精确预期填equals。开发观察不等于验收。CLI仍用register_cli_check固定args/stdout/exit_code和任务单expectations。',
             native_tests: {call:'verify_app({script:"tests/acceptance.mjs"})',
+              repair:'后续直接修改当前测试并 verify_app()。定位和等待按适配规则登记；其他修订由宿主自动封存、隔离执行并独立裁定，保留已确认业务预期。拒绝后按具体原因修改，不需要另外管理修订协议。',
               example:'export default async({test,page,context,app,expect,assert,dataDir,phase})=>{ await test("F-001 主路径",async()=>{await page.locator("#input").fill("已确认输入");await page.locator("#save").click();await expect(page.locator("#result")).toHaveText("已确认预期")}) }',
               wait:'page.waitForFunction(fn, arg, options) 的超时填第三个参数，例如 page.waitForFunction(()=>document.querySelector("#status")?.textContent==="完成", null, {timeout:30000})。第二个参数是传给页面函数的数据。',
               append:'保留已冻结入口与依赖。将新增案例放在单独的 default 导出模块。组合入口仅导入旧入口和新模块，随后原样顺序调用：import prior from "./acceptance.mjs"; import added from "./additional.mjs"; export default async(ctx)=>{await prior(ctx);await added(ctx)}。用 verify_app({script:"tests/combined.mjs"}) 登记并执行组合入口；沿用原套件的 restart 设置。',

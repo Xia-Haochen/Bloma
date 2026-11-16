@@ -421,7 +421,8 @@ it('feeds rejected semantic corrections into the existing guard despite unrelate
  const feedback=testCorrectionRejectionFeedback(p.project_id)!,guard=createProtocolFailureGuard()
  const call={name:'__host_after_tools_verification',turn:1,status:'error' as const,failureKey:toolFailureKey('host',formatToolFeedback(feedback,''))}
  expect(guard([call])).toBeUndefined();expect(guard([{name:'write_file',turn:2,status:'ok'}])).toBeUndefined()
- expect(guard([call])).toBeUndefined();expect(guard([call])).toMatchObject({count:3})
+ for(let count=2;count<8;count++)expect(guard([call])).toBeUndefined()
+ expect(guard([call])).toMatchObject({count:8})
 })
 it('makes a pending complete candidate readable without treating it as an approved baseline',()=>{
  writeFileSync(join(p.root_path,'acceptance.mjs'),original+'\n// candidate')

@@ -50,7 +50,7 @@ export function recordSoftwareRepair(input: { projectId: string; sessionId: stri
   const previous = readSoftwareRunState(input.projectId), operation = findProject(input.projectId).lean_operation_id
   const normalized = serializeRedactedJson({ error: input.error, observations: input.observations ?? null },redactSoftwareOutput)
     .split(input.candidateId ?? '[no-candidate]').join('[candidate]')
-  const signature = createHash('sha256').update(input.failureFingerprint ?? normalized).digest('hex')
+  const signature = createHash('sha256').update(JSON.stringify({source:input.source??null,observation:input.failureFingerprint??normalized})).digest('hex')
   const prior = previous && previous.operationId === operation ? previous.failure : undefined
   const repeats = prior?.runId === input.runId && prior.signature === signature ? prior.repeats + 1 : 1
   const state = saveSoftwareRunState({ ...input, status: 'repairing' })

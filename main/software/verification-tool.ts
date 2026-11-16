@@ -11,9 +11,13 @@ import { requireLaunchDeclaration } from '../desktop/launch-smoke'
 import { readPrdBackplane } from '../project/prd-store'
 import { assertSoftwareDelivery } from './launch-contract'
 import { verificationResponse,verificationToolFeedback } from './verification-report'
+import {existsSync,readFileSync} from 'node:fs'
+import {guiSuitePath,parseGuiSuite} from '../desktop/gui-acceptance'
+import {NativeTestContractError} from './native-gui-tests'
+import {proposeTestTransaction} from './test-corrections'
 
 export function buildSoftwareVerifyTool(projectId: string, policy: ReturnType<typeof createSoftwareCollaborationPolicy>, previewChanged?: (url?: string) => void, beforeVerify?:(ctx:import('../agent/loop/agent-loop').ToolContext)=>Promise<void>): AgentLoopTool {
-  return { name: 'verify_app', description: '运行当前程序的正式检查。用script登记或追加GUI案例，产品变更后无参数复验。案例名含F编号，restart=true执行initial和reopened。保留已冻结的业务输入和断言；追加与定位适配见read_production_context(topic=verification-gui)。按failure和quality处理返回的待办，宿主负责交付。',
+  return { name: 'verify_app', description: '运行当前程序的正式检查。首次用script登记GUI案例，后续修改程序或测试后无参数复验；宿主自动登记适配并审查需要裁定的测试修订。案例名含F编号，restart=true执行initial和reopened。保留已确认业务预期。按requirements、failure和quality处理具体待办，宿主负责交付。',
     input_schema: { type: 'object', additionalProperties: false, properties: { force: { type: 'boolean', description: '只在确需强制重新实测时为true。' },
       script:{type:'string',description:'项目内应用测试，自动冻结并实际验收，无需动作表。使用参数提供的test(node:test API)、expect/assert和page；业务测试名包含单个需求F编号。'},restart:{type:'boolean',description:'按initial/reopened两次执行，实际关闭并重开应用；reopened分支也会自动识别。'} } },
     execute: async (input, ctx) => {
@@ -28,9 +32,22 @@ export function buildSoftwareVerifyTool(projectId: string, policy: ReturnType<ty
         if(input.script===undefined&&input.restart!==undefined)throw Error('SOFTWARE_VERIFY_INPUT_INVALID: restart与script一起提供')
         const launch = requireLaunchDeclaration(findProject(projectId).root_path,'SOFTWARE_VERIFY_CONFIRMED_ENTRY_REQUIRED')
         assertSoftwareDelivery(readPrdBackplane(projectId), launch)
-        applyApprovedNativeCorrections(projectId,ctx.signal)
-        if(input.script!==undefined){if(typeof input.script!=='string'||input.restart!==undefined&&typeof input.restart!=='boolean')throw Error('GUI_NATIVE_INPUT_INVALID');registerNativeGuiTests(projectId,input.script,input.restart===true)}
         await closeDebugSessions(projectId, ctx.sessionId); await stopSoftwareSession(projectId, ctx.sessionId); previewChanged?.()
+        applyApprovedNativeCorrections(projectId,ctx.signal)
+        const previous=existsSync(guiSuitePath(projectId))?parseGuiSuite(JSON.parse(readFileSync(guiSuitePath(projectId),'utf8'))).native_tests:undefined
+        const script=input.script??(previous&&(previous.layout==='project'?previous.entry:previous.directory+'/'+previous.entry))
+        if(script!==undefined){
+          if(typeof script!=='string'||input.restart!==undefined&&typeof input.restart!=='boolean')throw Error('GUI_NATIVE_INPUT_INVALID')
+          try{registerNativeGuiTests(projectId,script,input.restart===undefined?previous?.restart??false:input.restart===true)}
+          catch(error){
+            if(!(error instanceof NativeTestContractError)||!beforeVerify||!error.readOriginal||!error.correctionEntry)throw error
+            proposeTestTransaction(projectId,{contract_digest:error.readOriginal.arguments.contract_digest,
+              script:error.correctionEntry,reason:'verify_app发现当前测试修订，宿主核对确认预期、隔离执行并复验。'})
+            await beforeVerify(ctx)
+            applyApprovedNativeCorrections(projectId,ctx.signal)
+            registerNativeGuiTests(projectId,script,input.restart===undefined?previous?.restart??false:input.restart===true)
+          }
+        }
         await beforeVerify?.(ctx)
         attempted=true
         const result = await verifySoftwareCandidate(projectId, ctx.requestId, ctx.signal, input.force === true)

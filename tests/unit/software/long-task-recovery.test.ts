@@ -167,12 +167,13 @@ it.each([{ values: [0, 1, 2, 5], completed: true }, { values: [0, 0, 0, 0], comp
   else expect(readSoftwareRunState(project.project_id)).toMatchObject({ status: 'blocked', failure: { repeats: 3 } })
 }, 150000)
 
-it('counts the same host failure across changing report metadata and resets only for a different observation', () => {
+it('stops unchanged reruns but allows an actual source revision or changed observation within the same budget', () => {
   const project=createProject({request_id:'c',mode:'quick'},{workflowVersion:'software-v1'})
   const base={projectId:project.project_id,sessionId:'s',runId:'r',failureFingerprint:'same-observed-assertion'}
   expect(recordSoftwareRepair({...base,error:'report A at time 1',source:'revision1'}).repeats).toBe(1)
-  expect(recordSoftwareRepair({...base,error:'report B at time 2',source:'revision2'}).repeats).toBe(2)
-  expect(recordSoftwareRepair({...base,error:'report C at time 3',source:'revision3'})).toMatchObject({repeats:3,allowed:false})
+  expect(recordSoftwareRepair({...base,error:'report B at time 2',source:'revision1'}).repeats).toBe(2)
+  expect(recordSoftwareRepair({...base,error:'report C at time 3',source:'revision1'})).toMatchObject({repeats:3,allowed:false})
+  expect(recordSoftwareRepair({...base,error:'report C at time 4',source:'revision2'})).toMatchObject({repeats:1,allowed:true,total:4})
   expect(recordSoftwareRepair({...base,error:'report D',failureFingerprint:'actual-result-changed'})).toMatchObject({repeats:1,allowed:true})
 })
 

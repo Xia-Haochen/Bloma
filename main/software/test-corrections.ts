@@ -182,7 +182,7 @@ export function testCorrectionFacts(id:string){
   return{pending,count:rows.length,
     proposals:rows.slice(-3).map(p=>({id:p.id,status:p.status,applied_at:p.applied_at,
       decision:p.decision&&{reviewer:p.decision.reviewer,at:p.decision.at,reason:p.decision.reason.slice(0,1200),truncated:p.decision.reason.length>1200}})),
-    next:pending?'等待宿主独立裁定。':latest?.status==='rejected'?'按最近拒绝原因修改草稿，再提交 propose_test_correction；重跑 verify_app 无法应用未获批准的草稿。':latest?.status==='approved'?'由宿主应用已批准的修订并接续正式检查。':undefined,
+    next:pending?'等待宿主独立裁定。':latest?.status==='rejected'?'按最近拒绝原因修改草稿，再 verify_app；正常制作流程会自动提交变化后的修订供宿主裁定。原样重跑不会批准被拒绝的草稿。':latest?.status==='approved'?'由宿主应用已批准的修订并接续正式检查。':undefined,
     details:{tool:'read_test_contract',arguments:{}},authority:'以下状态以当前冻结契约的宿主台账为准。'}
 }
 /** Exact, host-owned inputs for a separate adjudication. No maker conversation. */

@@ -5,6 +5,14 @@ const state=vi.hoisted(()=>({ledger:{version:1,reviews:[],findings:[]} as any,sa
 vi.mock('../../../main/software/quality-ledger',()=>({applicableQualityLedger:()=>state.ledger,qualityFailureBaseline:(f:any)=>f.checks.filter((c:any)=>c.outcome==='failed'&&(f.independent||c.grounded)).at(-1),qualityIdentity:async()=>({source:'new',target:'goal',environment:'env'}),qualityRulesVersion:()=> 'rules',readQualityLedger:()=>state.ledger,saveQualityLedger:state.save,sameIdentity:(a:any,b:any)=>JSON.stringify(a)===JSON.stringify(b)}))
 vi.mock('../../../main/software/process-manager',()=>({redactSoftwareOutput:(s:string)=>s}))
 const result=()=>({status:'passed',candidate:{id:'candidate',source:{digest:'new'}},core:{host_cli:{cases:[{name:'sum',covers:['F-001'],passed:true,exit_code:0}]}}} as any)
+it('closes an actually repaired bound defect while unrelated acceptance preparation is pending',async()=>{
+ const r=result()
+ r.status='unverified'
+ r.independent={status:'unverified',error:'another feature needs a service'}
+ await settleObservedQuality('p',r)
+ expect(state.ledger.findings[0].disposition).toBe('closed')
+ expect(state.ledger.findings[0].checks.at(-1)).toMatchObject({outcome:'passed',case_name:'sum',candidate:'candidate'})
+})
 beforeEach(()=>{state.save.mockClear();state.ledger={version:1,reviews:[],findings:[{id:'finding',requirement:'F-001',disposition:'confirmed',checks:[{identity:{source:'old',target:'goal',environment:'env'},rules:'rules',case_name:'sum',grounded:true,outcome:'failed'}]}]}})
 it('preserves real campus suspicions when the old registered suite passes without a scenario binding',async()=>{
  state.ledger.findings=structuredClone(campus.findings)
@@ -25,7 +33,7 @@ it.each(['rules','unbound','missing','duplicate','incomplete','independent','dis
  if(kind==='unbound')f.checks=[]
  if(kind==='missing')r.core.host_cli.cases=[]
  if(kind==='duplicate')r.core.host_cli.cases.push({...r.core.host_cli.cases[0]})
- if(kind==='incomplete')r.status='unverified'
+ if(kind==='incomplete'){r.status='unverified';r.core.host_cli.cases[0].exit_code=null}
  if(kind==='independent')f.independent={case_id:'sum'}
  if(kind==='disputed')f.disposition='disputed'
  const before=JSON.stringify(state.ledger)

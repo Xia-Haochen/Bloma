@@ -7,7 +7,7 @@ import type { SoftwareVerification } from './verification'
 /** Called only by the verifier after validating its execution inputs. Reuse the
  * original case binding, never guess reproduction coverage from a feature ID. */
 export async function settleObservedQuality(projectId: string, result: SoftwareVerification, signal?: AbortSignal, validatedIdentity?: import('./quality-ledger').Identity) {
-  if (!result.candidate || !['passed','failed'].includes(result.status)) return
+  if (!result.candidate) return
   const ledger = readQualityLedger(projectId)
   if(!ledger.findings.some(f=>!f.independent&&(f.checks.length||f.retest)&&!['suggestion','disputed','superseded'].includes(f.disposition)))return
   const current = validatedIdentity ?? await qualityIdentity(projectId, signal), rules = qualityRulesVersion(projectId)
@@ -19,7 +19,7 @@ export async function settleObservedQuality(projectId: string, result: SoftwareV
     const baseline = qualityFailureBaseline(finding), binding = findingCaseBinding(finding,current,rules)
     if (!binding || binding.rules !== rules) continue
     const outcome = observedQualityFinding(result, finding, binding.case_name)
-    if (outcome === 'unverified' || outcome === 'passed' && result.status !== 'passed') continue
+    if (outcome === 'unverified') continue
     const last = finding.checks.at(-1)
     if (last?.grounded && last.candidate === result.candidate.id && last.outcome === outcome && last.rules === rules && last.case_name === binding.case_name && sameIdentity(last.identity, current)) continue
     finding.checks.push({ grounded:Boolean(finding.retest&&binding===finding.retest || baseline?.grounded), at: new Date().toISOString(), identity: current, rules, case_name: binding.case_name,

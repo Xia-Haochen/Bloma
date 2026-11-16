@@ -169,7 +169,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     await reviewPendingTestCorrections({projectId:input.projectId,sessionId:input.sessionId,query:correctionQuery,env:input.env,maxTokens:input.maxTokens,signal:reviewSignal})
     return applyApprovedNativeCorrections(input.projectId,reviewSignal)
   }
-  const recoveredTests=await settleCorrections(signal)
+  const recoveredTests=applyApprovedNativeCorrections(input.projectId,signal)
   const brief = readPrdBackplane(input.projectId), scope = prdScopeFingerprint(brief)
   if(!isSoftwareProject(input.projectId))throw Error('SOFTWARE_WORKFLOW_REQUIRED')
   const continuation=/^(?:继续(?:完成原任务)?|恢复|验收|重新验收|运行验收|按已确认目标制作|开始桌面交付流程)[。！!\s]*$/.test(input.content.trim())
@@ -310,13 +310,17 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
       emit('message_delta',{text:'当前金额保护无法放行新的模型请求；已有冻结测试，我先停止模型调用，执行免费的宿主验收。只有实际通过才交付。'})
     }
   }
-  if ((!initialBudgetStop)) {
+  let independentPrepared=false
+  const ensureIndependentDesign = async () => {
+    if(independentPrepared || initialBudgetStop)return
+    independentPrepared=true
     const policy = readIndependentPolicy(input.projectId)
     const shared = !!policy?.enabled && 'funding' in policy
     let design = await prepareIndependentDesign({projectId:input.projectId,sessionId:input.sessionId,query:input.query,primaryEnv:input.env,maxTokens:input.maxTokens,signal,redesign:input.redesignIndependentCases})
     // Format and business semantics can fail successively. Keep both repairs
     // within this request, charged to the existing budget, and stop on no progress.
     for (let repair = 0; shared && repair < 2; repair++) {
+      if(repair>0 && /INDEPENDENT_CORRECTION_(INVALID|REVIEW_REQUIRED)/.test(design.reason??''))break
       const formatFailure = /INDEPENDENT_(?:JSON_INVALID|CASES_(?:INVALID|TOO_LARGE)|CASE_INVALID|BASIS_INVALID|RELATED_INVALID|COVERAGE(?:_NOTES)?_INVALID|STEP_INVALID|ORACLE_INVALID)/.test(design.reason ?? '')
       const semantics = design.contract && (design.status==='frozen'||/^Error: INDEPENDENT_CORRECTION_(INVALID|REVIEW_REQUIRED):/.test(design.reason??''))
         && currentIndependentSemantics(input.projectId, design.contract)
@@ -329,20 +333,25 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
       if (design.status === 'frozen' && design.digest === previous.digest) break
     }
     if (design.status === 'blocked') {
-      if (input.redesignIndependentCases && !signal.aborted) {
-        const prior = readIndependentDesign(input.projectId)
-        if (prior?.contract) {
-          await waitForIndependentDesign(currentIndependentSemantics(input.projectId, prior.contract), '这次重新设计未生成可用案例。')
-          return
-        }
-      }
-      blocked(`独立验收设计尚未就绪：${design.reason}`)
-      return
+      recordEvaluationEvent(input.projectId,'acceptance_preparation_pending',{reason:design.reason})
+      emit('message_delta',{text:'验收准备仍有待处理项，已保存具体原因和现有候选。'})
     }
     if(design.status==='frozen'&&design.contract){
       const semantics=currentIndependentSemantics(input.projectId,design.contract)
-      if (!semantics.ready) { await waitForIndependentDesign(semantics); return }
+      if (!semantics.ready) await recordIndependentDisputes(input.projectId, semantics, signal)
     }
+  }
+  if(input.redesignIndependentCases){
+    await ensureIndependentDesign()
+    const design=readIndependentDesign(input.projectId)
+    if(design?.contract){
+      const assessment=currentIndependentSemantics(input.projectId,design.contract)
+      if(!assessment.ready){await waitForIndependentDesign(assessment,'这次重新设计未生成可用案例。');return}
+    }else if(design?.status==='blocked'){blocked('独立验收准备待处理：'+design.reason);return}
+  }
+  const beforeVerification = async (ctx: import('../agent/loop/agent-loop').ToolContext) => {
+    await ensureIndependentDesign()
+    await settleCorrections(ctx.signal)
   }
   if (!deps.coreVerification && !deps.securityScan && !deps.launchSmoke) assignment = beginProjectAssignment(input.projectId,input.sessionId,runId)
   checkpoint('running', { source: softwareVerificationFingerprint(project.root_path) })
@@ -370,7 +379,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
   }
   const query=quality.wrapQuery(guardedQuery,async signal=>{await settleCorrections(signal)})
   const baseTools = buildSoftwareAgentTools(input.projectId, 'parent', collaboration,
-    url => emit('software_preview_changed', { preview_url: url ?? null }), () => emit('software_suggestions_changed', {}),()=>emit('longterm_changed',{summary:findProject(input.projectId).longterm_summary}))
+    url => emit('software_preview_changed', { preview_url: url ?? null }), () => emit('software_suggestions_changed', {}),()=>emit('longterm_changed',{summary:findProject(input.projectId).longterm_summary}),undefined,undefined,beforeVerification)
   let scopePending = false
   const tools = productionAgentTools(baseTools, [
     ...quality.parentTools,
@@ -532,6 +541,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
             // A stale receipt is not a new implementation task. Observe the
             // registered current candidate first; only an actual gap returns
             // to the maker, including after a host/runtime upgrade.
+            await beforeVerification({projectId:input.projectId,sessionId:input.sessionId,requestId:input.requestId,signal:runSignal,state:createToolState()})
             const checked=await verifySoftwareCandidate(input.projectId,input.requestId,runSignal)
             if(checked.status==='passed')verified=checked;else task+='\n'+JSON.stringify(verificationResponse(input.projectId,checked))
           }
@@ -626,6 +636,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
         // The agent tool and final delivery share one verifier. Every fresh
         // attempt invalidates earlier receipts, including failures at closure.
         checkpoint('verifying', { source: softwareVerificationFingerprint(project.root_path) })
+        await beforeVerification({projectId:input.projectId,sessionId:input.sessionId,requestId:input.requestId,signal:runSignal,state:createToolState()})
         const checked = await verifySoftwareCandidate(input.projectId, input.requestId, runSignal)
         if (awaitingAssistedAcceptance(checked) && checked.candidate) {
           checkpoint('waiting_user',{candidateId:checked.candidate.id,source:checked.candidate.source.digest,
@@ -641,6 +652,11 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
             continue
           }
           await waitForIndependentDesign(checked.independent.semantics)
+          return
+        }
+        if(checked.evidence_valid&&checked.core?.status==='passed'&&checked.launch?.passed
+          &&checked.independent?.status==='unverified'&&!checked.independent.case_results?.length){
+          blocked('程序的本机检查和启动已通过，可以独立试用当前候选。宿主验收准备尚未完成：'+checked.independent.error+'。此项由宿主处理，不要求制作方为此修改业务功能。',false,'waiting_environment')
           return
         }
         failureCategory=checked.failure?.category??'unknown'

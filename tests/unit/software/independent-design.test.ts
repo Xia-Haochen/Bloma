@@ -85,7 +85,7 @@ it.each([true,false])('recovers the recorded voice disputes only after independe
       yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify(attempt)}]}}
     }
   }
-  await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'recover-real-record',content:'继续',maxTokens:8192,signal:controller.signal},
+  await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'recover-real-record',redesignIndependentCases:true,content:'继续',maxTokens:8192,signal:controller.signal},
     query,options.primaryEnv,{publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
   expect(proposals).toBe(2);expect(reviews).toBe(approve?1:2);expect(maker).toBe(approve?1:0)
   const current=readIndependentDesign(project.project_id)!
@@ -251,18 +251,33 @@ it('defaults new GUI projects to a separate design context on the current model 
  expect(leanBudget(project.project_id,'acceptance-design').snapshot().requests).toBe(before.requests+1)
  expect((await prepareIndependentDesign(options)).digest).toBe(result.digest);expect(calls).toBe(1)
 })
-it('freezes a fenced default B response through the normal production entry before the maker runs',async()=>{
+it('starts implementation before independent design when no candidate exists',async()=>{
  const options=sharedInput(() => '```json\n'+JSON.stringify(contract)+'\n```'),controller=new AbortController(),order:string[]=[]
  const routed:SDKQuery=async function*(prompt,settings){
   if(settings.accounting?.role==='acceptance_designer'){
    order.push('B');yield* options.query(prompt,settings);return
   }
-  order.push('A');expect(readIndependentDesign(project.project_id)?.status).toBe('frozen')
+  order.push('A');expect(readIndependentDesign(project.project_id)).toBeUndefined()
   controller.abort();return
  }
  await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'default-b',content:'按已确认目标制作',maxTokens:8192,signal:controller.signal},routed,options.primaryEnv,
   {publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
- expect(order).toEqual(['B','A']);expect(calls).toBe(1)
+ expect(order).toEqual(['A']);expect(calls).toBe(0)
+},60000)
+it('prepares independent design on the first maker verification, not before implementation',async()=>{
+ const options=sharedInput(),controller=new AbortController(),order:string[]=[]
+ writeFileSync(join(project.root_path,'LAUNCH.json'),JSON.stringify({schema_version:2,ui:'browser',command:['node','implementation.cjs'],url:'http://127.0.0.1:47891'}))
+ const routed:SDKQuery=async function*(prompt,settings){
+  if(settings.accounting?.role==='acceptance_designer'){
+   order.push('B');yield* options.query(prompt,settings);controller.abort();return
+  }
+  order.push('A');expect(readIndependentDesign(project.project_id)).toBeUndefined()
+  yield{type:'assistant',message:{role:'assistant',content:[{type:'tool_use',id:'first-verify',name:'verify_app',input:{}}]}}
+  yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
+ }
+ await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'on-demand',content:'按已确认目标制作',maxTokens:8192,signal:controller.signal},routed,options.primaryEnv,
+  {publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
+ expect(order).toEqual(['A','B']);expect(calls).toBe(1)
 },60000)
 it('retains a safe field diagnostic for invalid B output and freezes only a valid explicit retry', async () => {
   const invalid = structuredClone(contract)
@@ -318,7 +333,7 @@ it('resumes the same project from a concise B question through task confirmation
   expect(settings.accounting?.role).toBe('acceptance_designer')
   yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify(unresolved)}]}}
  }
- await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'default-dispute',content:'按已确认目标制作',maxTokens:8192,signal:AbortSignal.timeout(30000)},routed,options.primaryEnv,
+ await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'default-dispute',redesignIndependentCases:true,content:'按已确认目标制作',maxTokens:8192,signal:AbortSignal.timeout(30000)},routed,options.primaryEnv,
   {publish:()=>{},persistAssistant:(_session,text)=>messages.push(text),persistSystem:()=>{},complete:()=>{}})
  expect(findProject(project.project_id).current_stage,JSON.stringify(messages)).toBe('blocked_for_user_decision')
  expect(messages.join('\n')).toContain(last.oracle.question)
@@ -357,7 +372,7 @@ it('resumes the same project from a concise B question through task confirmation
      yield {type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify(next)}]}}
    } else {
      makerCalls++
-     expect(readIndependentDesign(project.project_id)?.scope).not.toBe(previous.scope)
+     expect(readIndependentDesign(project.project_id)?.scope).toBe(previous.scope)
      signal.abort()
    }
  }
@@ -384,6 +399,7 @@ it('resumes the same project from a concise B question through task confirmation
  const option = (decision.payload.questions as {id:string}[])[0]
  await handleLeanGuide({...send,request_id:'confirm',content:'按这份做',metadata:{source:'card_option',selected_option_id:option.id}},publish,guide)
  expect(readPrdBackplane(project.project_id).user_confirmed_at).toBeTruthy()
+ await prepareIndependentDesign({...options,query:sameModel,signal:new AbortController().signal,redesign:true})
  expect(readIndependentDesign(project.project_id)?.status).toBe('frozen')
  expect(readIndependentDesign(project.project_id)?.digest).not.toBe(previous.digest)
  expect(JSON.parse(readFileSync(join(home,'software-independent-design',project.project_id,previous.digest+'.json'),'utf8'))).toEqual(previous)
@@ -421,7 +437,7 @@ it('repairs engineering-only B gaps within the production request without questi
       yield {type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify(proposal)}]}}
     } else { makerCalls++; controller.abort() }
   }
-  await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'auto-repair',content:'继续',maxTokens:8192,signal:controller.signal},
+  await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'auto-repair',redesignIndependentCases:true,content:'继续',maxTokens:8192,signal:controller.signal},
     model,options.primaryEnv,{publish:()=>{},persistAssistant:(_s,text)=>messages.push(text),persistSystem:()=>{},complete:()=>{}})
   expect(designCalls).toBe(2)
   expect(makerCalls).toBe(1)
@@ -439,7 +455,7 @@ it('stops unchanged semantic proposals after one repair without starting impleme
     designCalls++
     yield {type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify(proposal)}]}}
   }
-  await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'no-progress',content:'继续',maxTokens:8192,signal:AbortSignal.timeout(30000)},
+  await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'no-progress',redesignIndependentCases:true,content:'继续',maxTokens:8192,signal:AbortSignal.timeout(30000)},
     model,options.primaryEnv,{publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
   expect(designCalls).toBe(2)
   expect(makerCalls).toBe(0)
@@ -468,7 +484,7 @@ it.each(['format-first', 'semantics-first'])('repairs successive format and sema
     }
     yield {type:'assistant',message:{role:'assistant',content:[{type:'text',text:JSON.stringify(proposal)}]}}
   }
-  await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'successive-repair',content:'继续',maxTokens:8192,signal:controller.signal},
+  await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'successive-repair',redesignIndependentCases:true,content:'继续',maxTokens:8192,signal:controller.signal},
     model,options.primaryEnv,{publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
   expect(designCalls).toBe(3)
   expect(makerCalls).toBe(1)
@@ -549,12 +565,12 @@ it('reports missing service preparation as an environment prerequisite before an
   expect(result.external_model_effects).toBe('unverified')
   expect(readIndependentDesign(project.project_id)?.digest).toBe(design.digest)
 })
-it('blocks the real production entry before implementer calls when required B capability is missing',async()=>{
-  configureIndependentPolicy(project.project_id,policy);const model=vi.fn(async function*(){throw Error('must not call implementer')})
+it('starts the maker even when independent preparation has no configured route',async()=>{
+  configureIndependentPolicy(project.project_id,policy);const model=vi.fn(async function*(){throw Error('observed implementer entry')})
   stageEvaluationRun(project.project_id,createEvaluationProtocol([{id:'names',goal:'保存姓名',delivery:'browser',requirements:[{description:'保存姓名',expected:'保存Alice显示Alice'}],constraints:[],out_of_scope:[]}]),'names','independent','production-staged')
   await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'r',content:'按已确认目标制作',maxTokens:1024,signal:AbortSignal.timeout(30000)},model,{ANTHROPIC_MODEL:'model-a'},
     {publish:vi.fn(),persistAssistant:vi.fn(),persistSystem:vi.fn(),complete:vi.fn()})
-  expect(model).not.toHaveBeenCalled();expect(findProject(project.project_id).desktop_blocked?.note).toContain('INDEPENDENT_CAPABILITY_MISSING')
+  expect(model).toHaveBeenCalledTimes(1);expect(readIndependentDesign(project.project_id)).toBeUndefined()
   expect(JSON.parse(readFileSync(join(home,'harness-evaluation',project.project_id,'binding.json'),'utf8')).run_id).toBe('production-staged')
 })
 it('routes one bounded no-tools design before implementation, freezes business values and reuses them without another model call',async()=>{

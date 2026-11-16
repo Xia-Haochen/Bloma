@@ -169,9 +169,10 @@ export async function recordIndependentFindings(projectId: string, candidate: So
     finding.checks.push({ at: new Date().toISOString(), identity, case_name: observed.id, rules: result.design_version, outcome, report: result.report_path, candidate: candidate.id,
       observation: serializeRedactedJson({ case: observed, overall_passed: canClose, scope: mode==='controlled_service'?'frozen_independent_case_with_controlled_service':'frozen_independent_business_case' },redactSoftwareOutput) })
     if (outcome === 'failed') finding.disposition = 'confirmed'
-    else if (outcome === 'passed' && baseline && canClose) finding.disposition = 'closed'
+    else if (outcome === 'passed' && baseline) finding.disposition = 'closed'
     else if (!baseline) finding.disposition = observed.kind === 'semantic' ? 'disputed' : outcome === 'passed' ? 'not_reproduced' : 'suspected'
-    // A pass before all required verification finishes is retained, not closed.
+    // Closure belongs to this exact case, environment and current candidate.
+    // Other pending checks still block overall delivery, not this repaired defect.
   }
   saveQualityLedger(projectId, ledger)
 }
