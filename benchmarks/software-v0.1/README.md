@@ -5,7 +5,7 @@
 ## 组员开始前
 
 1. 使用包内 tasks.json、inputs 和对应任务书。核对 MANIFEST.json，运行 node tools/bench.mjs verify-pack。
-2. 制作模型已确认为 deepseek-flash、高思考，具体参数见MODEL-CONFIG.md。全组在包外填写同一份 study.json，补齐模型实际版本、上下文与输出上限、机器、OS、运行时、权限和预装组件。init会复制模板到结果目录，开跑前用统一已填写的版本替换。模型无法锁定的产品另列 P 赛道。
+2. 制作模型与业务模型均已固定为 deepseek-flash、高思考，具体参数见MODEL-CONFIG.md和study.json。init会复制统一配置与run-environment模板到结果目录；组员填写实际Agent版本、机器、公共资源路径、设备及脱敏请求证据。模型无法锁定的产品另列 P 赛道。
 3. 每个任务使用新的 Agent 会话、空项目和空数据目录。只把 participant 内该任务的任务书与 inputs 给 Agent。tools、evaluator、calibration、results 放在被测工作区外。
 4. 录屏覆盖需求提交、必要确认、关键故障和最终交付。同步保存完整会话导出、工具记录、调用用量及时间线。
 5. 原样发送任务书。允许固定确认、配置凭据、读标准句子。所有额外提示、代改文件、人工排障都记录到 interventions.json。
@@ -42,7 +42,7 @@ controlled-service 的鉴权值为公开测试值 benchmark-test-key，模型名
 
 ## 每次必须交回的资料
 
-- study.json 与机器环境说明。
+- study.json、run-environment.json 与机器环境说明。
 - 原始完整对话导出、工具调用记录、开始结束时间、暂停区间。
 - 主模型及子 Agent 的模型/推理配置、token 用量与可核实费用。
 - 截止时产品源码、启动说明、依赖锁文件、可运行包及 artifact-manifest.json。
@@ -57,4 +57,4 @@ controlled-service 的鉴权值为公开测试值 benchmark-test-key，模型名
 
 SCORING.md、tasks.json、输入与验收步骤通过 MANIFEST.json 固定。CALIBRATION.md 明确哪些自动判据已通过正反例校准，哪些依赖现场人工证据。人工表格中的示范数据只用于评判器校准。实际参赛成品仍须完成全套验收。
 
-评分冻结与运行配置登记是两件事。study.json 的待填项完成前不能开始可比较试验。原始语音任务属于开发任务，另外两项作为初始未调参任务。
+评分与共同条件已冻结。run-environment.json的现场登记完成后开始试验；运行开始时它与study.json一起绑定哈希，不能事后改写运行条件。原始语音任务属于开发任务，另外两项作为初始未调参任务。reference-evidence只供负责人和评估者校准，不能交给制作Agent。

@@ -25,6 +25,7 @@ if(action==='verify-pack'){
     execution_status:'user_stopped',wall_seconds:0,cost_rmb:null,technical_interventions:0,artifact_sha256:null,observations:[]}
   writeFileSync(join(dir,'trial.json'),JSON.stringify(trial,null,2))
   writeFileSync(join(dir,'study.json'),readFileSync(join(root,'study.json')))
+  writeFileSync(join(dir,'run-environment.json'),readFileSync(join(root,'run-environment.template.json')))
   writeFileSync(join(dir,'checks.json'),JSON.stringify(task.checks.map(c=>({check_id:c.id,status:'unverified',expected:c.expected,evidence:[],reviewers:[],notes:''})),null,2))
   writeFileSync(join(dir,'interventions.json'),JSON.stringify({normal_participation:[],technical_help:[],paused_intervals:[]},null,2))
   const names={'equipment-lending':['equipment','equipment'],'document-batch-workflow':['documents','document'],'voice-conversation':['voice','voice']}
@@ -40,6 +41,20 @@ if(action==='verify-pack'){
   if(kind==='start'){
     const studyBytes=readFileSync(join(resolve(dir),'study.json'))
     assert.ok(!studyBytes.toString().includes('TO_BE_SET'),'fill the shared study first')
+    assert.equal(hash(studyBytes),hash(readFileSync(join(root,'study.json'))),'use the frozen shared study without per-run edits')
+    const study=JSON.parse(studyBytes)
+    const environmentBytes=readFileSync(join(resolve(dir),'run-environment.json'))
+    assert.ok(!environmentBytes.toString().includes('TO_BE_SET'),'record actual run environment first')
+    const environment=JSON.parse(environmentBytes)
+    assert.equal(environment.common_assets_verified,true,'verify common assets first')
+    if(study.track==='H'){
+      for(const [field,expected]of Object.entries({
+        effective_model_id:study.model_id,effective_thinking:study.thinking_type,
+        effective_reasoning_effort:study.reasoning_effort,
+        effective_context_limit:study.context_limit,effective_output_limit:study.output_limit
+      }))assert.equal(environment[field],expected,'configuration mismatch: '+field)
+    }
+    event.environment_sha256=hash(environmentBytes)
     event.study_sha256=hash(studyBytes)
     event.protocol_sha256=hash(readFileSync(join(root,'tasks.json')))
   }
@@ -74,6 +89,7 @@ if(action==='verify-pack'){
   const start=Date.parse(starts[0].at),stop=Date.parse(stops[0].at)
   assert.ok(Number.isFinite(start)&&Number.isFinite(stop)&&stop>=start)
   assert.equal(starts[0].study_sha256,hash(readFileSync(join(dir,'study.json'))),'study changed after start')
+  assert.equal(starts[0].environment_sha256,hash(readFileSync(join(dir,'run-environment.json'))),'run environment changed after start')
   assert.equal(starts[0].protocol_sha256,hash(readFileSync(join(root,'tasks.json'))),'protocol changed after start')
   let paused=0,last=start
   for(const interval of [...interventions.paused_intervals].sort((a,b)=>Date.parse(a.start)-Date.parse(b.start))){

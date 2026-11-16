@@ -1,0 +1,9 @@
+{
+  "at": "2026-11-16T06:17:30.280Z",
+  "provider": "https://api.deepseek.com",
+  "model": "deepseek-flash",
+  "thinking": "enabled",
+  "effort": "high",
+  "max_tokens": 4096,
+  "maximum_calls": 8
+}
