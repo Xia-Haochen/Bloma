@@ -2,10 +2,10 @@ import { deriveExpected } from './independent-oracles'
 import { createHash } from 'node:crypto'
 import type { PrdBackplane } from '../model/prd-backplane'
 import { requirementEvidenceHash, trustedAcceptance } from '../project/requirement-contract'
-import { requirementCapabilities } from '../model/requirement-capabilities'
+import { ACCEPTANCE_SCENARIOS, requirementCapabilities, type AcceptanceScenario } from '../model/requirement-capabilities'
 
-export const INDEPENDENT_CATEGORIES = ['normal', 'multi_object', 'exception', 'cancel', 'reopen'] as const
-export type IndependentCategory = typeof INDEPENDENT_CATEGORIES[number]
+export const INDEPENDENT_CATEGORIES = ACCEPTANCE_SCENARIOS
+export type IndependentCategory = AcceptanceScenario
 export type IndependentOracle = { kind: 'derived'; version: 1; rule_id: string; steps: number[] } | { kind: 'input'; step: number } | { kind: 'literal'; quote: string; feature?: string }
   | { kind: 'nonempty'; quote: string } | { kind: 'observed'; step: number }
   | { kind: 'unresolved'; question: string; decision?: { source: string; options: string[] } }
@@ -22,18 +22,9 @@ export interface IndependentSemantics { version: 1; digest: string; cases: Array
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const text = (value: unknown, max = 4000): value is string => typeof value === 'string' && value.length <= max
 const keys = (value: object, allowed: string[]) => Object.keys(value).every(key => allowed.includes(key))
-/** Conservative positive signals only, not a natural-language scope proof.
- * Explicit exclusions stay exclusions; an uncertain category remains declared. */
-function explicitlyRequested(source: string, category: IndependentCategory) {
-  const patterns: Record<IndependentCategory, RegExp> = { normal: /./, multi_object: /多对象|两(?:条|个|件|项)(?:记录|对象|物品|资料)|修改A.*B|A与B|A和B/, exception: /异常|无效|非法|错误|空(?:白|名称|输入|值)|失败|超库存/, cancel: /取消|撤销编辑|放弃.*编辑/, reopen: /重开|重新打开|重启|退出后.*(?:保留|恢复)/ }
-  return source.split(/[；;。!?！？\n]/).some(clause => !/不(?:要求|需要|支持|做)|无需|无须|不在范围|范围外/.test(clause) && patterns[category].test(clause))
-}
-
 export function independentCategoryRequested(brief: PrdBackplane, feature: string, category: IndependentCategory): boolean {
   const requirement = brief.requirements.find(row => row.id === feature)
-  return !!requirement && explicitlyRequested([
-    requirement.description, trustedAcceptance(brief, requirement), ...(requirement.behavior_assertions ?? []),
-  ].join('；'), category)
+  return Boolean(requirement && (category === 'normal' || requirement.acceptance_scenarios?.includes(category)))
 }
 
 /** Contains only a stable code and a schema path, never model response text. */
@@ -187,7 +178,7 @@ export function assessIndependentCases(brief: PrdBackplane, contract: Independen
     item.steps.forEach((step, index) => {
       if (step.kind === 'restart' && !item.steps.slice(index + 1).some(s => s.kind === 'expect' || s.kind === 'expect_audio')) issues.push('重开后缺少实际断言')
       if (step.kind === 'expect_audio') {
-        if (!expected?.includes(step.quote) || !/语音|音频|朗读|播放|声音|听到|有声/.test(step.quote)) issues.push('音频观察缺少当前确认需求中的朗读或播放依据')
+        if (!expected?.includes(step.quote)) issues.push('音频观察缺少当前确认需求中的朗读或播放依据')
         if (!item.steps.slice(0, index).some(s => s.kind === 'speech_input' || s.kind === 'click')) issues.push('音频观察前须有实际触发操作')
       }
       if (step.kind !== 'expect') return
@@ -239,7 +230,7 @@ export function assessIndependentCases(brief: PrdBackplane, contract: Independen
     const outsideConfirmedScope = !requested && !hasCase && (!notes.length || valid)
     const status = ids.length && !notes.length ? 'declared_cases' as const : outsideConfirmedScope ? 'declared_not_applicable' as const
       : notes.length ? 'unresolved' as const : 'missing' as const
-    return { feature: requirement.id, category, status, cases: ids, reason: requested&&notes[0]?.disposition==='not_applicable'?'确认资料明确提及该类行为，不能仅凭B的不适用声明跳过':notes[0]?.reason }
+    return { feature: requirement.id, category, status, cases: ids, reason: requested&&notes[0]?.disposition==='not_applicable'?'当前任务单已声明该类验收场景，不能仅凭B的不适用声明跳过':notes[0]?.reason }
   }))
   return { version: 1, digest: hash({ contract, cases, coverage }), cases, coverage,
     ready: cases.every(c => c.status === 'grounded') && coverage.every(c => ['declared_cases', 'declared_not_applicable'].includes(c.status)) }

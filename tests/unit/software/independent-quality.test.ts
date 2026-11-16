@@ -48,7 +48,7 @@ function cancelA(){el('nameA').value=localStorage.getItem('A')||'';render()}rend
 beforeEach(async () => {
   previous = process.env.PROMA_HOME; home = mkdtempSync(join(tmpdir(), 'bloma-b-quality-')); process.env.PROMA_HOME = home; calls = 0
   project = createProject({ request_id: 'c', mode: 'quick' }, { workflowVersion: 'software-v1' })
-  const parsed = parseLeanBrief(JSON.stringify({ action: 'brief', goal: '双记录编辑保存', ui: 'required', delivery: 'browser', requirements: [{ description: '独立维护两条记录及取消、异常、重开', expected }] }), { projectId: project.project_id, sessionId: 's', source: '双记录', previous: readPrdBackplane(project.project_id), software: true })!
+  const parsed = parseLeanBrief(JSON.stringify({ action: 'brief', goal: '双记录编辑保存', ui: 'required', delivery: 'browser', requirements: [{ description: '独立维护两条记录及取消、异常、重开', expected, acceptance_scenarios: ['multi_object','exception','cancel','reopen'] }] }), { projectId: project.project_id, sessionId: 's', source: '双记录', previous: readPrdBackplane(project.project_id), software: true })!
   if (parsed.action !== 'brief') throw Error('fixture'); parsed.brief.lean_brief!.preview = 'skip'
   syncDocuments({ project_id: project.project_id, session_id: 's', request_id: 'sync', checkpoint: 'requirement_confirmed' }, parsed.brief)
   const brief = markPrdUserConfirmed(project.project_id)!, scope = prdScopeFingerprint(brief)

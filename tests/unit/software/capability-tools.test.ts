@@ -88,8 +88,8 @@ it('freezes release resource identity and environment independently of a later p
   const before=JSON.stringify(speechCapabilityBinding(project.project_id));expect(()=>bindSpeechCapability(project.project_id,{...first,manifest_sha256:'f'.repeat(64)})).toThrow('BINDING_CHANGED')
   expect(JSON.stringify(speechCapabilityBinding(project.project_id))).toBe(before)
 })
-it('binds explicit capability metadata, keeps textual speech obligations despite an empty model tag, and rejects unknown capabilities',()=>{
+it('keeps an explicit empty capability declaration and rejects unknown adapters',()=>{
   const parse=(capabilities:unknown)=>parseLeanBrief(JSON.stringify({action:'brief',goal:'文件转写',ui:'required',requirements:[{description:'音频文件转文字',expected:'显示实际识别的文字',capabilities}]}),{projectId:project.project_id,sessionId:'s',source:'文件转写',previous:readPrdBackplane(project.project_id),software:true})
-  const result=parse([]);expect(result?.action).toBe('brief');if(result?.action==='brief')expect(result.brief.requirements[0].capabilities).toEqual(['speech'])
+  const result=parse([]);expect(result?.action).toBe('brief');if(result?.action==='brief')expect(result.brief.requirements[0].capabilities).toEqual([])
   expect(parse(['unsupported-engine'])).toBeUndefined()
 })

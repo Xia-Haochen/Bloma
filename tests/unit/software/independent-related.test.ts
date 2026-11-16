@@ -54,7 +54,7 @@ it('disputes stale linked rules and refuses foreign feature references',()=>{
 
 it('uses the confirmed source feature for downstream text and the host probe for speech', () => {
   const task = bindAcceptance({ ...brief, requirements: [
-    { id: 'F-001', description: '采集用户语音并转写为文字', priority: 'P0' },
+    { id: 'F-001', description: '采集用户语音并转写为文字', capabilities: ['speech'], priority: 'P0' },
     { id: 'F-002', description: '整理文字', priority: 'P0' },
     { id: 'F-003', description: '把整理结果写入当前输入框', priority: 'P0' },
   ], acceptance: { 'F-001': '语音有对应转写', 'F-002': '输入「嗯，我到了」应显示「我到了」', 'F-003': '输入框收到整理结果' } })

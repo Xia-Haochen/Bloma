@@ -32,13 +32,17 @@ let home:string,old:string|undefined,project:ReturnType<typeof createProject>,po
 
 it.each([true,false])('recovers the recorded voice disputes only after independent correction approval (%s)',async approve=>{
   const fixture=JSON.parse(readFileSync(new URL('./fixtures/voice-independent-failure-20261115.json',import.meta.url),'utf8'))
-  expect(assessIndependentCases(fixture.brief,fixture.contract).ready).toBe(true)
-  const brief={...fixture.brief,project_id:project.project_id,lean_brief:{...fixture.brief.lean_brief,preview:'skip'}}
+  // Keep the historical fixture untouched. Replay its explicit capture
+  // requirement under today's declaration contract in the isolated project.
+  expect(assessIndependentCases(fixture.brief,fixture.contract).ready).toBe(false)
+  const brief={...fixture.brief,project_id:project.project_id,lean_brief:{...fixture.brief.lean_brief,preview:'skip'},
+    requirements:fixture.brief.requirements.map((row:{id:string})=>row.id==='F-001'?{...row,capabilities:['microphone']}:row)}
   syncDocuments({request_id:'recorded',project_id:project.project_id,session_id:'s',checkpoint:'requirement_confirmed'},brief)
   const confirmed=markPrdUserConfirmed(project.project_id)!,scope=prdScopeFingerprint(confirmed)
   updateProject(project.project_id,{ux_confirmation:{prd_fingerprint:scope,design_hash:scope,html_hash:null}})
   const original:IndependentCases=structuredClone(fixture.contract)
   for(const item of original.cases)item.basis!.requirement_hash=requirementEvidenceHash(confirmed,confirmed.requirements.find(row=>row.id===item.feature)!)
+  expect(assessIndependentCases(confirmed,original).ready).toBe(true)
   const options=sharedInput(()=>JSON.stringify(original))
   const frozen=await prepareIndependentDesign(options)
   for(const claim of fixture.challenges)await challengeIndependentCase(project.project_id,{case_id:claim.case_id,reason:claim.reason,evidence:claim.evidence})

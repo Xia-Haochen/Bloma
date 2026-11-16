@@ -401,7 +401,7 @@ async function runLeanProductionInner(input: DesktopRouteInput, deps: DesktopRou
     ux?.html_path ? `已确认外观：${ux.html_path}，先读后沿用；用户后续修改仅改相关部分。` : brief.lean_brief.ui === 'required' ? '用户明确授权直接制作界面，无需先画草图。' : '本任务无需额外外观设计。',
     '局部外观和缺陷直接修改。用户新增、删除业务能力或改变业务预期时，先用propose_scope_change保留原功能及新增预期并等待确认，不能在旧任务单下宣称新增功能已验收。',
     JSON.stringify({ goal: brief.positioning, source_statements:brief.lean_brief?.intent_sources??brief.requirements_model?.sources, requirements: brief.requirements.map(row => ({ id: row.id, description: row.description,
-      expected: brief.acceptance[row.id], requirement_hash: requirementEvidenceHash(brief, row) })), constraints: brief.constraints,
+      expected: brief.acceptance[row.id], capabilities:row.capabilities, acceptance_scenarios:row.acceptance_scenarios, requirement_hash: requirementEvidenceHash(brief, row) })), constraints: brief.constraints,
       intent: brief.requirements_model && { experience: brief.requirements_model.experience, rules: brief.requirements_model.rules, workflows: brief.requirements_model.workflows }, out_of_scope: brief.out_of_scope, assumptions: brief.assumptions, design_policy: productDesignPolicy(brief), delivery: brief.lean_brief.delivery, distribution: brief.lean_brief.distribution ?? 'local' }),
     '保留真实用户数据与配置；测试使用隔离数据目录。预期依据已确认目标，不能改预期掩盖失败。特殊能力登记与执行细节可通过read_production_context按需读取。',
     '正式检查的输入格式以工具声明和当前反馈为准，按需读取验收上下文。',

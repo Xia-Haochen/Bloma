@@ -42,7 +42,7 @@ describe('shared core delivery', () => {
   })
 
   it.each(['failed', 'environment_blocked'] as const)('does not label speech features passed after a host %s result', async status => {
-    vi.mocked(readPrdBackplane).mockReturnValue({ requirements: [{ id: 'F-001', description: '语音识别' }] } as never)
+    vi.mocked(readPrdBackplane).mockReturnValue({ requirements: [{ id: 'F-001', description: '语音识别', capabilities: ['speech'] }] } as never)
     writeManifest({ command: ['python', 'core_check.py'], scenarios: [{ name: 'actual input', covers: ['F-001'], input: 'gui' }],
       speech: { module: 'speech_runtime', factory: 'SpeechEngine', method: 'transcribe' } })
     vi.mocked(runHostSpeechProbe).mockResolvedValue({ probe_version: 1, status })
@@ -52,7 +52,7 @@ describe('shared core delivery', () => {
   })
 
   it('keeps microphone verification unknown without the separate capture evidence', async () => {
-    vi.mocked(readPrdBackplane).mockReturnValue({ requirements: [{ id: 'F-001', description: '麦克风实时语音识别' }] } as never)
+    vi.mocked(readPrdBackplane).mockReturnValue({ requirements: [{ id: 'F-001', description: '麦克风实时语音识别', capabilities: ['microphone'] }] } as never)
     writeManifest({ command: ['python', 'core_check.py'], scenarios: [{ name: 'actual input', covers: ['F-001'], input: 'gui' }],
       speech: { module: 'speech_runtime', factory: 'SpeechEngine', method: 'transcribe' } })
     vi.mocked(runHostSpeechProbe).mockResolvedValue({ probe_version: 1, status: 'passed' })
@@ -62,7 +62,7 @@ describe('shared core delivery', () => {
   })
 
   it('retains a reproduced feature failure when its capability probe is also blocked', async () => {
-    vi.mocked(readPrdBackplane).mockReturnValue({ requirements: [{ id: 'F-001', description: '语音识别' }] } as never)
+    vi.mocked(readPrdBackplane).mockReturnValue({ requirements: [{ id: 'F-001', description: '语音识别', capabilities: ['speech'] }] } as never)
     writeManifest({ command: ['python', 'core_check.py'], scenarios: [{ name: 'actual input', covers: ['F-001'], input: 'gui' }],
       speech: { module: 'speech_runtime', factory: 'SpeechEngine', method: 'transcribe' } })
     vi.mocked(runHostSpeechProbe).mockResolvedValue({ probe_version: 1, status: 'environment_blocked' })
@@ -93,7 +93,7 @@ describe('shared core delivery', () => {
     expect(existsSync(join(root, CORE_REPORT_REL))).toBe(false)
   })
 
-  it.each(['不需要语音识别', '不需要真实模型调用', '联系人按编号前缀筛选并支持给联系人改名'])('does not impose an unrelated capability probe for %s', async description => {
+  it.each(['不需要语音识别', '不需要真实模型调用', '使用说明介绍麦克风录音与模型服务', '联系人按编号前缀筛选并支持给联系人改名'])('does not impose an unrelated capability probe for %s', async description => {
     vi.mocked(readPrdBackplane).mockReturnValue({ requirements: [{ id: 'F-001', description }] } as never)
     vi.mocked(runHostPrefixRenameProbe).mockClear()
     vi.mocked(runHostLlmProbe).mockClear()
@@ -137,7 +137,7 @@ describe('shared core delivery', () => {
     expect(result.requirements?.[0]?.verification).toBe('unverified')
   })
   it('refuses fixed network_error behind product-authored green model scenarios', async () => {
-    vi.mocked(readPrdBackplane).mockReturnValue({ requirements: [{ id: 'F-004', description: '用户 Key 真实模型增强', priority: 'P1' }] } as never)
+    vi.mocked(readPrdBackplane).mockReturnValue({ requirements: [{ id: 'F-004', description: '用户 Key 真实模型增强', capabilities: ['llm'], priority: 'P1' }] } as never)
     const data = { command: ['python', 'core_check.py'], scenarios: [{ name: 'actual input', covers: ['F-004'], input: 'gui' }] }
     writeManifest(data)
     expect((await run()).status).toBe('unverified')
@@ -189,7 +189,7 @@ describe('shared core delivery', () => {
     expect(legacy.missing.join(' ')).toContain('缺少逐项实现声明')
   })
   it('host filesystem counterexamples override product-authored passing assertions', async () => {
-    vi.mocked(readPrdBackplane).mockReturnValue({ requirements: [{ id: 'F-001', description: '文件前缀改名', priority: 'P0' }] } as never)
+    vi.mocked(readPrdBackplane).mockReturnValue({ requirements: [{ id: 'F-001', description: '文件前缀改名', capabilities: ['prefix_rename'], priority: 'P0' }] } as never)
     manifest()
     vi.mocked(runHostPrefixRenameProbe).mockResolvedValue({ probe_version: 1, status: 'failed', tests: [{ name: 'escaped_target', passed: false }] })
     expect((await run()).status).toBe('failed')
@@ -210,13 +210,13 @@ describe('shared core delivery', () => {
   it('does not impose filename undo because an unrelated feature supports undo', async () => {
     vi.mocked(runHostPrefixRenameProbe).mockClear().mockResolvedValue({ probe_version: 1, status: 'passed' })
     vi.mocked(readPrdBackplane).mockReturnValue({ requirements: [
-      { id: 'F-001', description: '给文件添加前缀改名' }, { id: 'F-002', description: '撤销笔记编辑' },
+      { id: 'F-001', description: '给文件添加前缀改名', capabilities: ['prefix_rename'] }, { id: 'F-002', description: '撤销笔记编辑' },
     ] } as never)
     manifest()
     await run()
     expect(runHostPrefixRenameProbe).toHaveBeenCalledWith(root, undefined, { requireUndo: false })
     vi.mocked(readPrdBackplane).mockReturnValue({ requirements: [
-      { id: 'F-001', description: '给文件添加前缀改名' }, { id: 'F-002', description: '撤销上一次改名', capabilities: ['rename_undo'] },
+      { id: 'F-001', description: '给文件添加前缀改名', capabilities: ['prefix_rename'] }, { id: 'F-002', description: '撤销上一次改名', capabilities: ['rename_undo'] },
     ] } as never)
     manifest()
     await run()
@@ -237,7 +237,7 @@ describe('shared core delivery', () => {
     expect((await run()).status).toBe('unverified')
   })
   it('audio self labels and text simulation cannot cover real ASR or capture', async () => {
-    vi.mocked(readPrdBackplane).mockReturnValue({ requirements: [{ id: 'F-001', description: '语音录入', priority: 'P0' }] } as never)
+    vi.mocked(readPrdBackplane).mockReturnValue({ requirements: [{ id: 'F-001', description: '语音录入', capabilities: ['microphone'], priority: 'P0' }] } as never)
     for (const input of ['gui', 'audio', 'microphone', 'mock']) {
       manifest(input)
       const result = await run()

@@ -37,6 +37,7 @@ export function requirementEvidenceHash(backplane: PrdBackplane, item: SketchReq
     backplane.assumptions ?? [], backplane.requirements_model ?? null]
   // Preserve historical hashes for old features; a new declaration invalidates old evidence.
   if (item.capabilities !== undefined) fields.push({ capabilities: item.capabilities })
+  if (item.acceptance_scenarios !== undefined) fields.push({ acceptance_scenarios: item.acceptance_scenarios })
   if (backplane.lean_brief) fields.push({ workflow: 'lean-v1', ui: backplane.lean_brief.ui })
   if (backplane.lean_brief?.delivery) fields.push({ delivery: backplane.lean_brief.delivery })
   if (backplane.lean_brief?.intent_assessment) fields.push({ intent_assessment: backplane.lean_brief.intent_assessment, intent_sources: backplane.lean_brief.intent_sources })

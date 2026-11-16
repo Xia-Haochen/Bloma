@@ -9,7 +9,7 @@ import type { PrdBackplane, SketchRequirement } from '../model/prd-backplane'
 import { bindAcceptance } from '../project/requirement-contract'
 import type { LeanScopeSuggestion } from '../../shared/types'
 import { parseLeanSuggestions } from './lean-suggestions'
-import { requirementCapabilities, validRequirementCapabilities } from '../model/requirement-capabilities'
+import { validAcceptanceScenarios, validRequirementCapabilities } from '../model/requirement-capabilities'
 
 const texts = (value: unknown): string[] => Array.isArray(value) && value.every(x => typeof x === 'string' && x.trim()) ? value : []
 const object = (x: unknown): x is Record<string, unknown> => Boolean(x && typeof x === 'object' && !Array.isArray(x))
@@ -19,6 +19,7 @@ export const LEAN_BRIEF_PROMPT = `你是Bloma，帮助用户把想法做成软�
 只有用户明确要求创建或修改软件时，才把目标整理为下面的工作约定。只要文本不等于命令行软件；已有任务期间的插问/暂停后的纠正仍可reply，不自动修改原任务。先保留原话、资料、明确边界和特殊业务规则；只问真正影响软件结果且无法调查确定的问题，不问内部技术选型。
 目标明确时输出JSON：{"action":"brief","name":"简短名称","goal":"要做成什么","ui":"required|none","requirements":[{"id":"已有编号可保留，新项可省略","description":"必须实现的能力","expected":"可观察的完成标准"}],"constraints":[],"out_of_scope":[],"assumptions":[],"work_items":["下一步要调查、实验、实现或验证什么"]}。
 工作清单只列现在有用的少量主项，可以先调查资料和现有环境、运行最小实验，再逐步细化；不是流程门禁，不按固定功能数、阶段数或正常/边界/异常类别凑条目。完成标准不能用“清单已勾完”代替实际结果。
+对确实要执行特殊验收的功能项，按业务含义选填 capabilities：llm（实际调用模型）、speech（音频转写）、microphone（实体麦克风采集并转写）、prefix_rename（文件批量加前缀）、rename_undo（撤销该批改名）。说明书介绍录音、展示模型名或要求零请求都不能据此增加对应实测。用 acceptance_scenarios 选填确实要求的额外独立场景：multi_object、exception、cancel、reopen；每项正常路径由宿主覆盖。把对应行为写清楚在 expected 里，普通功能可省略这两个字段。
 新任务无需intent_assessment、requirements_model、来源编号或关系图。业务规则、例外、关键体验及不能接受的替代方案，用自然语言写进完成标准和constraints；不要为省字段弱化用户原意。sources由宿主保留。已有确认的详细契约由宿主沿用；确实修改它时才提交更新的requirements_model，不得悄悄丢弃原规则。
 保留已有功能编号和范围；未采纳的建议不得混入必需功能。必要时可单列suggestions:[{title,description,benefit,expected}]。未知技术能力优先列入调查/实验，不要求用户回答。只有缺少业务决定才输出{"action":"clarify","question":"具体缺少的决定","options":["选项"]}。
 材料引用可用design_assets:[{attachment_id,role:required_asset|style_reference|content,usage,transformations}]，只引用宿主提供的附件，不编造来源或hash。不要输出实现代码、完整验收用例库或其他文档。只输出JSON。`
@@ -50,10 +51,14 @@ export function parseLeanBrief(raw: string, context: { projectId: string; sessio
     const id = prior?.id ?? `F-${String(next++).padStart(3, '0')}`
     if (used.has(id)) return
     used.add(id)
-    if(row.capabilities!==undefined&&!validRequirementCapabilities(row.capabilities))return
+    if(row.capabilities!==undefined&&!validRequirementCapabilities(row.capabilities))return fail(`${id} 的 capabilities 包含不支持的值。`)
+    if(row.acceptance_scenarios!==undefined&&!validAcceptanceScenarios(row.acceptance_scenarios))return fail(`${id} 的 acceptance_scenarios 包含不支持的值。`)
     const feature:SketchRequirement={id,description:row.description,priority:'P0',behavior_assertions:[row.expected]}
-    const declared=row.capabilities??(prior?.description===row.description&&context.previous.acceptance[prior.id]===row.expected?prior.capabilities:undefined)
-    if(declared!==undefined)feature.capabilities=[...new Set([...requirementCapabilities(feature),...(declared as NonNullable<SketchRequirement['capabilities']>)])]
+    const retained=prior?.description===row.description&&context.previous.acceptance[prior.id]===row.expected?prior:undefined
+    const declared=row.capabilities??retained?.capabilities
+    const scenarios=row.acceptance_scenarios??retained?.acceptance_scenarios
+    if(declared!==undefined)feature.capabilities=[...new Set(declared)]
+    if(scenarios!==undefined)feature.acceptance_scenarios=[...new Set(scenarios)]
     requirements.push(feature)
     acceptance[id] = row.expected
   }
@@ -94,8 +99,10 @@ export function parseLeanBrief(raw: string, context: { projectId: string; sessio
 }
 
 export function renderLeanBrief(brief: PrdBackplane): string {
+  const microphoneChecks = brief.requirements.filter(row => row.capabilities?.includes('microphone')).map(row => row.id)
   return [brief.positioning, ...(brief.lean_brief?.work_items?.length ? ['建议工作步骤（可随调查调整，不作为验收通过条件）：'+brief.lean_brief.work_items.join(' → ')] : []), ...(brief.project_plan ? ["实施顺序（全部功能仍须交付）：" + brief.project_plan.stages.map(s => s.title + "（" + s.feature_ids.join("、") + "）").join(" → ")] : []), ...brief.requirements.map(row => `${row.id} ${row.description}\n完成应看到：${brief.acceptance[row.id] ?? ''}`),
     ...(brief.lean_brief?.delivery ? ['使用方式：' + ({ desktop: '桌面软件，一键启动', browser: '在本机浏览器使用', command: '命令工具' }[brief.lean_brief.delivery])] : []),
+    ...(microphoneChecks.length ? ['需要实体麦克风实测：' + microphoneChecks.join('、')] : []),
     ...(brief.lean_brief?.distribution ? ['交付方式：' + ({ local: '在本机直接使用', portable: '可复制到其他电脑直接使用', installer: '可在其他电脑安装使用', source: '移交源码' }[brief.lean_brief.distribution])] : []),
     ...(brief.lean_brief?.preview === 'reuse' ? ['界面沿用已确认外观，在制作时按新增功能调整。'] : []),
     ...(brief.lean_brief?.preview === 'skip' ? ['按你的授权直接制作，不再生成草图。'] : []),

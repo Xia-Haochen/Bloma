@@ -36,7 +36,9 @@ export function stageLeanScope(projectId: string, sessionId: string, requestId: 
       ...(options.adoptedSuggestions?.length ? { adopted_suggestions: options.adoptedSuggestions } : {}) } })
   const removed = previous.requirements.filter(old => !next.requirements.some(row => row.id === old.id))
   const changed = next.requirements.filter(row => previous.requirements.some(old => old.id === row.id
-    && (old.description !== row.description || previous.acceptance[old.id] !== next.acceptance[row.id])))
+    && (old.description !== row.description || previous.acceptance[old.id] !== next.acceptance[row.id]
+      || JSON.stringify(old.capabilities) !== JSON.stringify(row.capabilities)
+      || JSON.stringify(old.acceptance_scenarios) !== JSON.stringify(row.acceptance_scenarios))))
   const added = next.requirements.filter(row => !previous.requirements.some(old => old.id === row.id))
   const removedConstraints = [...(previous.constraints ?? []), ...previous.out_of_scope].filter(text => ![...(next.constraints ?? []), ...next.out_of_scope].includes(text))
   const intentChanged = JSON.stringify(previous.requirements_model) !== JSON.stringify(next.requirements_model)

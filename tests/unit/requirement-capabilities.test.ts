@@ -5,8 +5,27 @@ import { requirementEvidenceHash } from '../../main/project/requirement-contract
 import { parseOrganizedRequirements } from '../../main/model/requirements-model'
 import { organizedPrd } from '../support/organized-prd'
 import { parseLeanBrief } from '../../main/guide/lean-brief'
+import { independentCategoryRequested } from '../../main/software/independent-semantics'
 
 describe('confirmed verification capabilities', () => {
+  it('only schedules additional independent scenarios declared on the confirmed feature', () => {
+    const initial = { project_id: 'p', requirements: [], acceptance: {} } as unknown as PrdBackplane
+    const brief = parseLeanBrief(JSON.stringify({ action: 'brief', goal: '说明和录入', ui: 'required', requirements: [
+      { description: '使用说明中介绍录音、取消和重开', expected: '文档中看得到说明' },
+      { description: '支持录入和继续使用', expected: '实际采集成功，重新打开后保留记录',
+        capabilities: ['microphone'], acceptance_scenarios: ['reopen'] },
+    ] }), { projectId: 'p', sessionId: 's', source: '说明和录入', previous: initial, software: true })
+    if (brief?.action !== 'brief') throw Error('fixture')
+    const [help, capture] = brief.brief.requirements
+    expect([...requirementCapabilities(help)]).toEqual([])
+    expect(independentCategoryRequested(brief.brief, help.id, 'cancel')).toBe(false)
+    expect(independentCategoryRequested(brief.brief, help.id, 'reopen')).toBe(false)
+    expect(independentCategoryRequested(brief.brief, help.id, 'normal')).toBe(true)
+    expect(requirementCapabilities(capture).has('microphone')).toBe(true)
+    expect(independentCategoryRequested(brief.brief, capture.id, 'reopen')).toBe(true)
+    expect(requirementEvidenceHash(brief.brief, capture)).not.toBe(
+      requirementEvidenceHash(brief.brief, { ...capture, acceptance_scenarios: undefined }))
+  })
   it('does not turn ordinary organization, negated requirements or contact renaming into provider/filesystem work', () => {
     for (const description of ['按日期整理本地文件', '不需要语音识别', '不需要真实模型调用', '联系人按编号前缀筛选并支持给联系人改名']) {
       expect([...requirementCapabilities({ id: 'F-001', description })], description).toEqual([])
@@ -16,8 +35,8 @@ describe('confirmed verification capabilities', () => {
   it('uses explicit declarations and required implications instead of vocabulary guesses', () => {
     expect([...requirementCapabilities({ id: 'F-001', description: '语音模型简介', capabilities: [] })]).toEqual([])
     expect(requirementCapabilities({ id: 'F-001', description: '通过硬件输入', capabilities: ['microphone'] }).has('speech')).toBe(true)
-    expect(requirementCapabilities({ id: 'F-001', description: '用模型整理转写文字' }).has('llm')).toBe(true)
-    expect(requirementCapabilities({ id: 'F-001', description: '采集用户语音并转写' }).has('microphone')).toBe(true)
+    expect(requirementCapabilities({ id: 'F-001', description: '用模型整理转写文字' }).has('llm')).toBe(false)
+    expect(requirementCapabilities({ id: 'F-001', description: '使用说明介绍麦克风录音' }).has('microphone')).toBe(false)
     expect(requirementCapabilities({ id: 'F-001', description: '撤销刚才的文件操作', capabilities: ['rename_undo'] }).has('prefix_rename')).toBe(true)
     expect(() => requirementCapabilities({ id: 'F-001', description: '旧文档', capabilities: ['invented'] as never })).toThrow('INVALID_REQUIREMENT_CAPABILITIES')
   })

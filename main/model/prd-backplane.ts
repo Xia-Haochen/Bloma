@@ -8,7 +8,7 @@
  * 需求契约由本模块直接导出，旧sketch-engine转发入口已移除。
  */
 import type { ConstraintLevel, ProjectMode, TemplateType } from '../../shared/types'
-import { requirementCapabilities, type RequirementCapability } from './requirement-capabilities'
+import { requirementCapabilities, type AcceptanceScenario, type RequirementCapability } from './requirement-capabilities'
 
 /** 章节标识（章节 schema 的 id 集；schema 定义在 prd-sections.ts，类型真相源在此随背板维护）。 */
 export type PrdSectionId =
@@ -327,6 +327,7 @@ export const TEMPLATE_META_VERSION = 1
 export interface SketchRequirement {
   /** Host verification adapter selection, frozen with the confirmed feature. */
   capabilities?: RequirementCapability[]
+  acceptance_scenarios?: AcceptanceScenario[]
   source_refs?: import('../../shared/attachment-types').MaterialSourceRef[]
   id: string
   description: string

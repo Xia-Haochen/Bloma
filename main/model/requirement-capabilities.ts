@@ -8,27 +8,19 @@ export function validRequirementCapabilities(value: unknown): value is Requireme
   return Array.isArray(value) && value.every(item => REQUIREMENT_CAPABILITIES.includes(item))
 }
 
-/** Old projects retain a narrow compatibility inference. New structured declarations
- * (including an explicit empty list) take precedence and are bound to the scope hash. */
+export const ACCEPTANCE_SCENARIOS = ['normal', 'multi_object', 'exception', 'cancel', 'reopen'] as const
+export type AcceptanceScenario = typeof ACCEPTANCE_SCENARIOS[number]
+
+export function validAcceptanceScenarios(value: unknown): value is AcceptanceScenario[] {
+  return Array.isArray(value) && value.every(item => ACCEPTANCE_SCENARIOS.includes(item))
+}
+
+/** Only the confirmed capability declarations can add specialized checks. */
 export function requirementCapabilities(item: SketchRequirement): ReadonlySet<RequirementCapability> {
-  const result = new Set<RequirementCapability>()
-  if (item.capabilities !== undefined) {
-    if (!validRequirementCapabilities(item.capabilities)) throw new Error(`INVALID_REQUIREMENT_CAPABILITIES: ${item.id}`)
-    for (const capability of item.capabilities) result.add(capability)
-  } else {
-    const clauses = [item.description, item.story ?? '', ...(item.behavior_assertions ?? [])].join('\n')
-      .split(/[，。；,;\n]|但是|但|不过/).map(text => text.trim())
-      .filter(text => !/^(?:(?:本版|该功能|此功能|系统|产品|用户)\s*)?(?:不需要|无需|不用|不要|不支持|不包含|不提供|禁止)|^(?:no\b|without\b|do(?:es)? not\b)/i.test(text))
-    for (const text of clauses) {
-      if (/\b(?:LLM|AI)\b|大模型|真实模型|智能(?:总结|翻译|回答|对话|生成|润色)|(?:模型).*(?:调用|增强|Key|API|密钥)|(?:Key|密钥).*(?:模型|AI)|(?:用|由|通过|调用)模型(?:整理|改写|归纳|摘要)/i.test(text)) result.add('llm')
-      if (/(?:语音(?:输入|录入|识别|转写|转文字)|音频(?:文件)?(?:识别|转写|转文字)|(?:导入|上传).*音频.*(?:文字|转写)|麦克风|录音|\bASR\b)/i.test(text)) result.add('speech')
-      if (/(?:麦克风|录音|语音(?:输入|录入)|采集(?:用户)?语音)/.test(text)) result.add('microphone')
-      if (/(?:文件|文件夹|目录|文件名)/.test(text) && /前缀/.test(text) && /(?:重命名|改名)/.test(text)) {
-        result.add('prefix_rename')
-        if (/撤销|还原/.test(text)) result.add('rename_undo')
-      }
-    }
+  if (item.capabilities !== undefined && !validRequirementCapabilities(item.capabilities)) {
+    throw new Error(`INVALID_REQUIREMENT_CAPABILITIES: ${item.id}`)
   }
+  const result = new Set(item.capabilities ?? [])
   if (result.has('microphone')) result.add('speech')
   if (result.has('rename_undo')) result.add('prefix_rename')
   return result

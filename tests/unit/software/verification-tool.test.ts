@@ -56,8 +56,8 @@ it('invalidates old PASS on cancellation, corrupted receipts and receipt write f
   expect(await recentSoftwareVerification(project.project_id, 'r')).toBeUndefined()
 }, 60000)
 const ctx = () => ({ projectId: project.project_id, sessionId: 's', requestId: 'r', signal: AbortSignal.timeout(90000), state: createToolState() })
-async function setup(description='输出5') {
-  const parsed = parseLeanBrief(JSON.stringify({ action: 'brief', goal: '输出5', ui: 'none', delivery: 'command', requirements: [{ description, expected: '输出5' }] }),
+async function setup(description='输出5', capabilities?: string[]) {
+  const parsed = parseLeanBrief(JSON.stringify({ action: 'brief', goal: '输出5', ui: 'none', delivery: 'command', requirements: [{ description, expected: '输出5', capabilities }] }),
     { projectId: project.project_id, sessionId: 's', source: '输出5', previous: readPrdBackplane(project.project_id), software: true })!
   if (parsed.action !== 'brief') throw Error('fixture')
   syncDocuments({ request_id: 'sync', project_id: project.project_id, session_id: 's', checkpoint: 'requirement_confirmed' }, parsed.brief); markPrdUserConfirmed(project.project_id)
@@ -67,7 +67,7 @@ async function setup(description='输出5') {
   return source
 }
 it('reuses prepared speech evidence across continuation only while inputs and microphone evidence match',async()=>{
-  const source=await setup('麦克风输入')
+  const source=await setup('麦克风输入', ['microphone'])
   const root=project.root_path,id=project.project_id
   writeFileSync(join(root,'CORE_CHECK.json'),JSON.stringify({speech:{module:'speech_runtime',factory:'SpeechEngine',method:'transcribe'}}))
   const snapshot=vi.spyOn(capabilityResources,'snapshotSpeechResources').mockResolvedValue({

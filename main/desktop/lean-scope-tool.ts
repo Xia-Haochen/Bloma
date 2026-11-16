@@ -7,6 +7,7 @@ import { readPrdBackplane } from '../project/prd-store'
 import { prdScopeFingerprint } from '../project/requirement-contract'
 import { listDelegations } from '../agent/delegation/agent-collaboration'
 import { isSoftwareProject } from './workflow-policy'
+import { ACCEPTANCE_SCENARIOS, REQUIREMENT_CAPABILITIES } from '../model/requirement-capabilities'
 
 /** The working agent proposes only a genuine scope change; host pauses before
  * any following tool, then reuses the normal scope confirmation on resume. */
@@ -18,7 +19,10 @@ export function buildLeanScopeTool(projectId: string, source: string, emit: Para
       delivery: { type: 'string', enum: ['desktop', 'browser', 'command'] },
       distribution: { type: 'string', enum: ['local', 'portable', 'installer', 'source'] },
       requirements: { type: 'array', items: { type: 'object', required: ['description', 'expected'], properties: {
-        id: { type: 'string' }, description: { type: 'string' }, expected: { type: 'string' } } } },
+        id: { type: 'string' }, description: { type: 'string' }, expected: { type: 'string' },
+        capabilities: { type: 'array', items: { type: 'string', enum: [...REQUIREMENT_CAPABILITIES] } },
+        acceptance_scenarios: { type: 'array', items: { type: 'string', enum: [...ACCEPTANCE_SCENARIOS] } },
+      } } },
       constraints: { type: 'array', items: { type: 'string' } }, out_of_scope: { type: 'array', items: { type: 'string' } },
       work_items:{type:'array',items:{type:'string'},description:'建议工作步骤，可随调查调整；不作为验收或开工门禁。'},
       requirements_model: { type: 'object', description: '仅修改已有详细契约时提供；省略则由宿主保留已有模型，来源由宿主回填。' },
