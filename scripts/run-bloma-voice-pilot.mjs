@@ -8,7 +8,7 @@ import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { _electron } from 'playwright'
 
-const [root, pack, assets, channelHome, previousProfile, speechPython, productionInput, wallet] = process.argv.slice(2).map(value => resolve(value))
+const [root, pack, assets, channelHome, previousProfile, speechPython, productionInput, wallet, walletEpoch] = process.argv.slice(2).map(value => resolve(value))
 assert.ok(productionInput && wallet, 'Supply the production-only task directory and the authorized wallet directory')
 const repo = process.cwd()
 const require = createRequire(import.meta.url)
@@ -49,21 +49,30 @@ writeFileSync(join(runHome, 'bloma-channels.json'), JSON.stringify({version:1,ch
 const policy = join(wallet, 'monetary-policy.json')
 const ledgerAtStart = read(policy+'.state.json')
 assert.equal(ledgerAtStart.policy_hash,hash(readFileSync(policy)))
-assert.deepEqual(read(policy).models, [{host:'api.deepseek.com',model:'deepseek-flash',cap_rmb:10,context_tokens:1048576,
+const rates = read(policy).models
+const cap = rates[0]?.cap_rmb
+assert.ok(Number.isFinite(cap) && cap > 0)
+assert.deepEqual(rates, [{host:'api.deepseek.com',model:'deepseek-flash',cap_rmb:cap,context_tokens:1048576,
   input_rmb_per_million:2,output_rmb_per_million:8,cache_rmb_per_million:0.04}])
 assert.ok(ledgerAtStart.entries.every(row=>row.status!=='reserved'),'Wait for previous requests to settle')
 assert.ok(existsSync(join(wallet,'run-result.json')),'Previous attempt must be closed')
 const initialIds = new Set(ledgerAtStart.entries.map(row=>row.id))
 const sum = entries => entries.reduce((total,row)=>total+row.charged_micro_rmb,0)/1e6
 const carriedRmb = sum(ledgerAtStart.entries)
-assert.ok(10-carriedRmb>=2.359296,'Authorized wallet cannot cover an initial full-input reserve')
+const funding = cap === 10 ? null : read(join(wallet,'authorization.json'))
+if (funding) {
+  assert.equal(funding.cap_rmb,cap)
+  assert.ok(walletEpoch,'Supply the same monetary epoch used to activate the extended wallet')
+}
+assert.ok(cap-carriedRmb>=2.359296,'Authorized wallet cannot cover an initial full-input reserve')
 const source = command('git','rev-parse','HEAD')
 const build = hash(readFileSync(join(repo,'dist-main/main/index.js')))
-write('authorization.json', {user_text:'重新来好吧，盯着点', cap_rmb:10, monetary_policy:policy,
-  carried_rmb:carriedRmb, pricing_source:'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/'})
+write('authorization.json', {user_text:funding?.user_text??'重新来好吧，盯着点', cap_rmb:cap, monetary_policy:policy,
+  carried_rmb:carriedRmb, pricing_source:'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/',
+  ...(funding?{funding_record:join(wallet,'authorization.json'),trial_start:'new project and session'}:{})})
 const study = read(join(root, 'study.json'))
 const env = {...process.env, PROMA_HOME:runHome, BLOMA_MONETARY_POLICY:policy,
-  BLOMA_MONETARY_EPOCH_DIR:join(wallet,'monetary-epochs'), BLOMA_EXPERIMENT_THINKING:'high',
+  BLOMA_MONETARY_EPOCH_DIR:walletEpoch??join(wallet,'monetary-epochs'), BLOMA_EXPERIMENT_THINKING:'high',
   BLOMA_BENCHMARK_OUTPUT_CEILING:'32768', BLOMA_BENCHMARK_REQUEST_LOG:join(root,'provider-requests.jsonl'),
   BLOMA_SPEECH_MODEL_DIR:join(assets,'speech-models/sensevoice-int8')}
 delete env.ELECTRON_RUN_AS_NODE
@@ -106,7 +115,8 @@ try {
     return Number(balance.balance_infos.find(row=>row.currency==='CNY')?.total_balance)
   },channel.api_key).then(balance => {
     assert.ok(balance >= 2.359296,'Provider balance cannot cover the initial full-input reserve')
-    note('provider_preflight',{protocol:'Anthropic Messages',model:'deepseek-flash',balance_rmb:balance,local_cap_rmb:10})
+    if(funding)assert.ok(cap-carriedRmb<=balance+1e-6,'Live provider balance fell below the authorized remaining budget')
+    note('provider_preflight',{protocol:'Anthropic Messages',model:'deepseek-flash',balance_rmb:balance,local_cap_rmb:cap})
   })
   const file = join(root,'公开输入与环境.txt')
   writeFileSync(file,[
@@ -153,6 +163,15 @@ try {
     const serialized = JSON.stringify(progress)
     if (serialized!==previous) {write('progress.json',progress);previous=serialized}
     if (status?.phase==='delivered' && status.status==='completed') {terminal='completed';break}
+    if (latestProject?.desktop_blocked && !ledger.some(row=>row.status==='reserved')) {
+      const statePath=join(runHome,'software-run-states',latestProject.project_id+'.json')
+      const state=existsSync(statePath)?read(statePath):undefined
+      if(state?.status==='blocked' && /no_progress|金额保护|MONETARY_(?:BUDGET|OPERATION)_EXHAUSTED/.test(state.error??'')){
+        terminal=/金额保护|MONETARY_/.test(state.error)?'budget_exhausted':'agent_error'
+        note('bloma_terminal',{status:state.status,reason:state.error})
+        break
+      }
+    }
     if (existsSync(join(root,'stop-requested'))) {terminal='user_stopped';break}
     const items = await page.locator('button[data-ai-id^="card-option-"]:visible, button[data-ai-id="confirm-sketch-button"]:visible').evaluateAll(buttons=>buttons.map(button=>({
       id:button.getAttribute('data-ai-id'),label:button.textContent.trim(),disabled:button.disabled
@@ -190,7 +209,7 @@ try {
   if (started && latestProject?.root_path && existsSync(latestProject.root_path)) {
     try {
       bench('snapshot',latestProject.root_path,join(root,'artifact-manifest.json'))
-      Object.assign(trial,{execution_status:terminal==='timed_out'?'timeout':terminal,cost_rmb:upper})
+      Object.assign(trial,{execution_status:terminal,cost_rmb:upper})
       write('trial.json',trial)
       bench('finalize',root)
     } catch(error) { note('snapshot_or_finalize_pending',{message:error.message}) }
