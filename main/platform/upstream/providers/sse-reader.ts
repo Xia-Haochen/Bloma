@@ -17,6 +17,7 @@ import type { ProviderRequest, StreamAdapter, StreamEventCallback, ThinkingBlock
 import { MonetaryBudgetError, reserveModelRequestWhenAvailable, fitMonetaryRequest } from '../../llm/monetary-budget'
 import type { SDKMessage, ModelTransportReceipt } from '../../../../shared/types'
 import { createHash } from 'node:crypto'
+import { appendFileSync } from 'node:fs'
 
 // ===== 流式请求 =====
 
@@ -252,6 +253,15 @@ async function runReservedStreamAttempt(options: StreamSSEOptions): Promise<Stre
 
   // 1. 发起请求（支持通过 fetchFn 注入代理）
   effectiveSignal.throwIfAborted()
+  if (process.env.BLOMA_BENCHMARK_REQUEST_LOG) {
+    const body = JSON.parse(request.body)
+    appendFileSync(process.env.BLOMA_BENCHMARK_REQUEST_LOG, JSON.stringify({
+      at: new Date().toISOString(),
+      endpoint: new URL(request.url).origin + new URL(request.url).pathname,
+      model: body.model, max_tokens: body.max_tokens, thinking: body.thinking?.type,
+      effort: body.output_config?.effort ?? body.reasoning_effort ?? body.reasoning?.effort,
+    }) + '\n')
+  }
   options.onAttempt?.('started')
   let response: Response
   try {

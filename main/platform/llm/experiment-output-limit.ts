@@ -1,5 +1,10 @@
 /** The frozen host budget overrides legacy auxiliary budgets for this experiment. */
 export function experimentOutputTokens(requested = 640000): number {
+  if (process.env.BLOMA_BENCHMARK_OUTPUT_CEILING) {
+    const ceiling = Number(process.env.BLOMA_BENCHMARK_OUTPUT_CEILING)
+    if (!Number.isSafeInteger(ceiling) || ceiling < 1024 || ceiling > 640000) throw Error('BENCHMARK_INVALID_OUTPUT_CEILING')
+    return Math.min(requested, ceiling)
+  }
   if (!['1', 'true', 'on'].includes(process.env.BLOMA_DISPATCH_EXPERIMENT ?? '')) return requested
   const cap = Number(process.env.BLOMA_EXPERIMENT_MAX_OUTPUT_TOKENS ?? '640000')
   if (!Number.isSafeInteger(cap) || cap < 1024 || cap > 640000) {
