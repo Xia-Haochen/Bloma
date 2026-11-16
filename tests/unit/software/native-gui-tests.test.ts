@@ -261,6 +261,7 @@ it.skipIf(process.platform!=='win32'||!existsSync(resolve('node_modules/electron
  writeFileSync(join(root,'index.html'),'<title>Names native</title>'+readFileSync(join(root,'index.html'),'utf8'))
  writeFileSync(join(root,'LAUNCH.json'),JSON.stringify({schema_version:2,ui:'electron',command:['electron','.'],window_title:'Names native'}))
  writeFileSync(join(root,'tests/acceptance.mjs'),script.replaceAll("await page.goto('/');",''))
+ writeFileSync(join(root,'tests/native-inputs.json'),JSON.stringify({files:['LAUNCH.json']}))
  registerNativeGuiTests(project.project_id,'tests/acceptance.mjs')
  const checked=await verifySoftwareCandidate(project.project_id,'electron-native',AbortSignal.timeout(120000))
  expect(checked.status,JSON.stringify({summary:checked.summary,gui:checked.core?.host_gui})).toBe('passed');expect(checked.core?.host_gui?.method).toBe('node:test');expect(checked.launch?.passed).toBe(true)

@@ -6,7 +6,7 @@ import type { GuiAcceptanceResult, GuiAcceptanceSuite } from '../desktop/gui-acc
 import type { LaunchDeclaration } from '../desktop/launch-smoke';
 import { openDebugSession, actDebugSession, closeDebugSessions } from './debug-sessions';
 import { debugWorkspace } from './debug-workspace';
-import { frozenNativeGuiEntry, nativeGuiObservations } from './native-gui-tests';
+import { nativeGuiObservations } from './native-gui-tests';
 import { prepareNativeTestRuntime } from './native-test-runtime';
 import { prepareAcceptanceEnvironment, type AcceptanceEnvironment } from './acceptance-environment'
 import type { Page } from 'playwright'
@@ -109,7 +109,7 @@ export async function runNativeGuiTests(input: {
     const native = input.suite.native_tests!;
     const sessionId = `host-native-${randomUUID()}`, signal = input.signal ?? new AbortController().signal;
     const workspace=debugWorkspace(input.projectId,sessionId)
-    const runtime = prepareNativeTestRuntime(input.projectId, native, input.root, workspace), file = runtime.file
+    const runtime = await prepareNativeTestRuntime(input.projectId, native, input.root, workspace, signal), file = runtime.file
     const reports: Array<{
         code: number;
         events: string;
@@ -155,7 +155,7 @@ export async function runNativeGuiTests(input: {
             if (outcome?.exit_code !== 0 || runtimeErrors.length)
                 break;
         }
-        frozenNativeGuiEntry(input.projectId, native, input.root);
+        runtime.verify();
         const result={...nativeGuiObservations(input.suite,reports),environment:prepared.evidence()}
         const evidence_dir = join(workspace, 'evidence', 'acceptance')
         if(interrupted)return{...result,evidence_dir,evidence_warnings:evidenceWarnings,status:result.status==='failed'?'failed' as const:'unverified' as const,failure_kind:result.status==='failed'?result.failure_kind:'incomplete' as const,

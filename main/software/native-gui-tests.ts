@@ -6,6 +6,7 @@ import { getPromaHome } from '../../storage/config-paths';
 import type { GuiAcceptanceSuite, GuiAcceptanceResult } from '../desktop/gui-acceptance';
 import { nativeTestInputs } from './native-test-inputs';
 import { checkNativeTestBindings } from './native-test-preflight';
+import type { SoftwareRelease } from './release-store';
 export interface NativeGuiTests {
     layout?: 'project';
     entry: string;
@@ -261,11 +262,13 @@ export function freezeNativeGuiTests(projectId: string, root: string, script: st
     }
     return value;
 }
-export function frozenNativeGuiVersion(projectId: string, native?: NativeGuiTests, sourceRoot?: string): string | undefined {
+export function frozenNativeGuiVersion(projectId: string, native?: NativeGuiTests, sourceRoot?: string, candidate?: SoftwareRelease): string | undefined {
     if (!native)
         return;
     validateNativeGuiTests(native);
     const directory = base(projectId, native.digest);
+    if (candidate && (candidate.projectId !== projectId || candidate.root !== sourceRoot))
+        throw Error('GUI_NATIVE_CANDIDATE_OWNER_MISMATCH');
     const changed: string[] = [];
     for (const file of native.files) {
         const frozen = fileWithin(directory, file.path);
@@ -274,7 +277,18 @@ export function frozenNativeGuiVersion(projectId: string, native?: NativeGuiTest
         if (sourceRoot) {
             const relative = native.layout === 'project' ? file.path : native.directory + '/' + file.path;
             const source = fileWithin(sourceRoot, relative);
-            if (!existsSync(source) || lstatSync(source).isSymbolicLink() || sha(readFileSync(source)) !== file.sha256)
+            // The caller reads provenance from the host-owned candidate record.
+            // Its original launch bytes bind the frozen input; its runtime bytes
+            // bind the host-resolved executable. All other inputs stay byte exact.
+            const original = relative === 'LAUNCH.json' ? candidate?.source.files.find(entry => entry.path === relative) : undefined;
+            const runtime = original && candidate?.runtime.files.find(entry => entry.path === relative);
+            if (candidate && relative === 'LAUNCH.json' &&
+                (!original || !runtime || original.sha256 !== file.sha256 || original.size !== file.size)) {
+                changed.push(relative);
+                continue;
+            }
+            const expected = runtime?.sha256 ?? file.sha256;
+            if (!existsSync(source) || lstatSync(source).isSymbolicLink() || sha(readFileSync(source)) !== expected)
                 changed.push(relative);
         }
     }
@@ -285,8 +299,8 @@ export function frozenNativeGuiEntry(projectId: string, native: NativeGuiTests, 
     frozenNativeGuiVersion(projectId, native, sourceRoot);
     return join(base(projectId, native.digest), native.entry);
 }
-export function frozenNativeGuiRoot(projectId: string, native: NativeGuiTests, sourceRoot: string) {
-    frozenNativeGuiVersion(projectId, native, sourceRoot);
+export function frozenNativeGuiRoot(projectId: string, native: NativeGuiTests, sourceRoot: string, candidate?: SoftwareRelease) {
+    frozenNativeGuiVersion(projectId, native, sourceRoot, candidate);
     return base(projectId, native.digest);
 }
 /** Diagnostic only: the host's immutable entry, never an arbitrary filesystem read. */

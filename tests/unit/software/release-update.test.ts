@@ -11,6 +11,8 @@ import { launchSoftwareForUser } from '../../../main/software/user-launch'
 import { listSoftwareDataSnapshots, softwareDataDirectory } from '../../../main/software/data-update'
 import { stopSoftwareSession } from '../../../main/software/process-manager'
 import { executeSoftwareCommand } from '../../../main/software/command-runtime'
+import { freezeNativeGuiTests } from '../../../main/software/native-gui-tests'
+import { prepareNativeTestRuntime } from '../../../main/software/native-test-runtime'
 
 let home: string, previous: string | undefined, project: ReturnType<typeof createProject>
 beforeEach(() => { previous = process.env.PROMA_HOME; home = mkdtempSync(join(tmpdir(), 'bloma-release-')); process.env.PROMA_HOME = home;
@@ -19,6 +21,43 @@ afterEach(async () => { await stopSoftwareSession(project.project_id, 'user-laun
   rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }) }, 30000)
 async function promote() { const release = await prepareSoftwareRelease(project.project_id, project.root_path); await promoteSoftwareRelease(release, { version: 'actual-test-evidence', scope: 'test-scope', at: new Date().toISOString() }); return release }
 async function port() { const server = createServer(); await new Promise<void>(done => server.listen(0, '127.0.0.1', done)); const a = server.address(); if (!a || typeof a === 'string') throw Error('port'); await new Promise<void>(done => server.close(() => done())); return a.port }
+it('binds frozen launch input to candidate provenance and rejects changes to either side', async () => {
+  const root = project.root_path, id = project.project_id
+  const launch = JSON.stringify({schema_version:2,mode:'command',command:['node','app.cjs']})
+  writeFileSync(join(root,'app.cjs'),'console.log("ready")')
+  writeFileSync(join(root,'LAUNCH.json'),launch)
+  mkdirSync(join(root,'tests'))
+  const script = "export default async({test,page,expect})=>{await test('F-001 title',async()=>{await expect(page.locator('h1')).toHaveText('Ready')})}"
+  writeFileSync(join(root,'tests/acceptance.mjs'),script)
+  writeFileSync(join(root,'tests/native-inputs.json'),JSON.stringify({files:['LAUNCH.json']}))
+  const native = freezeNativeGuiTests(id,root,'tests/acceptance.mjs',['F-001'])
+  const candidate = await prepareSoftwareRelease(id,root)
+  const resolvedLaunch = readFileSync(join(candidate.root,'LAUNCH.json'))
+  expect(resolvedLaunch.toString()).not.toBe(launch)
+  const workspace = join(home,'software-debug-data',id,'launch-provenance')
+  mkdirSync(workspace,{recursive:true})
+  const runtime = await prepareNativeTestRuntime(id,native,candidate.root,workspace)
+  try {
+    runtime.verify()
+    expect(readFileSync(join(runtime.file,'../../LAUNCH.json'),'utf8')).toBe(launch)
+    writeFileSync(join(candidate.root,'LAUNCH.json'),resolvedLaunch.toString()+'\n')
+    expect(()=>runtime.verify()).toThrow('GUI_NATIVE_TEST_SOURCE_CHANGED')
+    await expect(prepareNativeTestRuntime(id,native,candidate.root,workspace)).rejects.toThrow('GUI_NATIVE_TEST_SOURCE_CHANGED')
+    await expect(validateSoftwareRelease(id,candidate)).rejects.toThrow('RELEASE_BYTES_CHANGED')
+    writeFileSync(join(candidate.root,'LAUNCH.json'),resolvedLaunch)
+    writeFileSync(join(candidate.root,'tests/acceptance.mjs'),script.replace('Ready','Changed'))
+    expect(()=>runtime.verify()).toThrow('GUI_NATIVE_TEST_SOURCE_CHANGED')
+    writeFileSync(join(candidate.root,'tests/acceptance.mjs'),script)
+    runtime.verify()
+  } finally { runtime.close() }
+  // A formatting-only source edit resolves to identical runtime JSON, but still
+  // changes the frozen source contract and must be rejected.
+  writeFileSync(join(root,'LAUNCH.json'),launch+'\n')
+  const changed = await prepareSoftwareRelease(id,root)
+  expect(readFileSync(join(changed.root,'LAUNCH.json'))).toEqual(resolvedLaunch)
+  await expect(prepareNativeTestRuntime(id,native,changed.root,workspace)).rejects.toThrow('GUI_NATIVE_TEST_SOURCE_CHANGED')
+  await expect(prepareNativeTestRuntime(id,native,root,workspace)).rejects.toThrow('GUI_NATIVE_TEST_SOURCE_CHANGED')
+})
 it('preserves hoisted CJS and ESM dependency lookup after freezing and isolates release bytes from later working changes', async () => {
   const root=project.root_path
   const pkg=(name:string,source:string,esm=false)=>{
