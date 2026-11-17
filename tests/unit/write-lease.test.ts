@@ -97,6 +97,7 @@ describe('写租约（P1-06a：宿主级写隔离）', () => {
     )
     expect(blocked.isError).toBe(true)
     expect(blocked.output).toContain('WRITE_LEASE_CONFLICT')
+    expect(blocked.detail?.display).toBeUndefined()
 
     // 对方释放后同一写入成功
     releaseWriteLease(project.project_id, 'src/app.js', 'other-session-call')

@@ -46,8 +46,8 @@ export function readCatalogSkill(entry: ScopedSkill, resource?: string): string 
 
 /** Host command selection; parsing/stripping skill frontmatter belongs to Pi.
  * Only discovered names are accepted; no second YAML reader or directory aliases. */
-export async function prepareSkillTask(task: string, entries: Map<string, ScopedSkill>) {
-  const names = [...new Set([...task.matchAll(/\/skill:([A-Za-z0-9][A-Za-z0-9._-]*)/g)].map(match => match[1]!))]
+export async function prepareSkillTask(task: string, entries: Map<string, ScopedSkill>, defaults: string[] = []) {
+  const names = [...new Set([...defaults, ...[...task.matchAll(/\/skill:([A-Za-z0-9][A-Za-z0-9._-]*)/g)].map(match => match[1]!)])]
   const { stripFrontmatter } = await import('@earendil-works/pi-coding-agent')
   const escape = (value: string) => value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/'/g, '&#39;')
   const blocks: string[] = [], activatedSkills: string[] = []

@@ -14,6 +14,7 @@ import { authorizesDirectBuild } from '../../../main/guide/lean-scope'
 import { stageLeanScope } from '../../../main/guide/lean-scope'
 import { parseLeanBrief } from '../../../main/guide/lean-brief'
 import { prdScopeFingerprint } from '../../../main/project/requirement-contract'
+import { loadConversationHistory } from '../../../main/platform/sessions/session-service'
 
 vi.mock('../../../main/desktop/desktop-route', () => ({ enterDesktopLine: vi.fn(async () => true), DESKTOP_LINE_TEMPLATE_TYPES: new Set(['desktop_tool', 'game']) }))
 let home: string, previous: string | undefined
@@ -62,6 +63,28 @@ it('one scope extraction plus one HTML request reaches preview and survives rest
   writeFileSync(join(project.root_path, '00_UX/confirmed.html'), 'changed')
   expect(() => readConfirmedUxBinding(project.project_id, readPrdBackplane(project.project_id))).toThrow('UX_CONFIRMATION_CHANGED')
 })
+it('persists a reply from the real UX-to-guide fallback rather than losing it on reload', async () => {
+  const project = createProject({ request_id: 'create', mode: 'quick' }, { workflowVersion: 'software-v1' }), events: AgentEvent[] = []
+  let calls = 0
+  const query: SDKQuery = async function* () {
+    const response = ++calls === 1
+      ? { action: 'brief', goal: '保存记录', ui: 'required', requirements: [{ description: '保存记录', expected: '重开仍在' }] }
+      : calls === 2 ? { action: 'revise_requirements', reason: '先解释当前计划，不修改制作范围' }
+      : { action: 'reply', text: '这是尚未开工的制作计划，当前不会发布程序。' }
+    yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: JSON.stringify(response) }] } }
+    yield { type: 'result', subtype: 'success' }
+  }
+  const input: AgentSendMessageInput = { project_id: project.project_id, session_id: 'fallback', request_id: 'request', mode: 'quick', current_stage: 'clarifying', content: '做个记录工具' }
+  const model = { query, env: {}, signal: new AbortController().signal, sessionId: input.session_id, history: [], maxTokens: 8192, persistAssistant: vi.fn() }
+  const publish = (event: AgentEvent) => events.push(event)
+  await handleGuideMessage(input, publish, model)
+  const id = (events.find(event => event.payload.kind === 'lean_scope')!.payload.questions as Array<{ id: string }>)[0].id
+  await handleGuideMessage({ ...input, content: '按这份做', metadata: { source: 'card_option', selected_option_id: id } }, publish, model)
+  expect(calls).toBe(3)
+  expect(events.some(event => event.type === 'message_delta' && event.payload.text === '这是尚未开工的制作计划，当前不会发布程序。')).toBe(true)
+  expect(loadConversationHistory(input.session_id).some(turn => turn.role === 'assistant' && turn.content === '这是尚未开工的制作计划，当前不会发布程序。')).toBe(true)
+  expect(enterDesktopLine).not.toHaveBeenCalled()
+})
 it('explicit direct implementation skips preview without a second model request; negatives never approve', async () => {
   const project = createProject({ request_id: 'create', mode: 'quick' }, { workflowVersion: 'software-v1' })
   const query = vi.fn<SDKQuery>(async function* () {
@@ -84,4 +107,25 @@ it('explicit direct implementation skips preview without a second model request;
   expect(readPrdBackplane(undecided.project_id).user_confirmed_at).toBeUndefined()
   expect(readPrdBackplane(undecided.project_id).lean_brief?.preview).toBe('skip')
   expect(enterDesktopLine).toHaveBeenCalledTimes(1)
+})
+
+it.each([
+  '按当前方案制作。错误反馈不能只是弹个按钮；顶部工具栏在草图里不要被遮住。',
+  '确认。输入错误不能继续保存，取消按钮的位置保持清楚。'
+])('honors a bound confirmation without routing its accompanying feedback again: %s',async content=>{
+  const project=createProject({request_id:'create',mode:'quick'},{workflowVersion:'software-v1'}),events:AgentEvent[]=[]
+  let calls=0
+  const query:SDKQuery=async function*(){yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:++calls===1?JSON.stringify({action:'brief',name:'记录',goal:'保存记录',ui:'required',requirements:[{description:'保存记录',expected:'可以保存并查看'}]}):'<!DOCTYPE html><html><body><input aria-label="记录"><button>保存</button></body></html>'}]}}}
+  const input:AgentSendMessageInput={project_id:project.project_id,session_id:'s',request_id:'r',mode:'quick',current_stage:'clarifying',content:'做一个记录工具'}
+  const model={query,env:{},signal:new AbortController().signal,sessionId:'s',history:[],maxTokens:8192,persistAssistant:vi.fn()}
+  const publish=(event:AgentEvent)=>events.push(event)
+  await handleGuideMessage(input,publish,model)
+  const scope=(events.find(e=>e.payload.kind==='lean_scope')!.payload.questions as Array<{id:string}>)[0].id
+  await handleGuideMessage({...input,content:'按这份做',metadata:{source:'card_option',selected_option_id:scope}},publish,model)
+  await handleGuideMessage({...input,content:'不要开工',metadata:{source:'chat'}},publish,model)
+  expect(enterDesktopLine).not.toHaveBeenCalled()
+  await handleGuideMessage({...input,content,metadata:{source:'card_option',selected_option_id:'ux_confirm_go'}},publish,model)
+  expect(enterDesktopLine).toHaveBeenCalledTimes(1)
+  expect(readConfirmedUxBinding(project.project_id,readPrdBackplane(project.project_id))).toBeTruthy()
+  expect(calls).toBe(2)
 })

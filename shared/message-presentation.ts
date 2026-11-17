@@ -15,5 +15,10 @@ export function isInternalMessage(message: AgentMessage): boolean {
 
 /** Keep original records intact, removing only standalone protocol lines from assistant prose. */
 export function assistantDisplayText(text: string): string {
-  return text.replace(/^(?:\s*<!--\s*)?PHASE_ADVANCE:\s*[^\n]*(?:-->)?\s*$/gm, '').trim()
+  const prose = text.replace(/^(?:\s*<!--\s*)?PHASE_ADVANCE:\s*[^\n]*(?:-->)?\s*$/gm, '').trim()
+  // Older Bloma builds saved an internal B assessment as an assistant message.
+  if (/^独立案例的(?:预期或覆盖声明尚有争议|业务预期或覆盖声明尚待澄清)[^\n]*：\s*(?:独立设计的宿主执行未通过：[^\n]*\s*)?\{"/.test(prose)) {
+    return '独立验收案例的预期或覆盖仍需核对。回复「继续」查看当前待处理事项。'
+  }
+  return prose
 }

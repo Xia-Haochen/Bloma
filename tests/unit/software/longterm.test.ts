@@ -1,3 +1,5 @@
+import {qualityIdentity,saveQualityLedger,readQualityLedger} from '../../../main/software/quality-ledger'
+import { recordSessionActivity } from '../../../main/platform/sessions/session-service'
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -32,6 +34,7 @@ afterEach(async()=>{const actual=await vi.importActual<typeof import('../../../s
 async function pending(){
   ensureLongtermState(project.project_id,'s');const candidate=await prepareSoftwareRelease(project.project_id,project.root_path)
   await sealSoftwareRelease(candidate,{version:'unit-fixture-only',scope:prdScopeFingerprint(readPrdBackplane(project.project_id)),at:new Date().toISOString()})
+  saveQualityLedger(project.project_id,{version:1,reviews:[{id:'fixture-review',kind:'code',identity:await qualityIdentity(project.project_id),status:'complete',at:new Date().toISOString()}],findings:[]})
   const state=stageLongtermMilestone(project.project_id,'s','original-request',candidate)
   verify.mockResolvedValue({status:'passed',summary:'unit injected host outcome',candidate})
   return{candidate,state}
@@ -116,4 +119,45 @@ it('fails closed on damaged records and on final state persistence failure witho
   vi.mocked(writeTextFileAtomic).mockImplementation((...args)=>{if(args[0]===file)throw Error('fixture disk full');actual.writeTextFileAtomic(...args)})
   await expect(performLongtermAction(action(state.revision),signal(),{busy:false,emit})).rejects.toThrow('fixture disk full')
   expect(readFileSync(file,'utf8')).toBe(before);expect(findProject(project.project_id).status).toBe('active');expect(longtermPendingDecision(project.project_id,'s')).toBeTruthy()
+})
+
+it('hands an idle milestone to an explicit project session without spending or removing candidate guards',async()=>{
+  const state=ensureLongtermState(project.project_id,'s')
+  recordSessionActivity('target',project.project_id)
+  const input={request_id:'handoff',project_id:project.project_id,session_id:'target',revision:state.revision,action:'handoff' as const}
+  await expect(performLongtermAction(input,signal(),{busy:true,emit})).rejects.toThrow('NOT_IDLE')
+  const before=leanBudget(project.project_id,'desktop-implement').snapshot().requests
+  const result=await performLongtermAction(input,signal(),{busy:false,emit})
+  expect(result.state.milestones[0].session_id).toBe('target')
+  expect(leanBudget(project.project_id,'desktop-implement').snapshot().requests).toBe(before)
+  expect(()=>ensureLongtermState(project.project_id,'s')).toThrow('SESSION_MISMATCH')
+  await expect(performLongtermAction(input,signal(),{busy:false,emit})).rejects.toThrow('STALE')
+})
+
+it('refuses confirmation when the current review is absent, preserving the pending milestone',async()=>{
+ const {state}=await pending();saveQualityLedger(project.project_id,{version:1,reviews:[],findings:[]})
+ await expect(performLongtermAction(action(state.revision),signal(),{busy:false,emit})).rejects.toThrow('QUALITY_REVIEW_REQUIRED')
+ expect(findProject(project.project_id).status).toBe('active');expect(await activeSoftwareRelease(project.project_id)).toBeUndefined()
+})
+
+it('refuses a passing execution when a confirmed defect remains open',async()=>{
+ const {state}=await pending(),ledger=readQualityLedger(project.project_id),identity=await qualityIdentity(project.project_id)
+ ledger.findings.push({id:'unclosed',review:'fixture-review',identity,requirement:'F-001',expected_source:'显示5',category:'data',severity:'high',location:'app.cjs',trigger:'edge input',evidence:'recorded failure',reproduction:'edge input',unknowns:'',disposition:'confirmed',checks:[{at:'',identity,rules:'old',case_name:'edge',grounded:true,outcome:'failed',observation:'actual failure fixture'}]})
+ saveQualityLedger(project.project_id,ledger)
+ await expect(performLongtermAction(action(state.revision),signal(),{busy:false,emit})).rejects.toThrow('QUALITY_FINDINGS_OPEN')
+ expect(findProject(project.project_id).status).toBe('active');expect(await activeSoftwareRelease(project.project_id)).toBeUndefined()
+ expect(readQualityLedger(project.project_id).findings[0].disposition).toBe('confirmed')
+})
+
+it('restores the previous active release if saving the final milestone fails after publication',async()=>{
+ const {state}=await pending(),file=join(home,'software-longterm',project.project_id+'.json')
+ const actual=await vi.importActual<typeof import('../../../storage/json-store')>('../../../storage/json-store')
+ vi.mocked(writeTextFileAtomic).mockImplementation((...args)=>{
+   if(args[0]===file&&JSON.parse(args[1]).milestones.some((m:any)=>m.status==='delivered'))throw Error('final milestone write interrupted')
+   actual.writeTextFileAtomic(...args)
+ })
+ await expect(performLongtermAction(action(state.revision),signal(),{busy:false,emit})).rejects.toThrow('final milestone write interrupted')
+ expect(findProject(project.project_id).status).toBe('active')
+ expect(await activeSoftwareRelease(project.project_id)).toBeUndefined()
+ expect(longtermPendingDecision(project.project_id,'s')).toBeTruthy()
 })

@@ -1,3 +1,4 @@
+import { recordProjectActivity } from './project-activity'
 import { createHash, randomUUID } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -92,6 +93,7 @@ export function bindEvaluationRun(projectId:string,protocol:EvaluationProtocol,t
 /** Optional observation only. A broken collector cannot create usable study
  * evidence; it does not interrupt an otherwise authorized product operation. */
 export function recordEvaluationEvent(projectId:string,kind:string,data:Record<string,unknown>={},at=Date.now()):boolean{
+  recordProjectActivity(projectId,kind,data,at)
   const base=folder(projectId),binding=join(base,'binding.json'),events=join(base,'events.jsonl')
   if(!existsSync(binding))return false
   try{

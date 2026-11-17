@@ -1,0 +1,165 @@
+import navigationReplay from '../../fixtures/quality-convergence-replay-20261110.json'
+import { expect, it } from 'vitest'
+import { currentEngineeringFailures, unreviewedNegativeObservation, findingNeedsClosure, qualityCloseout, qualityWorkQueue, observedQualityFinding } from '../../../main/software/quality-closeout'
+import { visualCoverageComplete } from '../../../main/software/visual-review-checklist'
+import type { Identity, Ledger, QualityFinding } from '../../../main/software/quality-ledger'
+import replay from '../../fixtures/quality-convergence-replay-20261104.json'
+
+const identity: Identity = { source: 'source', target: 'target', environment: 'env' }
+const finding = (changes: Partial<QualityFinding> = {}): QualityFinding => ({ id: 'f', review: 'r', identity,
+  requirement: 'F-001', expected_source: 'confirmed', category: 'data', severity: 'high', location: 'form',
+  trigger: 'save', evidence: 'record', reproduction: 'save/reopen', unknowns: '', disposition: 'suspected', checks: [], ...changes })
+const ledger = (findings: QualityFinding[]): Ledger => ({ version: 1, reviews: [], findings })
+it('replays real decision fields: historical important doubts remain work after the final source edit',()=>{
+  const rows=replay.findings.map(f=>({expected_source:'omitted in projection',category:'projection',location:'omitted',trigger:'omitted',evidence:'omitted',reproduction:'omitted',unknowns:'',...f})) as QualityFinding[]
+  const result=qualityCloseout(ledger(rows),replay.current_identity,{code:'code_review',message:'QUALITY_REVIEW_REQUIRED'},'current-rules')
+  const required=rows.filter(f=>f.disposition==='suspected'&&(f.severity==='high'||f.severity==='critical'||f.review_kind==='visual'&&f.severity==='medium'))
+  expect(required.length).toBeGreaterThan(0)
+  expect(result.required_investigation).toEqual(required.map(f=>f.id))
+  expect(result.next_tool).toBe('start_visual_review')
+  expect(rows.every(f=>f.checks.length===0)).toBe(true)
+})
+it('carries important suspicions across edits and gives current evidence priority over repeated review',()=>{
+  const f=finding(),changed={...identity,source:'edited'}
+  const facts=ledger([f,...Array.from({length:100},(_,i)=>finding({id:'idea'+i,disposition:'suggestion',evidence:'historical prose'.repeat(100)}))])
+  const queue=qualityWorkQueue(facts,changed,{code:'code_review',message:'QUALITY_REVIEW_REQUIRED'},'rules')
+  expect(queue).not.toHaveProperty('closeout')
+  expect(queue.problems).toEqual([expect.objectContaining({id:'f',expected:f.expected_source,trigger:f.trigger,observation:f.evidence,missing:f.reproduction})]);expect(queue.history.findings).toBe(101)
+  expect(JSON.stringify(queue).length).toBeLessThan(JSON.stringify(facts).length/10)
+  expect(qualityCloseout(facts,{...changed,target:'different goal'},undefined,'rules').required_investigation).toEqual(['f']) // callers filter retired requirements, not arbitrary identity changes
+})
+it('orders real defects before repeated reviews and defers enhancements without deleting evidence', () => {
+  const rows = [finding(), finding({ id: 'idea', disposition: 'suggestion' }), finding({ id: 'dispute', disposition: 'disputed' })]
+  const facts = ledger(rows), before = JSON.stringify(facts)
+  expect(qualityCloseout(facts, identity, {code:'code_review',message:'QUALITY_REVIEW_REQUIRED'}, 'rules')).toMatchObject({
+    next_tool: 'start_quality_review', investigate: ['f'], deferred: ['idea', 'dispute'], verification: 'not_issued' })
+  expect(JSON.stringify(facts)).toBe(before)
+  expect(qualityCloseout(ledger(rows.slice(1)), identity, undefined, 'rules').next_tool).toBe('verify_app')
+})
+it('keeps medium visual defects blocking until a passing check matches current source and frozen rules', () => {
+  const check = { at: '', identity, case_name: 'layout', rules: 'rules', grounded:true, outcome: 'failed' as const, observation: 'clipped control' }
+  const f = finding({ severity: 'medium', review_kind: 'visual', disposition: 'confirmed', checks: [check] })
+  expect(findingNeedsClosure(f, identity, 'rules')).toBe(true)
+  f.disposition = 'closed'; f.checks.push({ ...check, outcome: 'passed' })
+  expect(findingNeedsClosure(f, identity, 'rules')).toBe(false)
+  expect(findingNeedsClosure(f, { ...identity, source: 'changed' }, 'rules')).toBe(true)
+  expect(findingNeedsClosure(f, identity, 'changed-rules')).toBe(true)
+})
+it('never ignores an actually reproduced agreed-case failure merely because the reviewer rated it low',()=>{
+  const f=finding({severity:'low',review_kind:'code',disposition:'confirmed',checks:[{at:'',identity,case_name:'saved-data',rules:'rules',grounded:true,outcome:'failed',observation:'actual mismatch'}]})
+  expect(findingNeedsClosure(f,identity,'rules')).toBe(true)
+  expect(qualityCloseout(ledger([f]),identity,undefined,'rules').must_fix).toEqual(['f'])
+})
+it('does not promote a single screenshot observation or repeated category into complete visual coverage', () => {
+  expect(visualCoverageComplete([{ area: 'content' }])).toBe(false)
+  expect(visualCoverageComplete(Array(4).fill({ area: 'layout' }))).toBe(false)
+  expect(visualCoverageComplete(['layout','interaction','content','scope'].map(area => ({ area })))).toBe(true)
+})
+it('does not confirm a finding from a timeout after earlier successful assertions in the same native case', () => {
+  const result = (assertion?: object) => ({ status: 'failed', summary: 'failed', core: { host_gui: {
+    method: 'node:test', case_results: [{ name: 'save', feature: 'F-001', assertions: 3, status: 'failed' }],
+    steps: [{ passed: false, actual: { test: 'save', error: 'TimeoutError waiting for locator', assertion } }],
+  } } }) as never
+  expect(observedQualityFinding(result(), finding(), 'save')).toBe('unverified')
+  expect(observedQualityFinding(result({ expected: 1, actual: 0 }), finding(), 'save')).toBe('failed')
+})
+it('recognizes an explicit first failed assertion without requiring a previously successful assertion',()=>{
+  const result=(assertion?:object)=>({status:'failed',summary:'failed',core:{host_gui:{method:'node:test',case_results:[{name:'first',feature:'F-001',assertions:0,status:'failed'}],steps:[{passed:false,actual:{test:'first',assertion}}]}}}) as never
+  expect(observedQualityFinding(result({expected:true,actual:false}),finding(),'first')).toBe('failed')
+  expect(observedQualityFinding(result(),finding(),'first')).toBe('unverified')
+})
+
+it('routes by typed qualification rather than message text and applies approved corrections before retesting',()=>{
+ expect(qualityCloseout(ledger([]),identity,{code:'code_review',message:'任意可读说明'},'rules').next_tool).toBe('start_quality_review')
+ const f=finding({disposition:'confirmed',checks:[{at:'',identity,case_name:'case',rules:'rules',grounded:true,outcome:'failed',observation:'failure'}]})
+ expect(qualityCloseout(ledger([f]),identity,{code:'apply_correction',message:'先应用批准的纠正'},'rules').next_tool).toBe('apply_test_correction')
+})
+
+it('schedules independent review for new host observations but not the same observation again',()=>{
+ const facts=ledger([finding()]);facts.reviews.push({id:'review',kind:'code',identity,status:'complete',at:'',observation:{digest:'observed',ui:{},steps:[],logs:[]}})
+ const block={code:'investigation' as const,message:'需要具体观察'}
+ expect(qualityCloseout(facts,identity,block,'rules',undefined,'observed').next_tool).toBe('inspect_app')
+ expect(qualityCloseout(facts,identity,block,'rules',undefined,'new-observation').next_tool).toBe('start_quality_review')
+ expect(facts.findings[0].disposition).toBe('suspected')
+})
+
+it('a later interrupted review prevents an older completion from directing the maker back into inspection',()=>{
+ const facts=ledger([finding()]);facts.reviews.push({id:'old',kind:'code',identity,status:'complete',at:''},{id:'stopped',kind:'code',identity,status:'interrupted',at:''})
+ expect(qualityCloseout(facts,identity,{code:'investigation',message:'仍需审阅'},'rules').next_tool).toBe('start_quality_review')
+})
+
+it('requires candidate judgment after a legacy binding review',()=>{
+ const facts=ledger([finding()])
+ facts.reviews.push({id:'binding',kind:'code',purpose:'binding',rules:'rules',identity,status:'complete',at:'',
+  observation:{digest:'old observation',ui:{},steps:[],logs:[]}})
+ const block={code:'investigation' as const,message:'需要补足对应案例'}
+ expect(qualityCloseout(facts,identity,block,'rules',undefined,'new observation').next_tool).toBe('start_quality_review')
+ expect(qualityCloseout(facts,{...identity,source:'changed'},block,'rules',undefined,'new observation').next_tool).toBe('start_quality_review')
+})
+
+it('never treats legacy prose as runtime evidence and exposes the missing case obligation',()=>{
+ const f=finding({reviewed:{identity,review:'r',evidence:'code changed'}})
+ const facts=ledger([f]);facts.reviews.push({id:'r',kind:'code',purpose:'binding',identity,status:'complete',at:''})
+ const queue=qualityWorkQueue(facts,identity,{code:'investigation',message:'missing runtime'},'rules')
+ expect(queue.problems[0].investigation).toMatchObject({finding_id:'f',binding:null,missing:'independently_confirmed_case',steps:f.reproduction})
+ expect(qualityCloseout(facts,identity,undefined,'rules').required_investigation).toEqual(['f'])
+})
+it('keeps partial reviews out of candidate qualification and schedules an accepted binding for execution',()=>{
+ const f=finding({retest:{identity,review:'binding',case_name:'target',rules:'rules',evidence:'independently checked trigger'}})
+ const facts=ledger([f]);facts.reviews.push({id:'binding',kind:'code',purpose:'binding',identity,status:'complete',at:''})
+ expect(qualityCloseout(facts,identity,{code:'investigation',message:'execute'},'rules')).toMatchObject({next_tool:'verify_app',required_investigation:['f']})
+ expect(qualityWorkQueue(facts,identity,undefined,'rules').problems[0].investigation.binding).toEqual({case_name:'target',rules:'rules'})
+})
+
+it('accepts typed static correction only for static findings and never closes an executed failure with prose',()=>{
+ const correction={identity,review:'r',evidence:'exact static scope mismatch',basis:'not_applicable' as const}
+ const staticFinding=finding({requires_execution:false,reviewed:correction})
+ expect(qualityCloseout(ledger([staticFinding]),identity,undefined,'rules').required_investigation).toEqual([])
+ expect(qualityCloseout(ledger([finding({requires_execution:true,reviewed:correction})]),identity,undefined,'rules').required_investigation).toEqual(['f'])
+ const failed=finding({...staticFinding,disposition:'confirmed',checks:[{at:'',identity,rules:'rules',case_name:'target',grounded:true,outcome:'failed',observation:'observed assertion'}]})
+ expect(qualityCloseout(ledger([failed]),identity,undefined,'rules').must_fix).toEqual(['f'])
+})
+
+it('requires a new independent judgment for new typed failure facts, not ordinary advice or lifecycle noise',()=>{
+ const obs={source:'source',digest:'first',ui:{},steps:[{passed:false,actual:'assertion mismatch'}],logs:[]}
+ const facts=ledger([]);expect(unreviewedNegativeObservation(facts,{...obs,steps:[]})).toBe(false)
+ expect(unreviewedNegativeObservation(facts,obs)).toBe(true)
+ facts.reviews.push({id:'ack',kind:'code',identity,status:'complete',at:'',observation:obs})
+ expect(unreviewedNegativeObservation(facts,{...obs,digest:'changed screenshot',logs:[{kind:'page.closed'}]})).toBe(false)
+ expect(unreviewedNegativeObservation(facts,{...obs,steps:[{passed:false,actual:'new mismatch'}]})).toBe(true)
+ const host={input_intact:true,source_changed:false,target_changed:false,recent_runs:[{input_intact:true,exit_code:1,record_sha256:'a'.repeat(64)}]}
+ expect(currentEngineeringFailures({updates:[{text:'ordinary suggestion'}]})).toEqual([])
+ expect(currentEngineeringFailures({updates:[{workspace_facts:host},{workspace_facts:host}]})).toHaveLength(1)
+ expect(currentEngineeringFailures({updates:[{workspace_facts:{...host,source_changed:true}}]})).toEqual([])
+})
+
+
+it('coverage completion cannot stand in for current case-binding review after a contract change',()=>{
+ const facts=ledger([finding({id:'original'}),finding({id:'same-trigger-copy'}),finding({id:'different-trigger',trigger:'offline then retry'})])
+ facts.reviews.push({id:'coverage',kind:'code',purpose:'coverage',rules:'coverage-rules',identity,status:'complete',at:''})
+ expect(qualityCloseout(facts,identity,{code:'investigation',message:'missing bindings'},'rules')).toMatchObject({
+  next_tool:'start_quality_review',purpose:'candidate',binding_findings:['original','same-trigger-copy','different-trigger'],required_investigation:['original','same-trigger-copy','different-trigger']})
+ expect(facts.findings.every(f=>!f.retest&&f.checks.length===0)).toBe(true)
+})
+it('does not let a review of another frozen contract suppress binding work',()=>{
+ const facts=ledger([finding()]);facts.reviews.push({id:'stale',kind:'code',purpose:'binding',rules:'old-rules',identity,status:'complete',at:''})
+ expect(qualityCloseout(facts,identity,undefined,'rules').next_tool).toBe('start_quality_review')
+})
+it('lists every required binding without treating bound or similar findings as equivalent',()=>{
+ const facts=ledger([finding({id:'bound',retest:{identity,review:'binding',case_name:'saved-data',rules:'rules',evidence:'exact inputs'}}),finding({id:'unbound'}),finding({id:'another-path',trigger:'network error'})])
+ expect(qualityCloseout(facts,identity,undefined,'rules')).toMatchObject({next_tool:'verify_app',binding_findings:['unbound','another-path']})
+ facts.findings[0].disposition='not_reproduced';facts.findings[0].checks.push({at:'',identity,case_name:'saved-data',rules:'rules',grounded:true,outcome:'passed',observation:'current result'})
+ expect(qualityCloseout(facts,identity,undefined,'rules')).toMatchObject({next_tool:'start_quality_review',binding_findings:['unbound','another-path']})
+})
+
+
+it('replays the sanitized 14-finding navigation ledger without merging the three unresolved suspicions',()=>{
+ const facts=structuredClone(navigationReplay.ledger) as Ledger,before=JSON.stringify(facts)
+ const result=qualityCloseout(facts,navigationReplay.current,{code:'investigation',message:'current-case evidence missing'},navigationReplay.rules)
+ expect(facts.findings).toHaveLength(14);expect(facts.reviews).toHaveLength(4)
+ expect(result.required_investigation).toEqual(navigationReplay.expected_investigation)
+ expect(result.must_fix).toEqual(['finding-06','finding-07'])
+ expect(result.binding_findings).toEqual(['finding-06','finding-07',...navigationReplay.expected_investigation])
+ expect(result).toMatchObject({next_tool:'start_quality_review',purpose:'candidate'})
+ expect(JSON.stringify(facts)).toBe(before)
+})

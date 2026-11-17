@@ -1,0 +1,277 @@
+{
+  "provenance": "Read-only allowlist projection; no imported PASS authorizes execution or release.",
+  "requests": [
+    {
+      "sequence": 121,
+      "sha256": "c72945c19e5a08a38371e496176c646e6667130a74a63e443e70e3887ce18990",
+      "role": "orchestrator",
+      "started_at": "2026-11-09T07:51:04.771Z",
+      "finished_at": "2026-11-09T07:51:08.061Z",
+      "status": "completed",
+      "usage": {
+        "input_tokens": 2681,
+        "output_tokens": 217,
+        "cache_read_input_tokens": 165120
+      },
+      "reported_price_micro_rmb": 13703,
+      "unreported_physical_attempts": 0,
+      "physical_started": 1,
+      "tools": [
+        {
+          "name": "verify_app",
+          "at": "2026-11-09T07:51:58.634Z",
+          "status": "ok",
+          "feedback": {
+            "schema_version": 1,
+            "execution": "completed",
+            "verification": "passed",
+            "scope": "software_candidate",
+            "recovery": "none",
+            "source": "host"
+          }
+        }
+      ],
+      "partner_handoff": true
+    },
+    {
+      "sequence": 124,
+      "sha256": "bebf6197d529d2b82bf773d82286d02238935090aaf23634cc9cafbc4d5f9c8c",
+      "role": "orchestrator",
+      "started_at": "2026-11-09T07:52:06.780Z",
+      "finished_at": "2026-11-09T07:52:14.259Z",
+      "status": "completed",
+      "usage": {
+        "input_tokens": 3578,
+        "output_tokens": 878,
+        "cache_read_input_tokens": 166656
+      },
+      "reported_price_micro_rmb": 20847,
+      "unreported_physical_attempts": 0,
+      "physical_started": 1,
+      "tools": [
+        {
+          "name": "run_command",
+          "at": "2026-11-09T07:52:15.251Z",
+          "status": "ok",
+          "feedback": null
+        },
+        {
+          "name": "write_file",
+          "at": "2026-11-09T07:52:15.462Z",
+          "status": "ok",
+          "feedback": {
+            "schema_version": 1,
+            "execution": "completed",
+            "verification": "not_applicable",
+            "source": "host"
+          }
+        }
+      ],
+      "partner_handoff": true
+    },
+    {
+      "sequence": 128,
+      "sha256": "2814359b4961fd7d50b08285fc6f1a682eabfbebe3d8b3a4ce5a101bea84e672",
+      "role": "orchestrator",
+      "started_at": "2026-11-09T07:52:48.369Z",
+      "finished_at": "2026-11-09T07:52:51.841Z",
+      "status": "completed",
+      "usage": {
+        "input_tokens": 3233,
+        "output_tokens": 234,
+        "cache_read_input_tokens": 169984
+      },
+      "reported_price_micro_rmb": 15138,
+      "unreported_physical_attempts": 0,
+      "physical_started": 1,
+      "tools": [
+        {
+          "name": "run_command",
+          "at": "2026-11-09T07:52:53.576Z",
+          "status": "ok",
+          "feedback": null
+        }
+      ],
+      "partner_handoff": true
+    },
+    {
+      "sequence": 145,
+      "sha256": "8616095d91d6a109114565c5fd47bf7242a504242cc7d44e95002212d18058d7",
+      "role": "research",
+      "started_at": "2026-11-09T07:55:28.985Z",
+      "finished_at": "2026-11-09T07:55:31.049Z",
+      "status": "cancelled",
+      "usage": null,
+      "reported_price_micro_rmb": null,
+      "unreported_physical_attempts": 1,
+      "physical_started": 1,
+      "tools": [],
+      "partner_handoff": false
+    },
+    {
+      "sequence": 168,
+      "sha256": "1bdb4568c0d8354ff58bcc9f5c70835d511f9d59f5135909c40f56ed68117904",
+      "role": "code",
+      "started_at": "2026-11-09T08:19:02.963Z",
+      "finished_at": "2026-11-09T08:24:49.879Z",
+      "status": "completed",
+      "usage": {
+        "input_tokens": 823,
+        "output_tokens": 46772,
+        "cache_read_input_tokens": 56576,
+        "cache_creation_input_tokens": 0
+      },
+      "reported_price_micro_rmb": 378086,
+      "unreported_physical_attempts": 0,
+      "physical_started": 1,
+      "tools": [
+        {
+          "name": "submit_quality_findings",
+          "at": "2026-11-09T08:24:51.254Z",
+          "status": "ok",
+          "feedback": null
+        }
+      ],
+      "partner_handoff": false
+    },
+    {
+      "sequence": 190,
+      "sha256": "7e0875a4b6c6ed5f6e6e0c587a0858ecdec34bf079e721b3dd8830ebd5598101",
+      "role": "orchestrator",
+      "started_at": "2026-11-09T08:28:10.398Z",
+      "finished_at": "2026-11-09T08:28:12.944Z",
+      "status": "completed",
+      "usage": {
+        "input_tokens": 1691,
+        "output_tokens": 101,
+        "cache_read_input_tokens": 201728
+      },
+      "reported_price_micro_rmb": 12260,
+      "unreported_physical_attempts": 0,
+      "physical_started": 1,
+      "tools": [
+        {
+          "name": "verify_app",
+          "at": "2026-11-09T08:29:05.690Z",
+          "status": "ok",
+          "feedback": {
+            "schema_version": 1,
+            "execution": "completed",
+            "verification": "passed",
+            "scope": "software_candidate",
+            "recovery": "none",
+            "source": "host"
+          }
+        }
+      ],
+      "partner_handoff": true
+    },
+    {
+      "sequence": 194,
+      "sha256": "a9201d3c358f83ba8260225b7ab3b4391983bcde15e0f39250a59992c04dfc03",
+      "role": "research",
+      "started_at": "2026-11-09T08:29:13.073Z",
+      "finished_at": "2026-11-09T08:29:13.503Z",
+      "status": "error",
+      "usage": null,
+      "reported_price_micro_rmb": null,
+      "unreported_physical_attempts": 0,
+      "physical_started": 0,
+      "tools": [],
+      "partner_handoff": false
+    },
+    {
+      "sequence": 195,
+      "sha256": "319f421bae034dbc71839dfe92ac15d7690e9316fc676817603ce82f92da1747",
+      "role": "orchestrator",
+      "started_at": "2026-11-09T08:29:14.455Z",
+      "finished_at": "2026-11-09T08:29:14.927Z",
+      "status": "error",
+      "usage": null,
+      "reported_price_micro_rmb": null,
+      "unreported_physical_attempts": 0,
+      "physical_started": 0,
+      "tools": [],
+      "partner_handoff": true
+    }
+  ],
+  "quality_sha256": "7a06244dce6cde9e2b968603d9db5ef56b155f547e6c385c564947877d0df8e2",
+  "findings": [
+    {
+      "id": "7e72fc6f-b113-469b-a865-0b6c8004fa2e",
+      "identity": {
+        "source": "ce3470f6b99fc9831a021fcc048277cc58df727e095e17ddc12a3932bf835982",
+        "target": "b6cf3dac5599db147e4288c451b67f085e4357722914b8bcabd8d49364de7b50",
+        "environment": "61bd76ab35c69b6fc16690fcf6c0910fbccf9cdfd1c969d263690df296c271f6"
+      },
+      "requirement": "F-003",
+      "severity": "high",
+      "disposition": "suspected",
+      "trigger": "同一窗口先以管理员登录并进入「统计概览」「导入 / 导出」或「报名签到」「成员管理」，点击「退出」，随后用成员账号登录。登录流程不会把当前视图复位为活动日历，也不会隐藏上一角色打开的管理 view。",
+      "reproduction": "1) 管理员 linlan 登录；2) 点击左侧「统计概览」；3) 点击「退出」；4) 在同一窗口用成员 zhouyu 登录；5) 不刷新页面，当前仍停留在统计概览，能看到上一会话的成员数、活动数和各活动报名表；再重试「导入 / 导出」或「成员管理」同样会显示上一管理员会话的内容。",
+      "unknowns": "未在 Electron 中实际执行；代码路径是同步且无分支的，视图不会被 hidden 自动回收。验收脚本的 loginAs 每次 page.reload()，所以测试未覆盖同页退出再换角色登录的场景。",
+      "checks": []
+    },
+    {
+      "id": "ee4f02d4-0b39-4cef-9c95-0c743d1fc74e",
+      "identity": {
+        "source": "ce3470f6b99fc9831a021fcc048277cc58df727e095e17ddc12a3932bf835982",
+        "target": "b6cf3dac5599db147e4288c451b67f085e4357722914b8bcabd8d49364de7b50",
+        "environment": "61bd76ab35c69b6fc16690fcf6c0910fbccf9cdfd1c969d263690df296c271f6"
+      },
+      "requirement": "F-009",
+      "severity": "high",
+      "disposition": "suspected",
+      "trigger": "成员 A 登录后打开「我的记录」或「通知」，退出登录，再在同一窗口用成员 B 登录；B 未点击对应导航/刷新前，页面仍显示 A 的报名、签到状态及 A 的通知正文。",
+      "reproduction": "1) 成员 zhouyu 登录，打开「我的记录」（可见其活动、报名、签到状态）；2) 退出；3) 同窗口登录 chenyu；4) 未刷新页面时记录表仍是 zhouyu 的行；把第 1 步换成打开「通知」，第 4 步会看到 zhouyu 的系统通知正文。点击对应导航或刷新按钮后才会换成当前账号数据。",
+      "unknowns": "未运行验证；静态阅读可确定换账号路径没有 loadRecords/loadNotices 调用。若在登录前 reload 页面则问题消失，现有验收脚本正是每次 reload，因此未覆盖。通知部分还关联 F-010 的「只能查看自己的通知」，此处一并记录但不重复建单。",
+      "checks": []
+    },
+    {
+      "id": "b1ce8554-e969-495f-84c7-491a652aa194",
+      "identity": {
+        "source": "ce3470f6b99fc9831a021fcc048277cc58df727e095e17ddc12a3932bf835982",
+        "target": "b6cf3dac5599db147e4288c451b67f085e4357722914b8bcabd8d49364de7b50",
+        "environment": "61bd76ab35c69b6fc16690fcf6c0910fbccf9cdfd1c969d263690df296c271f6"
+      },
+      "requirement": "F-004",
+      "severity": "medium",
+      "disposition": "suspected",
+      "trigger": "网络较慢时快速点击两次「下个月」，或在切换月份请求未返回时再点「今天」；两个 /api/events?month= 请求并发，较旧月份的响应后到会覆盖 state.events。",
+      "reproduction": "用 DevTools 将网络调为慢速，在日历上快速连续点击「下个月」两次，观察月标题已到新月份但格子中的活动日期仍属于上一月份；或在报名签到页快速切换两个活动，观察下拉已选 B 而表格仍是 A 的名单。再点一次刷新可恢复。",
+      "unknowns": "需要运行时网络延迟才能稳定复现，未实际执行；若请求严格按发出顺序返回则不可见。界面目前没有请求取消或序号机制。",
+      "checks": []
+    },
+    {
+      "id": "8fe50b77-654f-4c09-b91e-e53852b21499",
+      "identity": {
+        "source": "ce3470f6b99fc9831a021fcc048277cc58df727e095e17ddc12a3932bf835982",
+        "target": "b6cf3dac5599db147e4288c451b67f085e4357722914b8bcabd8d49364de7b50",
+        "environment": "61bd76ab35c69b6fc16690fcf6c0910fbccf9cdfd1c969d263690df296c271f6"
+      },
+      "requirement": "F-002",
+      "severity": "medium",
+      "disposition": "suspected",
+      "trigger": "按 README 的方式在终端再启动一个 electron main.cjs，两个进程的首窗口都使用默认 session（同一 userData、同一 127.0.0.1 origin），先后登录管理员和成员账号。",
+      "reproduction": "终端 A 执行 electron main.cjs 并登录 linlan；终端 B 再执行 electron main.cjs 并登录 zhouyu；随后刷新任一窗口或重启客户端，检查 /api/me 返回的角色/账号是否被另一进程的令牌影响。",
+      "unknowns": "Electron/Chromium 对同一 userData 多进程 localStorage 的具体表现（内存缓存/磁盘锁）需运行确认；但两端使用同一持久 key 的事实可通过代码确定，且没有 single-instance 保护。未执行。",
+      "checks": []
+    },
+    {
+      "id": "c52dec5a-6673-4134-bc76-6bddac876455",
+      "identity": {
+        "source": "ce3470f6b99fc9831a021fcc048277cc58df727e095e17ddc12a3932bf835982",
+        "target": "b6cf3dac5599db147e4288c451b67f085e4357722914b8bcabd8d49364de7b50",
+        "environment": "61bd76ab35c69b6fc16690fcf6c0910fbccf9cdfd1c969d263690df296c271f6"
+      },
+      "requirement": "F-001",
+      "severity": "medium",
+      "disposition": "suspected",
+      "trigger": "第一个 electron main.cjs 进程自动在本机启动服务端，第二个独立客户端复用它；用户只关闭第一个客户端（其窗口全部关闭）而保留第二个客户端。",
+      "reproduction": "终端 A: electron main.cjs（自动启动服务端）→ 登录管理员；终端 B: electron main.cjs（复用 4319）→ 登录成员；关闭 A 的全部窗口后，在 B 点击「刷新状态」或报名，出现无法连接服务端的提示，重启 B 才能恢复。",
+      "unknowns": "未运行验证关闭时序；代码中没有服务端所有权探测或客户端重连逻辑，按现有控制流会发生。若按 README 方式 B 单独启动 node server.cjs，则不受影响；受影响的是推荐的一键启动方式。",
+      "checks": []
+    }
+  ],
+  "ledger_sha256": "af4425934b3ae31c8bb3b48705e8a2382b67b86c0d403de3c61ae73be57ea444"
+}

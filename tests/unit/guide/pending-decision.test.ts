@@ -41,6 +41,19 @@ it('restores only an actual current sketch and owner confirmation; changed bytes
   expect(pending.preview_url).toContain('bloma-file:')
   expect(pending.payload).toMatchObject({ kind: 'ux_confirm', questions: expect.arrayContaining([expect.objectContaining({ id: 'ux_confirm_go' })]) })
   expect(readPendingDecision(project.project_id, 'foreign')).toBeUndefined()
+  const saved=JSON.parse(readFileSync(guideConfirmationPath('ux',project.project_id),'utf8'));saveGuideConfirmation({...saved,state:'adjust'})
+  expect(readPendingDecision(project.project_id,'s')?.payload).toMatchObject({kind:'ux_feedback',observation_required:true,questions:[]})
+  expect(readPendingDecision(project.project_id,'s')?.preview_url).toContain('bloma-file:')
   writeFileSync(join(project.root_path, '00_UX/ux-sketch.html'), html + 'changed')
   expect(() => readPendingDecision(project.project_id, 's')).toThrow('SKETCH_CHANGED')
+})
+
+it('restores text-only adjustment after failed generation without requiring a nonexistent preview',()=>{
+  const project=setup();markPrdUserConfirmed(project.project_id)
+  const brief=readPrdBackplane(project.project_id),scope=prdScopeFingerprint(brief)
+  saveGuideConfirmation({version:1,kind:'ux',id:randomUUID(),project_id:project.project_id,session_id:'s',scope_hash:scope,state:'adjust',data:{
+    project_id:project.project_id,session_id:'s',prdFingerprint:scope,backplane:brief,generationFailed:true}})
+  const restored=readPendingDecision(project.project_id,'s')!
+  expect(restored.preview_url).toBeUndefined()
+  expect(restored.payload).toMatchObject({kind:'ux_feedback',observation_required:false,questions:[]})
 })

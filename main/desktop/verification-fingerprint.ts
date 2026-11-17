@@ -18,7 +18,7 @@ export function* verificationSourceFiles(root: string, prefix = '', executableOn
     const relative = prefix ? `${prefix}/${entry.name}` : entry.name
     if (isHostPresentationOutput(relative)) continue
     if (entry.isDirectory()) yield* verificationSourceFiles(root, relative, executableOnly || MUTABLE_DIRECTORIES.has(entry.name))
-    else if ((executableOnly ? EXECUTABLE_FILE : INPUT_FILE).test(entry.name)) yield { path: join(root, relative), relative }
+    else if ((executableOnly ? EXECUTABLE_FILE : INPUT_FILE).test(entry.name) || relative === 'ARCHITECTURE.md') yield { path: join(root, relative), relative }
   }
 }
 
@@ -39,7 +39,7 @@ export function verificationFingerprint(root: string | undefined, context: unkno
         if (isHostPresentationOutput(rel)) continue
         if (entry.isDirectory()) { visit(path, `${rel}/`, executableOnly || MUTABLE_DIRECTORIES.has(entry.name)); continue }
         // Report/data names are not authority to hide executable test or product code.
-        if (!(executableOnly ? EXECUTABLE_FILE : INPUT_FILE).test(entry.name)) continue
+        if (!(executableOnly ? EXECUTABLE_FILE : INPUT_FILE).test(entry.name) && rel !== 'ARCHITECTURE.md') continue
         const before = statSync(path), size = before.size
         if (++count > (policy === 'software' ? 100000 : 5000) || (bytes += size) > (policy === 'software' ? 1024 : 32) * 1024 * 1024) throw new Error('verification input budget')
         hash.update(JSON.stringify(rel)).update('\0')

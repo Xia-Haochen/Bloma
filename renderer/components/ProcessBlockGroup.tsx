@@ -1,3 +1,5 @@
+import type { ToolFeedback } from '../../shared/tool-feedback'
+import type { ToolDisplay } from '../../shared/tool-display'
 import React from 'react'
 import type { ToolCallStatus } from './ToolCallBlock'
 import type { DelegationView } from '../agent-atoms'
@@ -33,6 +35,8 @@ export type ProcessItem =
       outputSummary?: string
       status: ToolCallStatus
       durationMs?: number
+      feedback?: ToolFeedback
+      display?: ToolDisplay
       replay?: boolean
     }
   | { kind: 'delegation'; key: string; item: DelegationView }
@@ -43,7 +47,7 @@ export function buildProcessGroupSummary(items: ProcessItem[]): string {
   for (const item of items) {
     if (item.kind === 'tool' || item.kind === 'delegation') steps += 1
   }
-  return `已完成 ${steps} 步`
+  return `执行记录 · ${steps} 项`
 }
 
 export interface ProcessBlockGroupProps {

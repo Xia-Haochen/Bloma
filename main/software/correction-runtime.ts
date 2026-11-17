@@ -36,7 +36,7 @@ export async function startSoftwareCorrection(projectId: string, root: string, l
   try {
     let page:Page
     if(launch.ui==='electron'){
-      const entry = electronEntry(root, launch.command)
+      const entry = electronEntry(root, launch.command, projectId)
       app = await _electron.launch({ ...entry, args: [...entry.args, `--user-data-dir=${join(sessionDir, 'profile')}`], cwd: root, env: softwareEnvironment(projectId, data,root), timeout: 20000 })
       child = app.process();page=await app.firstWindow({timeout:15000})
     }else{

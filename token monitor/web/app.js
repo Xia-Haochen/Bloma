@@ -423,6 +423,12 @@ export function mountTokenMonitor(root, transport) {
     }
   }
 
+  const dateFields = [$("start"), $("end")];
+  function updateDatePlaceholders() {
+    for (const field of dateFields) field.toggleAttribute("data-empty", !field.value);
+  }
+  updateDatePlaceholders();
+
   $("filters").addEventListener("submit", event => {
     event.preventDefault();
     const start = $("start").value ? new Date($("start").value).getTime() : -Infinity;
@@ -436,10 +442,17 @@ export function mountTokenMonitor(root, transport) {
     state.page = 0;
     render();
   });
-  for (const field of ["start", "end"]) $(field).addEventListener("input", () => $("end").setCustomValidity(""));
+  for (const field of dateFields) {
+    field.addEventListener("input", () => {
+      $("end").setCustomValidity("");
+      updateDatePlaceholders();
+    });
+    field.addEventListener("change", updateDatePlaceholders);
+  }
   $("clear-filters").addEventListener("click", () => {
     $("filters").reset();
     $("end").setCustomValidity("");
+    updateDatePlaceholders();
     $("filters").requestSubmit();
   });
   $("legend").addEventListener("change", renderChart);

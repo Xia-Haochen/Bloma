@@ -1,3 +1,5 @@
+import { independentBatches } from './independent-batches'
+import { readPrdBackplane } from '../project/prd-store'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -19,10 +21,12 @@ export function softwareModelSettings(projectId: string): SoftwareModelSettings 
     models: channel.models.filter(model => model.enabled).map(model => model.name) }))
   const result: SoftwareModelSettings = { project_id: projectId, variant: policy?.enabled ? 'independent' : 'single',
     revision: digest([project.lean_operation_id, independentPolicyDigest(projectId), lock_reason, channels]),
-    locked: Boolean(lock_reason), lock_reason, channels, design_status: 'not_prepared', admission: 'not_checked' }
+    locked: Boolean(lock_reason), lock_reason, channels, design_request_limit: independentBatches(readPrdBackplane(projectId).requirements.map(r=>r.id)).length, design_status: 'not_prepared', admission: 'not_checked' }
   const file = join(getPromaHome(), 'software-independent-design', projectId, 'current.json')
   if (existsSync(file)) result.design_status = JSON.parse(readFileSync(file, 'utf8')).status
+  if(policy?.enabled&&'funding' in policy){result.funding='project';return result}
   if (policy?.enabled) {
+    result.funding='independent'
     result.channel_id = policy.channel_id; result.model = policy.model
     try {
       const channel = getChannelByIdRaw(policy.channel_id)
@@ -38,10 +42,16 @@ export function softwareModelSettings(projectId: string): SoftwareModelSettings 
 /** A GUI save records explicit budget consent; it never probes a provider. Each
  * consent has new immutable files; prior policy/state/receipts are retained. */
 export function saveSoftwareModelSettings(input: SoftwareModelSettingsSave): SoftwareModelSettings {
+  if(input.funding!==undefined&&!['project','independent'].includes(input.funding))throw Error('INDEPENDENT_FUNDING_INVALID')
   const project = assertIndependentPolicyMutable(input.project_id), before = softwareModelSettings(input.project_id)
   if (input.revision !== before.revision) throw Error('配置已变化，请刷新后再保存。')
   if (input.variant === 'single') {
     configureIndependentPolicy(input.project_id, { version: 1, enabled: false })
+    return softwareModelSettings(input.project_id)
+  }
+  if(input.variant==='independent'&&input.funding==='project'){
+    if(before.funding==='independent'&&(before.budget_error||!before.budget||before.budget.accounted_upper_rmb>0))throw Error('已有预算包含用量或未知责任，不能替换；请保留原账本并核对。')
+    configureIndependentPolicy(input.project_id,{version:1,enabled:true,funding:'project'})
     return softwareModelSettings(input.project_id)
   }
   if (input.variant !== 'independent' || input.authorize_budget !== true) throw Error('请明确确认本项目 B 模型的预算授权。')
@@ -51,10 +61,10 @@ export function saveSoftwareModelSettings(input: SoftwareModelSettingsSave): Sof
   if (!rate || !Number.isFinite(rate.cap_rmb) || rate.cap_rmb <= 0 || rate.cap_rmb > 10000
     || !Number.isSafeInteger(rate.context_tokens) || rate.context_tokens < 1 || rate.context_tokens > 2_000_000
     || ![rate.input_rmb_per_million, rate.output_rmb_per_million].every(value => Number.isFinite(value) && value >= 0 && value <= 100000)) throw Error('请填写有效预算、上下文上限及输入／输出单价。')
-  const max_tokens = 4096
-  if (Math.floor(rate.cap_rmb * 1e6) < Math.ceil(rate.context_tokens * rate.input_rmb_per_million) + Math.ceil(max_tokens * rate.output_rmb_per_million)) throw Error('预算不足以覆盖一次完整输入和响应的保守预留。')
+  const max_tokens = 4096, max_design_requests = independentBatches(readPrdBackplane(input.project_id).requirements.map(r=>r.id)).length
+  if (Math.floor(rate.cap_rmb * 1e6) < (Math.ceil(rate.context_tokens * rate.input_rmb_per_million) + Math.ceil(max_tokens * rate.output_rmb_per_million))*max_design_requests) throw Error('预算不足以覆盖一次完整输入和响应的保守预留。')
   const previous = readIndependentPolicy(input.project_id)
-  if (previous?.enabled && existsSync(join(getPromaHome(), 'software-independent-design', input.project_id, 'policy.json'))
+  if (previous?.enabled && !('funding' in previous) && existsSync(join(getPromaHome(), 'software-independent-design', input.project_id, 'policy.json'))
     && (before.budget_error || !before.budget || before.budget.accounted_upper_rmb > 0)) throw Error('已有预算包含用量或未知责任，不能替换；请保留原账本并核对。')
   const directory = join(getPromaHome(), 'software-independent-design', input.project_id, 'funding', randomUUID())
   const money = join(directory, 'policy.json'), authorization = join(directory, 'authorization.json')
@@ -66,7 +76,7 @@ export function saveSoftwareModelSettings(input: SoftwareModelSettingsSave): Sof
   writeTextFileAtomic(money + '.state.json', JSON.stringify({ version: 1, policy_hash: policy_sha256, entries: [] }))
   writeTextFileAtomic(authorization, JSON.stringify({ source: 'direct_user_confirmation', source_ui: 'project_model_settings',
     project_id: input.project_id, operation_id: project.lean_operation_id ?? 'initial', host, model: input.model,
-    cap_rmb: rate.cap_rmb, policy_sha256, confirmed_at: new Date().toISOString() }))
+    cap_rmb: rate.cap_rmb, max_design_requests, policy_sha256, confirmed_at: new Date().toISOString() }))
   configureIndependentPolicy(input.project_id, { version: 1, enabled: true, channel_id: channel.id, model: input.model,
     monetary_policy_path: money, authorization_path: authorization, timeout_ms: 60000, max_tokens })
   return softwareModelSettings(input.project_id)

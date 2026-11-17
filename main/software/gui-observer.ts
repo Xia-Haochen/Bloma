@@ -12,8 +12,10 @@ import { dirname } from 'node:path'
 import { selectOwnedNativeFile } from './native-file-dialog'
 import { closeOwnedGui } from './gui-cleanup'
 import type { ChildProcess } from 'node:child_process'
+import { captureDiagnosticScreenshot } from './ui-observation'
 
 import { electronEntry } from './electron-entry'
+import type { AcceptanceEnvironment } from './acceptance-environment'
 export { electronEntry } from './electron-entry'
 
 async function selectGuiOption(locator: Locator, choice: { value?: string; label?: string }, allowLabelFallback = false): Promise<string> {
@@ -27,6 +29,76 @@ async function selectGuiOption(locator: Locator, choice: { value?: string; label
   }
   await locator.selectOption({ value: matches[0].value })
   return locator.inputValue()
+}
+
+async function localAudioRms(page: Page, source: string): Promise<number | undefined> {
+  // Use the already loaded local source and never send a new network request.
+  if (!/^(?:data:|blob:)/.test(source) || source.length > 12 * 1024 * 1024) return
+  const rms = await page.evaluate(async localSource => {
+    const response = await fetch(localSource)
+    const blob = await response.blob()
+    if (blob.size > 8 * 1024 * 1024) return null
+    const context = new OfflineAudioContext(1, 16000, 16000)
+    const buffer = await context.decodeAudioData(await blob.arrayBuffer())
+    let energy = 0
+    for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+      for (const value of buffer.getChannelData(channel)) energy += value * value
+    }
+    return Math.sqrt(energy / (buffer.length * buffer.numberOfChannels))
+  }, source).catch(() => null)
+  return rms !== null && Number.isFinite(rms) ? rms : undefined
+}
+
+async function observeAudioPlayback(page: Page, audio: Locator, step: Extract<GuiAcceptanceSuite['steps'][number], { kind: 'expect_audio' }>, signal?: AbortSignal) {
+  const deadline = Date.now() + 60000
+  const text = step.text_selector ? page.locator(step.text_selector) : undefined
+  let source = '', observedText = !text, firstTime: number | undefined, progress = false
+  let rms: number | null | undefined
+  let latest: { at: number; duration: number | null; paused: boolean; ended: boolean; muted: boolean; playedFrom: number | null; playedTo: number | null; error: number | null } | undefined
+  do {
+    signal?.throwIfAborted()
+    const count = await audio.count()
+    if (count > 1) throw Error(`GUI_LOCATOR_AMBIGUOUS:${step.id}`)
+    if (count === 1) {
+      const { src, ...sample } = await audio.evaluate(element => {
+        if (!(element instanceof HTMLAudioElement)) throw Error('GUI_AUDIO_ELEMENT_REQUIRED')
+        const played = element.played
+        return { src: element.currentSrc, at: element.currentTime,
+          duration: Number.isFinite(element.duration) ? element.duration : null,
+          paused: element.paused, ended: element.ended, muted: element.muted || element.volume === 0,
+          playedFrom: played.length === 1 ? played.start(0) : null,
+          playedTo: played.length === 1 ? played.end(0) : null, error: element.error?.code ?? null }
+      }, undefined, { timeout: 1000 })
+      latest = sample
+      if (src !== source) {
+        source = src
+        firstTime = undefined
+        progress = false
+        observedText = !text
+        rms = undefined
+      }
+      if (sample.error !== null) break
+      if (source && !sample.muted && !sample.paused) {
+        firstTime ??= sample.at
+        progress ||= sample.at > firstTime + 0.04
+        if (text && !observedText && await text.count() === 1 && await text.isVisible()) observedText = Boolean((await text.innerText({ timeout: 500 })).trim())
+        if (progress && rms === undefined) rms = await localAudioRms(page, source) ?? null
+      }
+      if (source && progress && sample.ended && !sample.muted && observedText && sample.duration
+        && sample.playedFrom !== null && sample.playedFrom <= 0.05
+        && sample.playedTo !== null && sample.playedTo >= sample.duration - 0.05) {
+        signal?.throwIfAborted()
+        if (rms == null) throw Error('GUI_AUDIO_EVIDENCE_UNAVAILABLE')
+        if (rms > 0.001) return { ...sample, rms, text_visible_during_playback: text ? observedText : undefined }
+        break
+      }
+    }
+    await page.waitForTimeout(100)
+  } while (Date.now() < deadline)
+  throw Object.assign(Error(`GUI_ASSERTION_FAILED:${step.id}`), {
+    actual: { ...latest, progress, rms, text_visible_during_playback: text ? observedText : undefined },
+    expected: '非静音音频实际播放至结尾',
+  })
 }
 
 export async function observeGuiStep(page: Page, step: GuiAcceptanceSuite['steps'][number], context?: { data: string; fixtures?: GuiAcceptanceSuite['fixtures']; nativeProcessRoot?: number; signal?: AbortSignal }): Promise<unknown> {
@@ -49,6 +121,7 @@ export async function observeGuiStep(page: Page, step: GuiAcceptanceSuite['steps
   }
   if (!('selector' in step)) throw new Error(`GUI_ACTION_UNSUPPORTED_FOR_THIS_RUNTIME:${step.kind}`)
   const locator = step.has_text === undefined ? page.locator(step.selector) : page.locator(step.selector).filter({ hasText: step.has_text })
+  if (step.kind === 'expect_audio') return observeAudioPlayback(page, locator, step, context?.signal)
   if (step.kind !== 'expect' || step.property !== 'count') {
     const matches = await locator.count()
     if (matches > 1) throw Object.assign(Error(`GUI_LOCATOR_AMBIGUOUS:${step.id}: 匹配${matches}个控件，请用has_text或更具体的selector定位；数量检查使用property=count`), {
@@ -62,7 +135,9 @@ export async function observeGuiStep(page: Page, step: GuiAcceptanceSuite['steps
     // Durable older transcripts used fill for selects. Preserve their intended
     // value/visible-label choice instead of forcing the model to redesign a UI.
     if (await locator.evaluate(element => element instanceof HTMLSelectElement)) return selectGuiOption(locator, { value: step.value }, true)
-    await locator.fill(step.value); return await locator.inputValue()
+    await locator.fill(step.value)
+    return locator.evaluate(element => element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
+      ? element.value : (element as HTMLElement).innerText)
   }
   if (step.kind === 'click') { await locator.click(); return 'clicked' }
   if (step.kind === 'press') { await locator.press(step.key); return 'key pressed' }
@@ -101,7 +176,11 @@ export async function observeGuiStep(page: Page, step: GuiAcceptanceSuite['steps
       actual = step.property === 'count' ? String(await locator.count()) : step.property === 'value' ? await locator.inputValue({ timeout: 300 }) : await locator.innerText({ timeout: 300 })
       if (step.equals !== undefined ? String(actual) === step.equals : step.contains !== undefined ? String(actual).includes(step.contains)
         : step.property === 'count' ? Number(actual) > 0 : String(actual).trim().length > 0) return actual
-    } catch { /* a genuine async UI may not have its output yet */ }
+    } catch (error) {
+      // Only a pending element may become available later. Invalid selectors,
+      // wrong element types and a closed page are not business mismatches.
+      if ((error as Error).name !== 'TimeoutError') throw error
+    }
     await new Promise(resolve => setTimeout(resolve, 75))
   } while (Date.now() < deadline)
   throw Object.assign(new Error(`GUI_ASSERTION_FAILED:${step.id}`), { actual, expected: step.equals ?? step.contains ?? 'nonempty', selector: step.selector, has_text: step.has_text })
@@ -109,9 +188,9 @@ export async function observeGuiStep(page: Page, step: GuiAcceptanceSuite['steps
 
 /** DOM actions are host-owned and run against the normal application. No product
  * self-test mode, injected business assertions or self-reported PASS scripts. */
-export async function observeSoftwareGui(input: { projectId: string; root: string; launch: LaunchDeclaration; suite: GuiAcceptanceSuite; temporary: string; signal?: AbortSignal; screenshotDir?: string; purpose?:'acceptance'|'development' }): Promise<Pick<GuiAcceptanceResult, 'status' | 'steps' | 'error'>> {
+export async function observeSoftwareGui(input: { projectId: string; root: string; launch: LaunchDeclaration; suite: GuiAcceptanceSuite; temporary: string; signal?: AbortSignal; screenshotDir?: string; purpose?:'acceptance'|'development'; comparisons?: Record<string,string>; environment?: AcceptanceEnvironment }): Promise<Pick<GuiAcceptanceResult, 'status' | 'steps' | 'error' | 'failure_kind' | 'evidence_warnings'>> {
   const { _electron, chromium } = await import('playwright')
-  const result: Pick<GuiAcceptanceResult, 'status' | 'steps' | 'error'> = { status: 'unverified', steps: [] }
+  const result: Pick<GuiAcceptanceResult, 'status' | 'steps' | 'error' | 'failure_kind' | 'evidence_warnings'> = { status: 'unverified', steps: [], evidence_warnings: [] }
   const data = join(input.temporary, 'data'), userData = join(input.temporary, 'user-data'), screenshotDir = input.screenshotDir ?? join(input.temporary, 'evidence')
   mkdirSync(screenshotDir, { recursive: true })
   const owner = `host-gui-${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -125,7 +204,7 @@ export async function observeSoftwareGui(input: { projectId: string; root: strin
       input.signal?.throwIfAborted()
       let page: Page
       if (input.launch.ui === 'electron') {
-        const entry = electronEntry(input.root, input.launch.command)
+        const entry = electronEntry(input.root, input.launch.command, input.projectId)
         app = await _electron.launch({ ...entry, args: [...entry.args, `--user-data-dir=${userData}`], cwd: input.root,
           env: softwareEnvironment(input.projectId, data,input.root), timeout: 20000 })
         child = app.process()
@@ -142,23 +221,62 @@ export async function observeSoftwareGui(input: { projectId: string; root: strin
         await page.goto(input.launch.url, { waitUntil: 'domcontentloaded', timeout: 15000 })
       } else throw new Error('SOFTWARE_GUI_ADAPTER_UNSUPPORTED')
       page.setDefaultTimeout(4000)
+      // Dependency setup precedes frozen business steps and never contributes
+      // synthetic assertion results. The caller owns the lease across restarts.
+      await input.environment?.prepare(page,index)
+      const checkRuntime = async () => {
+        const errors = await page.pageErrors()
+        if (errors.length) {
+          result.failure_kind = 'runtime'
+          throw Error(`GUI_RUNTIME_ERROR: ${redactSoftwareOutput(errors.slice(-3).map(error=>error.stack||error.message).join('\n')).slice(0,4000)}`)
+        }
+      }
+      const screenshot = async (name:string) => {
+        const captured=await captureDiagnosticScreenshot(page,join(screenshotDir,name),input.signal??new AbortController().signal)
+        if(captured.error)result.evidence_warnings!.push(captured.error)
+      }
       for (const step of steps) {
         input.signal?.throwIfAborted()
-        try { const actual = await observeGuiStep(page, step, { data, fixtures: input.suite.fixtures, nativeProcessRoot: child?.pid, signal: input.signal }); result.steps.push({ id: step.id, passed: true, actual }) }
+        try {
+          await checkRuntime()
+          let executable = step
+          const reference = input.comparisons?.[step.id]
+          if (reference) {
+            const source = result.steps.find(row => row.id === reference && row.passed)
+            if (step.kind !== 'expect' || typeof source?.actual !== 'string' || !source.actual.trim()) throw Error('GUI_OBSERVATION_REFERENCE_UNAVAILABLE')
+            executable = { ...step, equals:source.actual, nonempty:undefined }
+          }
+          const actual = await observeGuiStep(page, executable, { data, fixtures: input.suite.fixtures, nativeProcessRoot: child?.pid, signal: input.signal })
+          await checkRuntime()
+          result.steps.push({ id: step.id, passed: true, actual })
+        }
         catch (error) {
           result.steps.push({ id: step.id, passed: false, actual: (error as { actual?: unknown }).actual ?? String(error) })
           result.error = error instanceof Error ? error.message : String(error)
-          result.status = result.error.startsWith('GUI_ACTION_UNSUPPORTED') || result.error.startsWith('GUI_FIXTURE_') ? 'unverified' : 'failed'
-          await page.screenshot({ path: join(screenshotDir, `gui-${index}-failed.png`) }).catch(() => {})
+          if (!input.comparisons?.[step.id] && input.environment?.isControlledResponse((error as {actual?:unknown}).actual)) {
+            result.status = 'unverified'
+            result.failure_kind = 'unresolved'
+            result.error = 'ACCEPTANCE_ENVIRONMENT_EXTERNAL_ORACLE_REQUIRED: 精确回复断言与本次通用受控服务回复不符，须提供对应的模型语义证据'
+            await screenshot('gui-'+index+'-failed.png')
+            return result
+          }
+          result.status = result.failure_kind==='runtime'||/^GUI_(?:FILE_)?ASSERTION_FAILED:/.test(result.error) ? 'failed' : 'unverified'
+          result.failure_kind ??= result.status==='failed'?'assertion':'unresolved'
+          await screenshot(`gui-${index}-failed.png`)
           return result
         }
       }
-      await page.screenshot({ path: join(screenshotDir, `gui-${index}.png`) })
+      await screenshot(`gui-${index}.png`)
+      await checkRuntime()
       result.status = 'passed'
     } catch (error) {
       if (input.signal?.aborted) throw error
-      result.status = 'unverified'; result.error = error instanceof Error ? error.message : String(error); return result
+      result.status = result.failure_kind==='runtime'?'failed':'unverified'; result.error = error instanceof Error ? error.message : String(error); return result
     } finally { input.signal?.removeEventListener('abort', abort); await close() }
+  }
+  if (result.status === 'passed') {
+    try { input.environment?.assess(result.steps.filter(step=>step.passed).map(step=>step.actual)) }
+    catch(error) { input.signal?.throwIfAborted(); result.status='unverified';result.error=error instanceof Error?error.message:String(error) }
   }
   return result
 }

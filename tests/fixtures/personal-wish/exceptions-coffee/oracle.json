@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "case_id": "exceptions-coffee",
+  "core_experience": "多项偏好权衡及有期限的明确例外",
+  "unacceptable_substitute": "只按豆子名字给固定食谱",
+  "source_quote": "做一个我的咖啡仪式助手。我输入今天精神、想洗多少器具和现有豆子，它提出做法并说明取舍。睡前不要推荐含咖啡因的，除非我明确说今晚要熬夜；这个例外只限今晚。",
+  "change_quote": "我把一个器具送人了，旧记录要保留，但以后不能再推荐用它。",
+  "dimensions": [
+    "intent",
+    "behavior",
+    "provenance",
+    "change_recovery",
+    "ui",
+    "delivery"
+  ],
+  "required_evidence": [
+    "actual_interaction",
+    "source_and_scope_identity",
+    "restart_readback",
+    "final_project_state"
+  ],
+  "outcomes": [
+    "passed",
+    "failed",
+    "unverified",
+    "not_applicable"
+  ],
+  "status": "authored_not_executed",
+  "independent": false
+}

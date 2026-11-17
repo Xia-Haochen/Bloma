@@ -49,9 +49,23 @@ h2 { font-size: 19px; font-weight: 720; }
 .page-heading p, .section-heading p, .dialog-head p { margin-top: 4px; color: var(--muted); font-size: 14px; }
 .panel { border: 1px solid var(--line); border-radius: 14px; background: #fff; }
 .filters { display: flex; align-items: end; flex-wrap: wrap; gap: 14px; padding: 17px 20px; }
-.filters label { display: grid; gap: 6px; color: var(--muted); font-size: 13px; font-weight: 630; }
+.filters > label, .date-filter { display: grid; gap: 6px; color: var(--muted); font-size: 13px; font-weight: 630; }
 .filters .project { flex: 1 1 220px; min-width: 0; }
 select, input[type="datetime-local"], input[type="search"] { min-height: 40px; min-width: 0; border: 1px solid #d7deea; border-radius: 8px; padding: 7px 10px; color: #233049; background: #fff; }
+.date-field { position: relative; display: grid; }
+.date-placeholder {
+  display: none;
+  position: absolute;
+  inset: 1px 34px 1px 1px;
+  border-radius: 7px 0 0 7px;
+  padding-inline-start: 10px;
+  align-items: center;
+  background: #fff;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.date-field input[data-empty]:valid:not(:focus) + .date-placeholder { display: flex; }
+.date-field input[data-empty]:valid:not(:focus)::-webkit-datetime-edit { opacity: 0; }
 .button { min-height: 40px; padding: 7px 14px; border: 1px solid transparent; border-radius: 8px; font-weight: 650; white-space: nowrap; font-size: 14px; }
 .primary { background: var(--blue); color: #fff; }
 .primary:hover { background: #2148ad; }
@@ -145,7 +159,7 @@ dialog::backdrop { background: #121b3466; }
 @media (max-width: 480px) {
   .brand-tool, .brand-divider { display: none; }
   .metric, .analysis, .conversation, .filters { padding: 12px; }
-  .filters label { flex: 1 1 145px; }
+  .filters > label, .date-filter { flex: 1 1 145px; }
   .page-heading { gap: 8px; }
   .page-heading p { font-size: 12px; }
   .table-head, .turn > summary { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(50px, auto) 8px; gap: 6px; }

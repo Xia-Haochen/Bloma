@@ -1,0 +1,4 @@
+{
+  "after": "first_usable_candidate",
+  "request": "改一个角色的身份只作用于新分支，原分支继续保留。"
+}

@@ -23,7 +23,7 @@ function fixture(reply: unknown) {
   const publish = (event: AgentEvent) => events.push(event)
   return { project, input, options, publish, calls, events }
 }
-const brief = { action: 'brief', name: '记录', goal: '记录并重开保留', ui: 'required', requirements: [{ description: '保存记录', expected: '重开后记录仍在' }], constraints: ['本地使用'], out_of_scope: [], assumptions: [] }
+const brief = { intent_assessment: {mode:'direct',reason:'基础记录操作，无领域版本规则',source_ids:['S-001']}, action: 'brief', name: '记录', goal: '记录并重开保留', ui: 'required', requirements: [{ description: '保存记录', expected: '重开后记录仍在' }], constraints: ['本地使用'], out_of_scope: [], assumptions: [] }
 it('passes the actual reference image to the existing requirement request without an OCR or extra model stage',async()=>{
   const f=fixture(brief),image=savePastedImage('session',Buffer.from('actual-reference-bytes').toString('base64'),'png'),query=f.options.query;let seen=0
   const checked:SDKQuery=async function*(prompt,options){seen++;expect(options.images).toEqual([image]);yield*query(prompt,options)}

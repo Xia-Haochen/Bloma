@@ -1,8 +1,9 @@
-import { appendFileSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { SDKMessage } from '../../shared/types'
+import type { AgentMessage, SDKMessage } from '../../shared/types'
+import { getAgentSessionPath } from '../../storage/config-paths'
 import type { SDKQueryOptions, SDKQuery } from '../../main/orchestration/stages/orchestration-contracts'
 import { runAgentLoop, type AgentLoopInput, type AgentLoopTool } from '../../main/agent/loop/agent-loop'
 import { openPiSession, piSessionPath } from '../../main/agent/loop/pi-session-store'
@@ -10,12 +11,15 @@ import { emptyAssistant } from '../../main/agent/loop/pi-messages'
 import { createProductionBudget } from '../../main/desktop/production-budget'
 import { enqueueSteer } from '../../main/agent/loop/steer-queue'
 import { AssistantTurnCollector } from '../support/assistant-turn-collector'
+import {verificationToolFeedback,verificationReportView} from '../../main/software/verification-report'
+import {readToolFeedback} from '../../shared/tool-feedback'
 
 let home: string, oldHome: string | undefined
 beforeEach(() => { oldHome = process.env.PROMA_HOME; home = mkdtempSync(join(tmpdir(), 'bloma-pi-')); process.env.PROMA_HOME = home })
 afterEach(() => {
   if (oldHome === undefined) delete process.env.PROMA_HOME; else process.env.PROMA_HOME = oldHome
-  rmSync(home, { recursive: true, force: true })
+  // Windows may briefly retain Pi's just-closed session directory handle.
+  rmSync(home, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
 })
 const text = (text: string): SDKMessage => ({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } })
 const call = (id: string, name: string, input: Record<string, unknown> = {}): SDKMessage => ({ type: 'assistant', message: {
@@ -41,7 +45,292 @@ function tool(name: string, execute: AgentLoopTool['execute']): AgentLoopTool {
 }
 function nativeFile() { return piSessionPath('test-project', 'test-session', 'desktop-implement:', process.cwd()) }
 
+function auditMessages(sessionId = 'test-session'): AgentMessage[] {
+  const path = getAgentSessionPath(sessionId)
+  return existsSync(path) ? readFileSync(path, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)) : []
+}
+function publicText(message: AgentMessage) {
+  return message.content.filter(block => block.type === 'text').map(block => block.text).join('')
+}
+
+describe('Pi public assistant message boundaries', () => {
+  it.each(['response', 'turn'] as const)('correlates distinct responses in one run with the original audit and preserves %s partner timing', async timing => {
+    const publish = vi.fn(), partner = vi.fn(), order: string[] = []
+    const flow = scripted([
+      [text('先读取当前文件。'), call('read-one', 'read_file')],
+      [call('read-two', 'read_file')],
+      [text('已核对。'), text('这是独立的最终回复。')],
+    ])
+    const result = await runAgentLoop(input(flow.query, { publish, publicMessageTiming: timing,
+      onAssistantMessage: value => { partner(value); order.push('partner') },
+      tools: [tool('read_file', async () => { order.push('tool'); return { output: 'read receipt' } })] }))
+    expect(result.status).toBe('completed'); expect(result.turns).toBe(3)
+    expect(result.finalText).toBe('已核对。这是独立的最终回复。')
+    expect(partner.mock.calls.map(([value]) => value)).toEqual([
+      { turn: 1, text: '先读取当前文件。' }, { turn: 3, text: '已核对。这是独立的最终回复。' },
+    ])
+    expect(order[0]).toBe(timing === 'response' ? 'partner' : 'tool')
+    const boundaries = publish.mock.calls.filter(([type]) => type === 'assistant_message_boundary').map(([, payload]) => payload)
+    const starts = boundaries.filter(value => value.boundary === 'start')
+    expect(starts).toHaveLength(3)
+    expect(new Set(starts.map(value => value.public_message_id)).size).toBe(3)
+    const audit = auditMessages().filter(message => message.role === 'assistant')
+    expect(audit).toHaveLength(3)
+    for (const [index, start] of starts.entries()) {
+      expect(start).toEqual({ public_message_id: expect.any(String), boundary: 'start', at: expect.any(Number) })
+      expect(start.public_message_id).not.toBe('r1')
+      expect(boundaries.filter(value => value.public_message_id === start.public_message_id)).toEqual([
+        start, { public_message_id: start.public_message_id, boundary: 'end', at: expect.any(Number) },
+      ])
+      const deltas = publish.mock.calls.filter(([type, payload]) => type === 'message_delta' && payload.public_message_id === start.public_message_id)
+      expect(deltas.map(([, payload]) => payload.text).join('')).toBe(publicText(audit[index]))
+      expect(audit[index]).toMatchObject({ public_message_id: start.public_message_id, timestamp: start.at })
+      if (index === 1) {
+        expect(deltas).toHaveLength(0)
+        expect(audit[index].content).toMatchObject([{ type: 'tool_use', id: 'read-two' }])
+      }
+    }
+    let activeId: string | undefined
+    for (const [type, payload] of publish.mock.calls) {
+      if (type === 'assistant_message_boundary') {
+        if (payload.boundary === 'start') { expect(activeId).toBeUndefined(); activeId = payload.public_message_id }
+        else { expect(activeId).toBe(payload.public_message_id); activeId = undefined }
+      } else if (type === 'message_delta') expect(payload.public_message_id).toBe(activeId)
+    }
+    expect(activeId).toBeUndefined()
+    expect(publish.mock.calls.filter(([type]) => type === 'message_completed')).toHaveLength(0)
+    expect(result.usage).toMatchObject({ inputTokens: 90, outputTokens: 15, turnsWithUsage: 3 })
+  })
+
+  it('uses the same DSML projection for live text and the original audit, preserves native tool evidence and excludes thinking', async () => {
+    const publish = vi.fn(), partner = vi.fn()
+    const raw = '公开计划。<｜｜DSML｜｜ calls>PRIVATE_PROTOCOL'
+    const flow = scripted([
+      [{ type: 'thinking', thinking: 'PRIVATE_REASONING' }, text('公开计划。<｜'), call('read', 'read_file'), text('｜DSML｜｜ calls>PRIVATE_PROTOCOL')],
+      [text('普通尾部前缀<｜')],
+    ])
+    await runAgentLoop(input(flow.query, { publish, onAssistantMessage: partner, publicMessageTiming: 'response',
+      tools: [tool('read_file', async () => ({ output: 'read receipt' }))] }))
+    const audit = auditMessages().filter(message => message.role === 'assistant')
+    const deltas = publish.mock.calls.filter(([type]) => type === 'message_delta')
+    expect(audit).toHaveLength(2)
+    for (const message of audit) {
+      const streamed = deltas.filter(([, payload]) => payload.public_message_id === message.public_message_id).map(([, payload]) => payload.text).join('')
+      expect(publicText(message)).toBe(streamed)
+    }
+    expect(publicText(audit[0])).toContain('公开计划。'); expect(publicText(audit[0])).toContain('已过滤')
+    expect(audit[0].content).toContainEqual(expect.objectContaining({ type: 'tool_use', id: 'read' }))
+    expect(publicText(audit[1])).toBe('普通尾部前缀<｜')
+    expect(JSON.stringify(audit)).not.toMatch(/PRIVATE_REASONING|PRIVATE_PROTOCOL|<｜｜DSML｜｜/)
+    expect(JSON.stringify(deltas)).not.toContain('PRIVATE_REASONING')
+    expect(readFileSync(nativeFile(), 'utf8')).toContain('PRIVATE_PROTOCOL')
+    // The existing advisory callback and model/runtime result keep their raw-response semantics.
+    expect(partner.mock.calls[0][0]).toEqual({ turn: 1, text: raw })
+  })
+
+  it.each(['abort', 'incomplete', 'error', 'length'] as const)('closes a %s response as interrupted and preserves partial text/start-time audit correlation', async stop => {
+    const publish = vi.fn(), partner = vi.fn(), beforeComplete = vi.fn()
+    const abort = new AbortController()
+    const query: SDKQuery = async function* () {
+      yield text('保留这一段。<｜')
+      if (stop === 'abort') { abort.abort('test-cancel'); await new Promise(() => {}) }
+      else if (stop === 'error') throw Object.assign(new Error('controlled permanent failure'), { nonRetryable: true })
+      else if (stop === 'length') yield { type: 'result', stop_reason: 'max_tokens', usage: { input_tokens: 8, output_tokens: 1000 } }
+    }
+    const run = runAgentLoop(input(query, { publish, signal: abort.signal, maxTurns: stop === 'incomplete' ? 4 : 1, onAssistantMessage: partner,
+      publicMessageTiming: 'response', beforeComplete }))
+    if (stop === 'incomplete') await expect(run).rejects.toThrow('PI_TRANSPORT_INCOMPLETE')
+    else if (stop === 'error') await expect(run).rejects.toThrow('controlled permanent failure')
+    else {
+      const result = await run
+      expect(result.status).toBe(stop === 'abort' ? 'cancelled' : 'turn_limit')
+      if (stop === 'length') expect(result.termination_detail?.reason).toBe('output_token_limit')
+    }
+    const boundaries = publish.mock.calls.filter(([type]) => type === 'assistant_message_boundary').map(([, payload]) => payload)
+    const starts = boundaries.filter(value => value.boundary === 'start')
+    // Pi retries an incomplete stream under its existing policy; each physical
+    // response must still close independently, never concatenate retry text.
+    expect(starts).toHaveLength(stop === 'incomplete' ? 3 : 1)
+    expect(new Set(starts.map(value => value.public_message_id)).size).toBe(starts.length)
+    const audit = auditMessages().filter(message => message.role === 'assistant')
+    expect(audit).toHaveLength(starts.length)
+    const deltas = publish.mock.calls.filter(([type]) => type === 'message_delta')
+    expect(deltas.every(([, payload]) => typeof payload.public_message_id === 'string')).toBe(true)
+    for (const [index, start] of starts.entries()) {
+      expect(boundaries.filter(value => value.public_message_id === start.public_message_id)).toEqual([
+        { public_message_id: start.public_message_id, boundary: 'start', at: expect.any(Number) },
+        { public_message_id: start.public_message_id, boundary: 'interrupted', at: expect.any(Number) },
+      ])
+      expect(audit[index]).toMatchObject({ public_message_id: start.public_message_id, timestamp: start.at })
+      expect(publicText(audit[index])).toBe('保留这一段。<｜')
+      expect(deltas.filter(([, payload]) => payload.public_message_id === start.public_message_id).map(([, payload]) => payload.text).join('')).toBe(publicText(audit[index]))
+    }
+    expect(partner).not.toHaveBeenCalled(); expect(beforeComplete).not.toHaveBeenCalled()
+    expect(publish.mock.calls.some(([type]) => type === 'message_completed')).toBe(false)
+  })
+})
+
 describe('real upstream Pi AgentSession integration', () => {
+  it('keeps per-call contexts/feedback identities separate and exposes numeric text metrics', async () => {
+    const flow = scripted([[{ type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'tool_use', id: 'one', name: 'probe', input: {} }, { type: 'tool_use', id: 'two', name: 'probe', input: {} },
+    ] } }], [text('done')]])
+    const contexts: Array<import('../../main/agent/loop/agent-loop').ToolContext> = [], observations: import('../../main/agent/loop/agent-loop').ToolObservation[] = []
+    const probe = tool('probe', async () => ({ output: '中文🙂', feedback: { schema_version: 1, source: 'host', execution: 'completed', verification: 'not_applicable' } }))
+    probe.recordFeedback = (_feedback, ctx) => contexts.push(ctx)
+    await runAgentLoop(input(flow.query, { tools: [probe], onToolObservation: value => observations.push(value), afterTools: async ctx => {
+      expect(ctx.toolCallId).toBeUndefined(); return undefined
+    } }))
+    expect(contexts.map(ctx => ctx.toolCallId)).toEqual(['one', 'two'])
+    expect(contexts[0]).not.toBe(contexts[1])
+    for (const event of observations) if (event.phase === 'completed') {
+      expect(event.duration_ms).toBeGreaterThanOrEqual(0); expect(event.input_bytes).toBe(2)
+      expect(event.output_text_bytes).toBe(Buffer.byteLength(event.output))
+    }
+  })
+  it('keeps original invocation budget admission for same-round read-only requests', async () => {
+    const flow = scripted([[{ type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'tool_use', id: 'one', name: 'read_file', input: {} }, { type: 'tool_use', id: 'two', name: 'read_file', input: {} },
+    ] } }], [text('stop after the bounded result')]])
+    let executions = 0
+    const result = await runAgentLoop(input(flow.query, { toolBudget: { read_file: 1 }, tools: [tool('read_file', async () => {
+      executions++; return { output: 'read once' }
+    })] }))
+    expect(executions).toBe(1); expect(result.toolCalls.map(call => call.status)).toEqual(['ok', 'error'])
+  })
+  it('lets an advisory Agent end quietly only after a successful complete response',async()=>{
+    let calls=0
+    const publish=vi.fn()
+    const quiet:SDKQuery=async function*(){calls++;yield{type:'thinking',thinking:'PRIVATE_MONITOR_REASONING'};yield{...done,subtype:'success'}}
+    expect((await runAgentLoop(input(quiet,{publish,allowSilentCompletion:true,runtimeScope:'engineering-peer',accountingRole:'research'}))).status).toBe('completed')
+    expect(calls).toBe(1)
+    expect(publish.mock.calls.filter(([type])=>type==='message_delta')).toHaveLength(0)
+    expect(publish.mock.calls.filter(([type])=>type==='assistant_message_boundary').map(([,payload])=>payload.boundary)).toEqual(['start','end'])
+    expect(auditMessages().filter(message=>message.role==='assistant')).toHaveLength(0)
+    const failed:SDKQuery=async function*(){yield{type:'result',subtype:'error'}}
+    await expect(runAgentLoop(input(failed,{allowSilentCompletion:true,sessionId:'failed-monitor'}))).rejects.toThrow('EMPTY_MODEL_STREAM')
+    const incomplete:SDKQuery=async function*(){}
+    await expect(runAgentLoop(input(incomplete,{allowSilentCompletion:true,sessionId:'incomplete-monitor'}))).rejects.toThrow('PI_TRANSPORT_INCOMPLETE')
+  })
+
+  it('observes public plans and exact execution results without private reasoning or changing a receipt on observer failure',async()=>{
+    const observed:unknown[]=[],order:string[]=[];let requests=0
+    const query:SDKQuery=async function*(_p,options){
+      if(requests++===0){yield{type:'thinking',thinking:'PRIVATE_REASONING'};yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:'PUBLIC_PLAN: use seed 777001'},{type:'tool_use',id:'probe',name:'probe',input:{seed:777001}}]}}}
+      else{expect(JSON.stringify(options.messages)).toContain('100027');expect(options.messages?.flatMap(m=>Array.isArray(m.content)?m.content:[]).find(b=>b.type==='tool_use'&&b.id==='probe')?.input).toEqual({seed:777001});yield text('Actual seed differs; inspect before changing the test.')}
+      yield done
+    }
+    const result=await runAgentLoop(input(query,{system:'PRIVATE_SYSTEM',publicMessageTiming:'response',
+      onAssistantMessage:message=>{order.push('public');observed.push(message)},
+      onToolObservation:value=>{order.push(value.phase==='started'?'requested':'result');observed.push(structuredClone(value));value.input.seed=0;throw Error('OBSERVER_FAILURE')},
+      tools:[tool('probe',async()=>{order.push('execute');return{output:'actual seed=100027; room=normal'}})]}))
+    expect(result.status).toBe('completed');expect(order.slice(0,4)).toEqual(['public','requested','execute','result'])
+    expect(observed).toContainEqual(expect.objectContaining({id:'probe',name:'probe',input:{seed:777001},output:'actual seed=100027; room=normal',isError:false}))
+    expect(JSON.stringify(observed)).not.toContain('PRIVATE_');expect(readFileSync(nativeFile(),'utf8')).toContain('actual seed=100027')
+  })
+  it.each([true,false])('distinguishes changing static findings from shifted line numbers (progress=%s)',async progress=>{
+    const attempts=progress?3:8
+    const q=scripted([...Array.from({length:attempts},(_,i)=>[call('check-'+i,'verify_app')]),[text('continue after actual repairs')]])
+    let checks=0
+    const result=await runAgentLoop(input(q.query,{maxTurns:10,tools:[tool('verify_app',async()=>{
+      checks++
+      const observed={status:'failed',summary:'rule hits',security:{passed:false,issues:Array.from({length:progress?4-checks:3},(_,i)=>({file:'app.js',category:'unsafe_dom',severity:'high',line:i+checks*100,user_visible_summary:'rule hit'}))}} as never
+      return{output:'static findings',isError:true,feedback:verificationToolFeedback(observed)}
+    })]}))
+    expect(checks).toBe(attempts)
+    if(progress){expect(result.status).toBe('completed');expect(q.received).toHaveLength(4)}
+    else{expect(result.termination_detail).toMatchObject({reason:'no_progress',observed:8});expect(q.received).toHaveLength(8)}
+  })
+
+  it('stops repeated host closeout failures even when the initiating model tool succeeds',async()=>{
+    const q=scripted([[call('review','start_quality_review')]])
+    const failed=verificationToolFeedback({status:'failed',summary:'wrong total',core:{host_cli:{cases:[{name:'total',passed:false,exit_code:0,expected:{stdout:'4',exit_code:0},actual:'5'}]}}} as never)
+    const result=await runAgentLoop(input(q.query,{maxTurns:8,tools:[tool('start_quality_review',async()=>({output:'review handed to host'}))],
+      afterTools:async()=>({feedback:'QUALITY_CLOSEOUT_CHECK_REQUIRED: wrong total',verification:failed})}))
+    expect(q.received).toHaveLength(8)
+    expect(result.termination_detail).toMatchObject({reason:'no_progress',observed:8})
+    expect(result.toolCalls).toHaveLength(8)
+  })
+  it('clears the host closeout failure count only after an actual passing host observation',async()=>{
+    const q=scripted([[call('one','start_quality_review')],[call('two','start_quality_review')],[call('three','start_quality_review')],[call('four','start_quality_review')],[call('five','start_quality_review')],[text('done')]])
+    const failed=verificationToolFeedback({status:'failed',summary:'wrong total'} as never),passed=verificationToolFeedback({status:'passed',summary:'checked'} as never)
+    let checks=0
+    const result=await runAgentLoop(input(q.query,{maxTurns:8,tools:[tool('start_quality_review',async()=>({output:'review returned'}))],
+      afterTools:async()=>({feedback:'host observation',verification:++checks===3?passed:failed})}))
+    expect(checks).toBe(5);expect(q.received).toHaveLength(6);expect(result.status).toBe('completed')
+  })
+  it.each(['verify_project_stage','future_verification_entry'])('stops repeated typed host refusals from %s despite changed filenames and intervening successful writes',async name=>{
+    let calls=0
+    const query:SDKQuery=async function*(){calls++;yield{type:'assistant',message:{role:'assistant',content:[{type:'tool_use',id:'edit-'+calls,name:'write_file',input:{}},{type:'tool_use',id:'check-'+calls,name,input:{file:'renamed-'+calls}}]}};yield done}
+    const result=await runAgentLoop(input(query,{maxTurns:20,tools:[tool('write_file',async()=>({output:'written'})),tool(name,async()=>({output:'host refuses this contract',isError:true,feedback:{schema_version:1,execution:'not_run',verification:'unverified',source:'host',category:'invalid_input',reason:'CONTRACT_REFUSED',fingerprint:'same-contract'}}))]}))
+    expect(calls).toBe(3);expect(result.termination_detail).toMatchObject({reason:'no_progress',observed:3})
+  })
+  it.each(['unknown','environment','assertion'] as const)('delivers %s feedback before the next controlled decision without routing ambiguity to blind product edits',async scenario=>{
+    const r=(scenario==='environment'?{status:'environment_blocked',summary:'runtime unavailable'}:scenario==='assertion'?{status:'failed',summary:'expectation must be checked',core:{host_cli:{cases:[{name:'rounding',passed:false,exit_code:0,expected:{stdout:'4',exit_code:0},actual:'5'}]}}}:{status:'failed',summary:'failure without cause'}) as never
+    const actions:string[]=[];let requests=0
+    const query:SDKQuery=async function*(_p,options){
+      if(requests++===0)yield call('verify','verify_app')
+      else if(requests===2){
+        const result=options.messages?.flatMap(m=>Array.isArray(m.content)?m.content:[]).find(b=>b.type==='tool_result'&&b.tool_use_id==='verify')
+        const feedback=readToolFeedback(result?.content??'')!
+        expect(feedback.assessment?.root_cause_confirmed).toBe(false)
+        expect(feedback.recovery).toBe(scenario==='environment'?'prepare_environment':'inspect')
+        const packet=JSON.parse((result?.content??'').replace(/^<tool-feedback>[^\n]*<\/tool-feedback>\n/,''))
+        yield call('diagnose',packet.next_action.tool,packet.next_action.arguments)
+      }else yield text('observed next step; no unsupported repair')
+      yield done
+    }
+    await runAgentLoop(input(query,{tools:[tool('verify_app',async()=>({output:JSON.stringify(verificationReportView(r)),feedback:verificationToolFeedback(r),isError:true})),
+      ...['inspect_software_environment','read_production_context','write_file'].map(name=>tool(name,async args=>{actions.push(name+(args.topic?':'+args.topic:''));return{output:'observed'}}))]}))
+    expect(actions).toEqual([scenario==='environment'?'inspect_software_environment':'read_production_context:'+(scenario==='assertion'?'features':'diagnostics')])
+    expect(requests).toBe(3)
+  })
+  it('stops an unchanged review submission protocol failure in read-only mode before the turn ceiling',async()=>{
+    const publish=vi.fn(),partner=vi.fn(),q=scripted([[call('submit','submit_quality_findings')]])
+    const result=await runAgentLoop(input(q.query,{publish,onAssistantMessage:partner,maxTurns:48,tools:[tool('submit_quality_findings',async()=>({output:'INTENT_CONCERN_FINDING_REQUIRED',isError:true}))]}))
+    expect(q.received).toHaveLength(3);expect(result.status).toBe('budget_exhausted')
+    expect(result.termination_detail).toMatchObject({reason:'no_progress',observed:3})
+    // The existing host stop notice is not a model/partner completion and must
+    // not be appended to the preceding tool-only response's closed identity.
+    const deltas=publish.mock.calls.filter(([type])=>type==='message_delta')
+    expect(deltas).toHaveLength(1);expect(partner).not.toHaveBeenCalled()
+    const notice=deltas[0][1],audit=auditMessages().filter(message=>message.role==='assistant')
+    expect(audit).toHaveLength(4)
+    expect(audit.at(-1)).toMatchObject({public_message_id:notice.public_message_id})
+    expect(publicText(audit.at(-1)!)).toBe(notice.text)
+    expect(publish.mock.calls.filter(([type,payload])=>type==='assistant_message_boundary'&&payload.public_message_id===notice.public_message_id).map(([,payload])=>payload.boundary)).toEqual(['start','end'])
+  })
+  it('hands verified tool work to the host without buying a final parent declaration', async () => {
+    const q=scripted([[call('check','verify_app')],[text('this extra model call must not happen')]])
+    const result=await runAgentLoop(input(q.query,{tools:[tool('verify_app',async()=>({output:'host receipt'}))],
+      afterTools:async(_ctx,calls)=>calls.some(c=>c.name==='verify_app'&&c.status==='ok')?{complete:true}:undefined}))
+    expect(result.status).toBe('completed');expect(q.received).toHaveLength(1)
+    expect(readFileSync(nativeFile(),'utf8')).toContain('host receipt')
+  })
+  it('host feedback from tools continues repair and is not treated as completion', async () => {
+    const q=scripted([[call('check','verify_app')],[text('need repair')]])
+    const result=await runAgentLoop(input(q.query,{tools:[tool('verify_app',async()=>({output:'unverified'}))],
+      afterTools:async()=>({feedback:'HOST_REPRODUCTION_REQUIRED'})}))
+    expect(result.status).toBe('completed');expect(q.received).toHaveLength(2)
+    expect(JSON.stringify(q.received[1].messages)).toContain('HOST_REPRODUCTION_REQUIRED')
+  })
+  it('keeps obsolete host snapshots in native history while sending only current state to the model',async()=>{
+    let reads=0
+    const q=scripted([[call('old-state','read_quality_findings')],[call('new-state','read_quality_findings')],[text('done')]])
+    await runAgentLoop(input(q.query,{workMode:'implementation',tools:[tool('read_quality_findings',async()=>({output:++reads===1?'OLD_HOST_QUEUE_123':'CURRENT_HOST_QUEUE_456'}))]}))
+    const wire=JSON.stringify(q.received[2].messages),native=readFileSync(nativeFile(),'utf8')
+    expect(wire).not.toContain('OLD_HOST_QUEUE_123');expect(wire).toContain('CURRENT_HOST_QUEUE_456')
+    expect(native).toContain('OLD_HOST_QUEUE_123');expect(native).toContain('CURRENT_HOST_QUEUE_456')
+  })
+  it('does not let host closeout swallow a user correction arriving while verification is awaited',async()=>{
+    const q=scripted([[call('check','verify_app')],[text('processed correction')]])
+    await runAgentLoop(input(q.query,{tools:[tool('verify_app',async()=>({output:'receipt'}))],afterTools:async()=>{
+      enqueueSteer('test-session',{queueMessageId:'during-closeout',content:'保留新增的纠正要求',enqueuedAt:Date.now()})
+      return{complete:true}
+    }}))
+    expect(q.received).toHaveLength(2)
+    expect(JSON.stringify(q.received[1].messages)).toContain('保留新增的纠正要求')
+  })
   it('does not enter host completion or spawn reviews for a failed provider turn', async () => {
     const beforeComplete=vi.fn(async()=>undefined)
     const query:SDKQuery=async function*(){throw new Error('REQUEST_BUDGET_EXHAUSTED')}
@@ -270,4 +559,20 @@ describe('real upstream Pi AgentSession integration', () => {
     const empty: SDKQuery = async function* () { yield done }
     await expect(runAgentLoop(input(empty, { sessionId: 'empty' }))).rejects.toThrow('EMPTY_MODEL_STREAM')
   })
+})
+
+it.each(['off','low','high','max'] as const)('uses the same %s setting for requests and runtime observations',async level=>{
+  const q=scripted([[text('finished')]]),observations:any[]=[]
+  await runAgentLoop(input(q.query,{env:{BLOMA_LOOP_THINKING:level},onRuntimeObservation:o=>observations.push(o)}))
+  expect(q.received[0].thinkingLevel).toBe(level)
+  expect(observations[0].settings.thinking).toBe(level)
+})
+it('refreshes ephemeral host facts without accumulating them in the Pi transcript',async()=>{
+  let remaining=10
+  const q=scripted([[call('step','step')],[text('finished')]])
+  await runAgentLoop(input(q.query,{tools:[tool('step',async()=>{remaining=3;return{output:'executed'}})],liveContext:()=>({remaining})}))
+  const messages=q.received[1].messages!
+  const facts=messages.filter(m=>JSON.stringify(m.content).includes('当前宿主事实'))
+  expect(facts).toHaveLength(1);expect(JSON.stringify(facts)).toContain('remaining');expect(JSON.stringify(facts)).toContain('3')
+  expect(readFileSync(nativeFile(),'utf8')).not.toContain('当前宿主事实')
 })

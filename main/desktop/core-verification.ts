@@ -24,6 +24,7 @@ import { acceptanceEvidence, invalidateAcceptanceEvidence, type AcceptanceEviden
 
 export type CoreVerificationStatus = 'passed' | 'failed' | 'unverified' | 'environment_blocked'
 export interface CoreVerificationResult {
+  pending_user_checks?: Array<{kind:'microphone';feature:string}>
   acceptance_evidence?: AcceptanceEvidence
   verification_scope?: 'registered_local_cases_and_capability_contracts'
   local_status?: CoreVerificationStatus
@@ -261,6 +262,7 @@ async function verifyLeanBehavior(options: CoreVerificationOptions, root: string
   const localStates=new Map(states)
   const capabilities = await runCapabilityVerifiers({ projectId: options.projectId, root, backplane: brief, manifest, signal: options.signal }, options.capabilityVerifiers)
   for (const outcome of capabilities) {
+    if (outcome.pending_user_checks?.length) (result.pending_user_checks ??= []).push(...outcome.pending_user_checks)
     result.missing.push(...outcome.missing); Object.assign(result, outcome.report)
     behavior = combineVerification(behavior, outcome.status)
     for (const [fid, state] of Object.entries(outcome.features)) states.set(fid, combineVerification(states.get(fid) ?? 'unverified', state))

@@ -5,17 +5,19 @@ import { tmpdir } from 'node:os'
 import { getPromaHome } from '../../storage/config-paths'
 import { writeTextFileAtomic } from '../../storage/json-store'
 import { mainRootDir } from '../platform/paths'
-import { readLaunchDeclaration } from './launch-smoke'
+import { readLaunchDeclaration, supportsNativeGuiAcceptance } from './launch-smoke'
 import { buildDriverEnv, execFileDriverSpawn, resolveDriverVenvCommand, type DriverSpawn } from './process-driver'
 import { verificationFingerprint } from './verification-fingerprint'
 import { GUI_ACTION_KINDS } from './gui-tool-contract'
 import { materializeGuiFixtures } from './gui-fixtures'
 import { isSoftwareProject } from './workflow-policy'
 import { validateNativeGuiTests, type NativeGuiTests } from '../software/native-gui-tests'
+import type { AcceptanceEnvironmentEvidence } from '../software/acceptance-environment'
 
 type Action = ({ id: string; kind: 'fill'; selector: string; value: string } | { id: string; kind: 'click'; selector: string }
   | { id: string; kind: 'select'; selector: string; value?: string; label?: string }
   | { id: string; kind: 'expect'; selector: string; property?: 'text' | 'value' | 'count'; equals?: string; contains?: string; nonempty?: true; timeout_ms?: number }
+  | { id: string; kind: 'expect_audio'; selector: string; text_selector?: string }
   | { id: string; kind: 'press'; selector: string; key: string }
   | { id: string; kind: 'scroll'; selector: string }
   | { id: string; kind: 'drag'; selector: string; target_selector: string }
@@ -31,11 +33,16 @@ export interface GuiAcceptanceSuite { version: 1; scope_hash: string; covers: st
   fixtures?: Array<{ path: string; text?: string; source?: string; sha256?: string; size?: number }>
 }
 export interface GuiAcceptanceResult {
+  environment?: AcceptanceEnvironmentEvidence
+  interrupted_audio?: {
+    tracks: Array<{index:number;source_present:boolean;duration:number|null;current_time:number;paused:boolean;ended:boolean;played_ranges:number;error:number|null}>
+    events: Array<{event:string;index:number;current_time:number;duration:number|null}>
+  }
   case_results?: Array<{name:string;feature:string;status:'passed'|'failed'|'unverified'|'not_run';assertions:number;interactions:number;error?:string}>
-  failure_kind?: 'assertion'|'runtime'|'bootstrap'|'incomplete'
+  failure_kind?: 'assertion'|'runtime'|'bootstrap'|'incomplete'|'unresolved'
   version: 1; scope: 'host_native_gui_business'; status: 'passed' | 'failed' | 'unverified'
   method?: 'action_steps' | 'node:test'
-  native_evidence?: {interactions:number;assertions:number}
+  native_evidence?: {interactions:number;assertions:number;interactions_attempted?:number;interaction_count_semantics?:'completed'}
   evidence_dir?: string
   evidence_warnings?: string[]
   suite_hash: string; covers: string[]; steps: Array<{ id: string; passed: boolean; actual?: unknown }>; error?: string
@@ -136,7 +143,7 @@ export async function runGuiAcceptance(options: { projectId: string; root: strin
     const root = realpathSync(options.root)
     const launch = readLaunchDeclaration(root)
     if (suite.native_tests) {
-      if (!isSoftwareProject(options.projectId) || !launch?.ok || launch.launch.schema_version !== 2 || !['electron','browser'].includes(launch.launch.ui??'')) throw Error('GUI_NATIVE_RUNTIME_UNSUPPORTED')
+      if (!isSoftwareProject(options.projectId) || !launch?.ok || !supportsNativeGuiAcceptance(launch.launch)) throw Error('GUI_NATIVE_RUNTIME_UNSUPPORTED')
       const { runNativeGuiTests } = await import('../software/native-gui-observer')
       Object.assign(result,await runNativeGuiTests({projectId:options.projectId,root,launch:launch.launch,suite,signal:options.signal}))
     } else if (launch?.ok && launch.launch.schema_version === 2 && ['electron', 'browser'].includes(launch.launch.ui ?? '')) {
@@ -175,7 +182,8 @@ export async function runGuiAcceptance(options: { projectId: string; root: strin
       result.case_results=Object.entries(suite.acceptance_refs).flatMap(([id,features])=>{
         const step=suite.steps.find(step=>step.id===id),observed=result.steps.find(step=>step.id===id)
         if(!step||!['expect','expect_file'].includes(step.kind))return []
-        return features.map(feature=>({name:id,feature,status:!observed?'not_run' as const:observed.passed?'passed' as const:'failed' as const,assertions:observed?1:0,interactions:0}))
+        const invalid=result.failure_kind==='runtime'||result.failure_kind==='unresolved'
+        return features.map(feature=>({name:id,feature,status:!observed?'not_run' as const:invalid?'unverified' as const:observed.passed?'passed' as const:'failed' as const,assertions:observed&&!invalid?1:0,interactions:0}))
       })
     }
     result.source_unchanged = verificationFingerprint(root, null, fingerprintPolicy) === before

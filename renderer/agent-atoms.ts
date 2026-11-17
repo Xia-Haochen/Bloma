@@ -1,3 +1,4 @@
+import { createEventAdmission, publicMessageIdentity, reducePublicMessage, type PublicMessageStream } from './lib/public-messages'
 import { isModernWorkflowVersion } from '../shared/workflow-version'
 /**
  * Agent Atoms — Jotai 状态管理
@@ -73,7 +74,7 @@ export const activeAgentSessionIdAtom = atom<string | null>(null)
 // 2. 流式状态（atomFamily 按 sessionId 隔离）— 对齐 A
 // =========================================================================
 
-export interface AgentStreamState {
+export interface AgentStreamState extends PublicMessageStream {
   running: boolean
   /** 完整事件历史 */
   events: AgentEvent[]
@@ -398,7 +399,9 @@ export function setupGlobalAgentListeners(): () => void {
       })
     : undefined
 
+  const admitEvent = createEventAdmission()
   const unsubscribeStream = api.onStreamEvent((event) => {
+    if (!admitEvent(event)) return
     // 通知声音路由（2026-10-06 体验批 A）：确认门提示音 + 真完成播报——先于各分支
     // 消费，只读事件不改状态；设置与播报开关见 lib/notification-sound.ts。
     const soundProject = store.get(currentProjectAtom)
@@ -546,23 +549,12 @@ export function setupGlobalAgentListeners(): () => void {
       })
     }
 
-    // 终态事件：将本次运行累积的流式回复沉淀为一条助手消息，
-    // 修复「completed 后 running=false，流式文本消失且从未进消息列表」。
-    // 读取尚未被重置的 content（同步），随后 reducer 再清空。
-    if (event.type === 'completed' || event.type === 'error') {
-      const terminalStreamAtom = agentStreamStateFamily(event.session_id)
-      const accumulated = store.get(terminalStreamAtom)?.content ?? ''
-      if (accumulated.trim()) {
-        store.set(agentMessagesFamily(event.session_id), (previous) => [
-          ...previous,
-          {
-            role: 'assistant',
-            content: [{ type: 'text', text: accumulated }],
-            timestamp: Date.now(),
-          },
-        ])
-      }
-    }
+    // Persist each response independently. A presentation boundary is not a run terminal.
+    const publicTransition = reducePublicMessage(store.get(agentStreamStateFamily(event.session_id)), event)
+    if (publicTransition.finished.length) store.set(agentMessagesFamily(event.session_id), previous => {
+      const seen = new Set(previous.map(publicMessageIdentity))
+      return [...previous, ...publicTransition.finished.filter(message => { const key = publicMessageIdentity(message); if (seen.has(key)) return false; seen.add(key); return true })]
+    })
 
     // 新一轮决策需求到达 → 重置消费标记，让新卡片能重新弹出
     if (event.type === 'user_decision_required') {
@@ -808,7 +800,7 @@ export function setupGlobalAgentListeners(): () => void {
 
       // M-14：error 事件接通 globalUserErrorAtom（此前全仓无写入点——死代码，
       // PreviewPanel 的 error 兑底与 ChatPanel 的 alert 条永不触发）；
-      // 新一轮任何输出（message_delta）到来时清空，避免陈旧错误常驻。
+      // 不因制作方再次输出而清掉宿主错误；主引导依据最新宿主快照，旧错误保留供核对。
       if (isEventForCurrentProject()) {
         if (event.type === 'error') {
           const errorText =
@@ -816,8 +808,6 @@ export function setupGlobalAgentListeners(): () => void {
               ? event.payload.message
               : String(event.payload.code ?? '生成失败')
           store.set(globalUserErrorAtom, errorText)
-        } else if (event.type === 'message_delta' && typeof event.payload.text === 'string' && event.payload.text) {
-          store.set(globalUserErrorAtom, null)
         }
       }
 
@@ -836,7 +826,6 @@ export function setupGlobalAgentListeners(): () => void {
 
       // 正文累积只认 message_delta（2026-10-04）：thinking_delta 也携带 payload.text，
       // 不转判会直接把思考原文拼进回复气泡
-      const text = event.type === 'message_delta' && typeof event.payload.text === 'string' ? event.payload.text : ''
       const isTerminal = event.type === 'completed' || event.type === 'error'
       // A structured decision may be the first output of a short guide run.
       // Its following idle-stage notification belongs to the SAME run; clearing
@@ -855,12 +844,12 @@ export function setupGlobalAgentListeners(): () => void {
       // 永久停在「生成中」。此处保持上一轮的 running：前台流中弹卡仍为 true、后台
       // 管线完成后的引导/让渡卡仍为 false。
       const running =
-        isTerminal ? false : passive ? previous.running : true
+        isTerminal ? false : passive || event.type === 'assistant_message_boundary' && event.payload.boundary !== 'start' ? previous.running : previous.running || NEW_RUN_SIGNALS.has(event.type) || event.type === 'assistant_message_boundary' && event.payload.boundary === 'start'
 
       return {
         running,
         events: [...(isNewRun ? [] : previous.events), event],
-        content: isTerminal ? '' : (isNewRun ? '' : previous.content) + text,
+        ...publicTransition.stream,
         last_error:
           event.type === 'error'
             ? String(event.payload.code ?? 'AGENT_SDK_ERROR')
@@ -1189,8 +1178,7 @@ export async function loadSessionHistory(sessionId: string): Promise<void> {
   }
   // An IPC snapshot must not erase messages received while it was loading (upstream bf3e98c principle).
   const recovered = result.data.messages
-  const identity = (message: AgentMessage) => message.client_message_id ? `client:${message.client_message_id}`
-    : message.id ? `id:${message.id}` : `${message.role}:${message.timestamp}:${JSON.stringify(message.content)}`
+  const identity = publicMessageIdentity
   const seen = new Set(recovered.map(identity))
   const live = store.get(agentMessagesFamily(sessionId)).filter(message => !seen.has(identity(message)))
   store.set(agentMessagesFamily(sessionId), [...recovered, ...live].sort((a, b) => a.timestamp - b.timestamp))
@@ -1326,7 +1314,7 @@ export const STAGE_LABEL_MAP: Record<WorkflowStage, string> = {
   clarifying: '等待你确认几个问题',
   generating_sketch: '正在生成草图',
   sketch_ready: '草图已生成',
-  generating_mvp: '正在生成完整功能',
+  generating_mvp: '正在制作程序',
   testing: '正在检查能不能正常使用',
   judge_review: '正在确认功能是否到位',
   repairing: '正在尝试修复',

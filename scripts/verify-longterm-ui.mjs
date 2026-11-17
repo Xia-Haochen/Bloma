@@ -48,6 +48,10 @@ try{
   assert.equal(await page.getByRole('button',{name:'纳入下一轮并确认',exact:true}).isEnabled(),false)
   await page.reload();await page.locator('[data-ai-id="longterm-confirm"]').waitFor()
   const before=await page.evaluate(async pid=>(await window.electronAPI.projectDeliverables.get({request_id:crypto.randomUUID(),project_id:pid})).data,pid)
+  assert.equal(before.project_progress.environment,'本机项目工作目录');
+  await page.getByLabel('项目执行状态').waitFor();
+  assert.ok((await page.getByLabel('项目执行状态').innerText()).includes('本机项目工作目录'));
+  report.checks.push('native project execution panel displays host-known local environment');
   assert.equal(before.stable_release,undefined);assert.equal(before.longterm.milestones[0].status,'awaiting_confirmation')
   await page.locator('[data-ai-id="software-trial-launch"]').click()
   await page.getByLabel('命令试用输出').waitFor();assert.equal((await page.getByLabel('命令试用输出').innerText()).trim(),'5')

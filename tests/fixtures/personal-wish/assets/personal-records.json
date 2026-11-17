@@ -1,0 +1,18 @@
+{
+  "objects": [
+    {
+      "id": "obj-A",
+      "name": "旧外套",
+      "exempt": true
+    },
+    {
+      "id": "obj-B",
+      "name": "旧外套",
+      "exempt": false
+    }
+  ],
+  "rule": {
+    "version": 1,
+    "temporaryOverrides": []
+  }
+}

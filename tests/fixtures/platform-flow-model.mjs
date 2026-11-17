@@ -16,14 +16,38 @@ export async function startPlatformFlowModel(electron) {
     // Fixture-only CDP permits observing the normal trial entry and its real data.
     files['main.cjs'] = files['main.cjs'].replace("const data=", "if(!app.commandLine.hasSwitch('remote-debugging-port')){app.commandLine.appendSwitch('remote-debugging-address','127.0.0.1');app.commandLine.appendSwitch('remote-debugging-port','0')}const data=");
     const calls = b => (b.messages ?? []).filter(m => m.role === 'assistant').flatMap(m => Array.isArray(m.content) ? m.content : []).filter(c => c.type === 'tool_use');
+    let independentDesignDigest;
     function reply(b) {
         const tools = (b.tools ?? []).map(t => t.name), history = JSON.stringify(b.messages), system = JSON.stringify(b.system), done = calls(b);
+        if (system.includes('你是实现前独立验收设计者')) {
+            const content = b.messages.filter(m => m.role === 'user').at(-1).content;
+            const packet = JSON.parse(typeof content === 'string' ? content : content.find(block => block.type === 'text').text);
+            const requirement = packet.requirements[0];
+            const contract = { cases: [{ id: 'save-reopen', feature: requirement.id,
+                basis: { requirement_hash: requirement.requirement_hash, expected_source: requirement.expected }, coverage: ['normal', 'reopen'],
+                steps: [{ kind: 'fill', control: 'note', value: 'independent record' }, { kind: 'click', control: 'save' },
+                    { kind: 'expect', control: 'items', equals: 'independent record', oracle: { kind: 'input', step: 0 } }, { kind: 'restart' },
+                    { kind: 'expect', control: 'items', equals: 'independent record', oracle: { kind: 'input', step: 0 } }] }] };
+            const json = JSON.stringify(contract);
+            independentDesignDigest = createHash('sha256').update(json).digest('hex');
+            return [text(json)];
+        }
         if (system.includes('独立视觉/交互审阅V')) {
             const images = (b.messages ?? []).flatMap(m => Array.isArray(m.content) ? m.content : []).filter(c => c.type === 'image' && c.source?.data);
             if (!images.length)
                 return [use('read_quality_review', {}), use('view_quality_image', {})];
-            if (!done.some(c => c.name === 'submit_quality_findings'))
-                return [use('submit_quality_findings', { findings: [], visual_observations: [{ image_sha256: createHash('sha256').update(Buffer.from(images.at(-1).source.data, 'base64')).digest('hex'), region: '主界面输入及保存区域', observed: '受控界面包含标题、输入框、保存按钮和记录列表；实际操作另由宿主检查。' }] })];
+            if (!done.some(c => c.name === 'submit_quality_findings')) {
+                const image_sha256 = createHash('sha256').update(Buffer.from(images.at(-1).source.data, 'base64')).digest('hex');
+                const observations = {
+                    layout: '输入框与保存按钮并列，记录列表显示在下方。',
+                    interaction: '保存按钮可见；图片本身只证明其可见性。',
+                    content: '可见标题、记录标签与当前列表。',
+                    scope: '仅覆盖本机记事本主窗口当前尺寸，未观察其他尺寸与弹窗。',
+                };
+                return [use('submit_quality_findings', { findings: [], visual_observations: Object.entries(observations).map(([area, observed]) => ({
+                    image_sha256, area, observed, region: '主窗口',
+                })) })];
+            }
             return [text('受控视觉材料记录已提交。')];
         }
         if (system.includes('独立只读代码/数据审阅C'))
@@ -36,15 +60,19 @@ export async function startPlatformFlowModel(electron) {
             if (scenario === 'gui' && history.includes('把保存按钮改为紫色') && !done.some(c => c.name === 'write_file' && c.input?.path === 'theme.css' && c.input.content.includes('#6b21a8')))
                 return [use('read_file', { path: 'theme.css' }), use('write_file', { path: 'theme.css', content: files['theme.css'] + 'button{background:#6b21a8}' })];
             if (!done.some(c => c.name === 'write_file')) {
-                if (scenario === 'gui')
-                    return [...Object.entries(files).map(([path, content]) => use('write_file', { path, content })), use('register_gui_check', { expectations: { 'F-001': expected }, steps: [{ id: 'type', kind: 'fill', selector: '#note', value: 'host record' }, { id: 'save', kind: 'click', selector: '#save' }, { id: 'saved', kind: 'expect', selector: '#items', equals: 'host record' }, { id: 'restart', kind: 'restart' }, { id: 'persisted', kind: 'expect', selector: '#items', equals: 'host record' }], acceptance_refs: { saved: ['F-001'], persisted: ['F-001'] } })];
+                if (scenario === 'gui') {
+                    const adapter = independentDesignDigest && use('write_file', { path: 'INDEPENDENT_ADAPTER.json',
+                        content: JSON.stringify({ version: 1, design_digest: independentDesignDigest, controls: { note: '#note', save: '#save', items: '#items' } }) });
+                    return [...Object.entries(files).map(([path, content]) => use('write_file', { path, content })), ...(adapter ? [adapter] : []),
+                        use('register_gui_check', { expectations: { 'F-001': expected }, steps: [{ id: 'type', kind: 'fill', selector: '#note', value: 'host record' }, { id: 'save', kind: 'click', selector: '#save' }, { id: 'saved', kind: 'expect', selector: '#items', equals: 'host record' }, { id: 'restart', kind: 'restart' }, { id: 'persisted', kind: 'expect', selector: '#items', equals: 'host record' }], acceptance_refs: { saved: ['F-001'], persisted: ['F-001'] } })];
+                }
                 return [use('write_file', { path: 'app.cjs', content: 'console.log(42)' }), use('write_file', { path: 'LAUNCH.json', content: JSON.stringify({ schema_version: 2, mode: 'command', command: ['node', 'app.cjs'] }) }), use('register_cli_check', { expectations: { 'F-001': '显示42' }, cases: [{ name: 'output42', covers: ['F-001'], args: [], stdout: '42', exit_code: 0 }] })];
             }
             return [text('本机受控实现已保存，请运行宿主检查。')];
         }
-        if (system.includes('短任务单') && scenario === 'clarify')
+        if (system.includes('先理解latest这一轮') && scenario === 'clarify')
             return [text(JSON.stringify({ action: 'clarify', question: '主要通过什么方式使用？', options: ['命令行输出42', '需要图形界面'] }))];
-        if (system.includes('短任务单'))
+        if (system.includes('先理解latest这一轮'))
             return [text(JSON.stringify({ action: 'brief', name: scenario === 'gui' ? '本机记事本' : scenario === 'longterm' ? '长期输出工具' : scenario === 'clarified' ? '澄清后的任务' : '本机命令工具', goal: scenario === 'gui' ? '保存与重开记录' : '输出42', ui: scenario === 'gui' ? 'required' : 'none', delivery: scenario === 'gui' ? 'desktop' : 'command', requirements: [{ description: scenario === 'gui' ? '保存与重开记录' : '输出42', expected: scenario === 'gui' ? expected : '显示42' }], constraints: [], out_of_scope: [], suggestions: [] }))];
         if (/HTML|html|草图/.test(system))
             return [text('<!doctype html><html lang="zh-CN"><meta charset="utf-8"><body><main><h1>本机记事本</h1><label>记录<input></label><button>保存</button><ul><li>示例记录</li></ul></main></body></html>')];

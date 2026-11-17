@@ -33,8 +33,10 @@ export function buildDelegationTools(role: 'parent' | DelegationRole): AgentLoop
     input_schema: {
       type: 'object',
       properties: {
+        independent_workspace: {type:'boolean',description:'research/explore 使用独立工作区和版本化源码副本；可保存自己的分析笔记，不能改产品。后续可continue同一会话。'},
+        experiment: { type:'object',additionalProperties:false,required:['criterion'],properties:{criterion:{type:'string',description:'实验判定条件；task写要回答的问题'},inputs:{type:'array',maxItems:32,items:{type:'string'},description:'复制到独立实验目录的项目相对文件；不带依赖或真实数据目录'}} },
         write_paths: { type: 'array', items: { type: 'string' }, description: '软件子任务的独占写入范围：具体相对文件，或以/结尾的子目录；只读任务省略。不得与其它子任务重叠。' },
-        read_only: { type: 'boolean', description: '只读调研/审查不拥有写入权。' },
+        read_only: { type: 'boolean', description: '对产品只读；独立工作区内的笔记和探针不授予产品写权限。' },
         task: { type: 'string', description: '发给子 agent 的完整任务说明，必须自包含必要上下文' },
         role: {
           type: 'string',
@@ -59,6 +61,8 @@ export function buildDelegationTools(role: 'parent' | DelegationRole): AgentLoop
     execute: async (toolInput, ctx) => {
       const created = delegateAgentOnce(ctx.sessionId, ctx.toolCallId, () =>
         startDelegation(ctx, {
+          independentWorkspace: toolInput.independent_workspace === true,
+          experiment: toolInput.experiment as import('./agent-collaboration').DelegateAgentArgs['experiment'],
           task: String(toolInput.task ?? ''),
           role: normalizeDelegationRole(toolInput.role),
           expectedOutput: typeof toolInput.expectedOutput === 'string' ? toolInput.expectedOutput : undefined,

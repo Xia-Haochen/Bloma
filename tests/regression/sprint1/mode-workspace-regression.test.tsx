@@ -116,7 +116,7 @@ describe('Sprint 1 mode and workspace regression', () => {
     render(<Provider store={store}><App /></Provider>)
 
     await waitFor(() => expect(screen.queryByText('你想做什么样的软件？')).toBeNull())
-    expect(screen.getByText('测试项目')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: '测试项目', level: 1 })).toBeTruthy()
     expect(list).toHaveBeenCalledOnce()
   })
 

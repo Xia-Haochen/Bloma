@@ -1,0 +1,18 @@
+{
+  "mode": "voice-replay",
+  "started_at": "2026-11-16T06:32:38.233Z",
+  "checks": [
+    {
+      "name": "original_live_replies_replayed_repaired_TTS_numbers_and_restart",
+      "status": "passed",
+      "human_semantic_and_listening_review": "pending"
+    }
+  ],
+  "scope": "Actual Electron UI, local controlled service, process restart and exported artifacts. Live-provider semantics, physical microphone and human listening are separate.",
+  "replay": {
+    "source_sha256": "577d69fa892d3647de5c36b53a8c470e4ecbbca45ff7e1adec496c6fc582deb2",
+    "scope": "Replay original real-provider responses to verify repaired TTS; no new paid model calls"
+  },
+  "status": "passed",
+  "finished_at": "2026-11-16T06:33:39.546Z"
+}

@@ -73,7 +73,7 @@ try {
     await start();
     step = 'empty channel state';
     await page.locator('[data-ai-id=create-project-button]').click();
-    await page.getByText('未配置 AI', { exact: true }).waitFor();
+    await page.getByPlaceholder('还没有连接 AI 模型，先去设置页连接', { exact: true }).waitFor();
     assert.equal(model.observations.length, 0);
     pass('new workspace exposes missing model connection and does not call a provider');
     step = 'channel setup';

@@ -216,6 +216,7 @@ const electronAPI: ElectronAPI = {
   dom: {
   },
   projectDeliverables: {
+    assistedAcceptance: (input:import('../shared/types').AssistedAcceptanceInput) => ipcRenderer.invoke(IPC_CHANNELS.ASSISTED_ACCEPTANCE,input),
     modelSettings: (input:import('../shared/types').ProjectDeliverablesInput) => ipcRenderer.invoke(IPC_CHANNELS.SOFTWARE_MODEL_SETTINGS_GET,input),
     saveModelSettings: (input:import('../shared/types').SoftwareModelSettingsSave) => ipcRenderer.invoke(IPC_CHANNELS.SOFTWARE_MODEL_SETTINGS_SAVE,input),
     longtermAction: (input:import('../shared/types').LongtermActionInput) => ipcRenderer.invoke(IPC_CHANNELS.SOFTWARE_LONGTERM_ACTION,input),

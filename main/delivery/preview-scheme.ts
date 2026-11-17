@@ -15,6 +15,7 @@
  * - 出站网络守卫按 URL 模式只拦 http/https/ws/wss，本协议请求不进拦截器（同 Proma）。
  */
 import { net, protocol, session } from 'electron'
+import {resolvePreviewFile} from './preview-file'
 import { existsSync, realpathSync, statSync } from 'node:fs'
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -48,49 +49,9 @@ export function installPreviewProtocolHandler(target = session.defaultSession): 
 }
 
 async function handlePreviewFileRequest(request: Request): Promise<Response> {
-  let url: URL
-  try {
-    url = new URL(request.url)
-  } catch {
-    return new Response('Bad Request', { status: 400 })
-  }
-  const projectId = url.hostname
-  let project: ReturnType<typeof findProject>
-  try { project = findProject(projectId) }
-  catch { return new Response('Not Found', { status: 404 }) }
-  if (!project?.root_path) return new Response('Not Found', { status: 404 })
-  let root: string
-  try {
-    root = realpathSync(project.root_path)
-  } catch {
-    return new Response('Not Found', { status: 404 })
-  }
-  let relativePath: string
-  try { relativePath = decodeURIComponent(url.pathname.replace(/^\/+/, '')) }
-  catch { return new Response('Bad Request', { status: 400 }) }
-  let target = root
-  if (relativePath) {
-    try {
-      target = realpathSync(resolve(root, relativePath))
-    } catch {
-      return new Response('Not Found', { status: 404 })
-    }
-    if (!isInsideDirectory(target, root)) {
-      return new Response('Forbidden', { status: 403 })
-    }
-  }
-  try {
-    if (statSync(target).isDirectory()) {
-      const indexCandidates = ['index.html', 'index.htm']
-        .map((name) => join(target, name))
-        .find((candidate) => existsSync(candidate) && statSync(candidate).isFile())
-      if (!indexCandidates) return new Response('Not Found', { status: 404 })
-      target = realpathSync(indexCandidates)
-      if (!isInsideDirectory(target, root)) return new Response('Forbidden', { status: 403 })
-    }
-  } catch {
-    return new Response('Not Found', { status: 404 })
-  }
+  const resolved=resolvePreviewFile(request.url)
+  if(resolved.status!==200)return new Response(resolved.status===403?'Forbidden':resolved.status===400?'Bad Request':'Not Found',{status:resolved.status})
+  const target=resolved.path!,url=resolved.url!
   // HTML 入口补 charset（陷阱 40：无 charset 头时 Latin-1 解码乱码；meta 标签兜底但显式更稳）
   const response = await net.fetch(pathToFileURL(target).toString())
   if (/^\.(html|htm)$/i.test(extname(target))) {

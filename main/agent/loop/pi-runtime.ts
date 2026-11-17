@@ -1,4 +1,8 @@
+import { resolveProjectRoot } from '../../../shared/project-root-override'
+import { loopThinking } from './loop-thinking'
+import { safeToolDisplay } from '../../../shared/tool-display'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import type { AgentMessage, AgentToolResult, AgentTurnContext } from '@earendil-works/pi-agent-core'
 import type { AgentSession, ToolDefinition } from '@earendil-works/pi-coding-agent'
 import { getPromaHome } from '../../../storage/config-paths'
@@ -12,7 +16,7 @@ import { feedbackForTool } from './tool-feedback'
 import { persistentBudgetBlocked, retainedToolFeedback } from '../../../shared/tool-feedback-policy'
 import { formatToolFeedback, type ToolFeedback } from '../../../shared/tool-feedback'
 import { isDegenerateText } from '../../coding/output-integrity'
-import { commandProgressKey, createWorkProgress, isPendingToolExecution, pruneDuplicateReads, toolFailureKey } from './work-progress'
+import { commandProgressKey, createWorkProgress, createProtocolFailureGuard, isPendingToolExecution, pruneDuplicateReads, pruneSupersededHostReads, toolFailureKey } from './work-progress'
 import { createDsmlDisplayFilter } from './dsml-display-filter'
 import { drainSteerQueue, markSteerMerged, pendingSteerCount, settleSteerEntry, steerConfirmEnabled, wrapSteerContent, type SteerEntry } from './steer-queue'
 import { estimateTokenCount } from './usage-guard'
@@ -30,9 +34,10 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
   const contextPolicy = await resolveModelContext(input.env, input.maxTokens)
   input = {...input,maxTokens:Math.min(input.maxTokens,contextPolicy.maxOutputTokens)}
   let cwd: string
-  try { cwd = findProject(input.projectId).root_path || process.cwd() } catch { cwd = process.cwd() }
+  try { cwd = resolveProjectRoot(input.projectId,()=>findProject(input.projectId).root_path) || process.cwd() } catch { cwd = process.cwd() }
   // C/V receive only their independently scoped materials, never maker skills.
-  const activeSkills=await buildActiveSkills(cwd,input.accountingRole==='review',input.runtimeScope==='lean-build')
+  const activeSkills=await buildActiveSkills(cwd,(input.accountingRole==='review'||input.runtimeScope==='engineering-peer'),input.runtimeScope==='lean-build',
+    input.runtimeScope==='lean-build'&&!input.delegationDepth?['software-engineering']:[])
   input={...input,system:[input.system,activeSkills.prompt].filter(Boolean).join('\n\n'),tools:[...input.tools,...activeSkills.tools.filter(tool=>!input.tools.some(existing=>existing.name===tool.name))]}
   const scope = input.runtimeScope === 'lean-build' ? 'lean-build' : `${input.runtimeScope ?? 'default'}:${input.executionScope ?? ''}`
   const opened = await openPiSession(input.projectId, input.sessionId, scope, cwd)
@@ -47,21 +52,24 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
   const toolByName = new Map(input.tools.map(tool => [tool.name, tool]))
   const budgetUsed: Record<string, number> = {}
   const toolCalls: AgentLoopToolCallRecord[] = []
+  const callsById = new Map<string, AgentLoopToolCallRecord>()
   const decisions: LoopCheckpointDecision[] = []
   const outcomes = new Map<string, { isError: boolean }>()
   const queuedSteers: Array<{ entry: SteerEntry; text: string }> = []
   const injectedSteerTexts: string[] = []
   const progress = input.workMode === 'implementation' ? createWorkProgress() : undefined
+  const protocolGuard = createProtocolFailureGuard()
   const turnsUsage: NonNullable<AgentLoopResult['turnsUsage']> = []
   let turns = 0, compactions = 0, auxiliaryCalls = 0, inputTokens = 0, outputTokens = 0, turnsWithUsage = 0
   let compacting = false, finalText = '', status: AgentLoopResult['status'] = 'completed'
   let termination: AgentLoopResult['termination_detail']
   let errorMessage: string | undefined
   let invalidOutputRetries = 0, cutoffRetries = 0, budgetStalls = 0, budgetHitThisTurn = false
-  let filter = createDsmlDisplayFilter()
+  let publicMessage: { id: string; at: number; message: Extract<AgentMessage, { role: 'assistant' }>;
+    filter: ReturnType<typeof createDsmlDisplayFilter> } | undefined
   const recoveryContext = () => {
     if (!input.recoveryContext) return ''
-    try { return input.recoveryContext().slice(0, 8000) }
+    try { const value=input.recoveryContext();return value.length<=8000?value:'【宿主工作状态摘要】摘要超过完整性约定，未按字符截断。先读取working-state现场索引；当前摘要缺失，不推断成功、不重放写入。' }
     catch { return '【宿主工作状态摘要】当前索引不可读；先读公开working-state/resume上下文，不能据历史记录推断当前成功或重放副作用。' }
   }
   const validation = () => ({ gwt_runs: ctx.state.gwt_runs ?? 0, api_contract_runs: ctx.state.api_contract_runs ?? 0,
@@ -75,11 +83,45 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
       progress_files: snapshot.file_revisions,
       validation: { ...snapshot, candidate_fingerprint: candidateFingerprintOf(snapshot.file_revisions) } })
   }
-  const appendAudit = (message: AgentMessage, userOrigin: 'user' | 'system' = 'system') => {
+  const appendAudit = (message: AgentMessage, userOrigin: 'user' | 'system' = 'system', identity?: { id: string; at: number }) => {
     if (message.role !== 'user' && message.role !== 'assistant' && message.role !== 'toolResult') return
-    const blocks = auditBlocks(message)
+    let blocks = auditBlocks(message)
+    if (message.role === 'assistant') {
+      // This existing audit is also public history. Project text with the same
+      // streaming filter (including cross-block holdback); native Pi keeps the
+      // unmodified protocol/tool evidence. Never put thinking into public text.
+      const display = createDsmlDisplayFilter()
+      blocks = blocks.flatMap(block => block.type === 'text'
+        ? display.push(block.text ?? '').map(text => ({ type: 'text' as const, text })) : [block])
+      blocks.push(...display.end().map(text => ({ type: 'text' as const, text })))
+    }
     if (blocks.length) appendSessionMessage(input.sessionId, { role: message.role === 'assistant' ? 'assistant' : 'user',
-      origin: message.role === 'assistant' ? 'agent' : userOrigin, content: blocks, timestamp: Date.now() })
+      origin: message.role === 'assistant' ? 'agent' : userOrigin, content: blocks, timestamp: identity?.at ?? Date.now(),
+      ...(identity ? { public_message_id: identity.id } : {}) })
+  }
+  const closePublicMessage = (boundary: 'end' | 'interrupted') => {
+    const current = publicMessage
+    if (!current) return
+    publicMessage = undefined
+    for (const text of current.filter.end()) input.publish('message_delta', { text, public_message_id: current.id })
+    appendAudit(current.message, 'system', current)
+    input.publish('assistant_message_boundary', { public_message_id: current.id, boundary, at: Date.now() })
+  }
+  const startPublicMessage = (message: Extract<AgentMessage, { role: 'assistant' }>) => {
+    // A missing SDK end must never merge two responses or leave a streaming
+    // bubble open. Boundaries themselves contain no visible body/tool bubble.
+    closePublicMessage('interrupted')
+    publicMessage = { id: randomUUID(), at: Date.now(), message, filter: createDsmlDisplayFilter() }
+    input.publish('assistant_message_boundary', { public_message_id: publicMessage.id, boundary: 'start', at: publicMessage.at })
+  }
+  const publishHostNotice = (text: string) => {
+    // Existing host guard notices are not partner/model completions, but need
+    // their own public identity rather than appending to an ended Pi response.
+    const id = randomUUID(), at = Date.now()
+    input.publish('assistant_message_boundary', { public_message_id: id, boundary: 'start', at })
+    input.publish('message_delta', { text, public_message_id: id })
+    appendSessionMessage(input.sessionId, { role: 'assistant', origin: 'agent', content: [{ type: 'text', text }], timestamp: at, public_message_id: id })
+    input.publish('assistant_message_boundary', { public_message_id: id, boundary: 'end', at: Date.now() })
   }
   try {
     input.signal.throwIfAborted()
@@ -111,12 +153,14 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
       execute: async (id, args, signal) => {
         const toolSignal = signal ? AbortSignal.any([input.signal, signal]) : input.signal
         toolSignal.throwIfAborted()
-        ctx.toolCallId = id
+        const callCtx: ToolContext = { ...ctx, signal: toolSignal, toolCallId: id }
+        const toolStarted = performance.now(), inputBytes = Buffer.byteLength(JSON.stringify(args))
+        try{input.onToolObservation?.({phase:'started',turn:turns,id,name:tool.name,input:structuredClone(args) as Record<string,unknown>})}catch{/* Attempted action is not execution success. */}
         const outcome = await executeToolCall({ ...input, signal: toolSignal }, toolByName, budgetUsed,
-          { name: tool.name, id, input: args as Record<string, unknown> }, { ...ctx, signal: toolSignal })
+          { name: tool.name, id, input: args as Record<string, unknown> }, callCtx)
         let feedback = feedbackForTool(tool.name, outcome)
         if (feedback) {
-          try { tool.recordFeedback?.(feedback, ctx) } catch {
+          try { tool.recordFeedback?.(feedback, callCtx) } catch {
             feedback = { ...feedback, verification: 'unverified', category: 'verification_harness', recovery: 'inspect', reason: 'EVIDENCE_RECORD_FAILED',
               ...(feedback.evidence ? { evidence: { ...feedback.evidence, freshness: 'unknown' } } : {}) }
           }
@@ -131,16 +175,18 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
         }
         budgetHitThisTurn ||= outcome.budgetExhausted === true
         outcomes.set(id, { isError: outcome.isError === true || outcome.budgetExhausted === true })
+        const display = safeToolDisplay(outcome.detail?.display)
         const content = feedback ? formatToolFeedback(feedback, outcome.output) : outcome.output
         const assistantEntry = [...opened.manager.getBranch()].reverse().find(entry => entry.type === 'message' && entry.message.role === 'assistant')
         opened.manager.appendCustomEntry('bloma-tool-receipt', { id, assistantEntryId: assistantEntry?.id, name: tool.name, content,
-          isError: outcome.isError === true || outcome.budgetExhausted === true })
+          isError: outcome.isError === true || outcome.budgetExhausted === true, ...(display ? {display} : {}) })
+        try{input.onToolObservation?.({phase:'completed',turn:turns,id,name:tool.name,input:structuredClone(args) as Record<string,unknown>,output:content,isError:outcome.isError===true||outcome.budgetExhausted===true,halted:status!=='completed',duration_ms:performance.now()-toolStarted,input_bytes:inputBytes,output_text_bytes:Buffer.byteLength(content)})}catch{/* Observation cannot alter the execution receipt. */}
         return { content: [{ type: 'text' as const, text: content }, ...(outcome.images ?? []).map(piImage)],
-          details: { ...outcome.detail, feedback, budgetExhausted: outcome.budgetExhausted } }
+          details: { ...outcome.detail, display, feedback, budgetExhausted: outcome.budgetExhausted } }
       },
     }))
     ;({ session } = await createAgentSession({ cwd, agentDir, modelRuntime, settingsManager, resourceLoader,
-      sessionManager: opened.manager, model, thinkingLevel: input.thinkingLevel ?? 'low', noTools: 'all',
+      sessionManager: opened.manager, model, thinkingLevel: loopThinking(input), noTools: 'all',
       tools: customTools.map(tool => tool.name), excludeTools: ['mcp__*', 'codemode', 'tool_search'], customTools }))
     const activeSession = session
     const expectedTools = input.tools.map(tool => tool.name).sort()
@@ -182,6 +228,7 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
       if (!progress) return converted
       const transport = toTransportTurns({ messages: converted })
       pruneDuplicateReads(transport)
+      pruneSupersededHostReads(transport)
       const systemMessage = getCurrentSystemMessage(converted)
       return [...(systemMessage ? [systemMessage] : []), ...importLegacyTurns(transport, model)]
     }
@@ -195,6 +242,22 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
       if (input.signal.aborted) { status = 'cancelled'; return true }
       if (status !== 'completed') return true
       const calls = toolCalls.filter(call => call.turn === turns)
+      const protocolFailure = protocolGuard(calls)
+      if(protocolFailure){status='budget_exhausted';termination={reason:'no_progress',limit:protocolFailure.limit,observed:protocolFailure.count};publishHostNotice('相同版本的工具拒因或验收失败已达到重复上限，停止当前执行并保留记录；先诊断，不继续原样重试：'+protocolFailure.key);return true}
+      if (toolResults.length && input.afterTools && !pendingSteerCount(input.sessionId)) {
+        const handoff = await input.afterTools(ctx, calls)
+        // Host checks run after the model tool has returned successfully. Feed
+        // their real outcome into the same guard without inventing a model tool
+        // call or counting unrelated successful tools as a repaired host check.
+        const hostFacts=handoff?.verification?formatToolFeedback(handoff.verification,''):undefined
+        if(handoff?.verification){
+          const repeated=protocolGuard([{name:'__host_after_tools_verification',turn:turns,
+            status:handoff.verification.verification==='passed'?'ok':'error',failureKey:toolFailureKey('__host_after_tools_verification',hostFacts!)}])
+          if(repeated){status='budget_exhausted';termination={reason:'no_progress',limit:repeated.limit,observed:repeated.count};publishHostNotice('同一版本的检查失败已达到重复上限，已停止这轮制作并保留记录，需要先查清原因再继续。');return true}
+        }
+        if (handoff?.complete && (!handoff.verification||handoff.verification.verification==='passed') && !pendingSteerCount(input.sessionId)) return true
+        if (handoff?.feedback) activeSession.agent.steer({ role: 'user', content: (hostFacts?hostFacts+'\n':'')+handoff.feedback, timestamp: Date.now() })
+      }
       budgetStalls = budgetHitThisTurn ? budgetStalls + 1 : 0
       if (budgetStalls >= 2) { status = 'budget_exhausted'; return true }
       if (message.stopReason === 'length') {
@@ -247,21 +310,31 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
             ...(entry.steerId ? { steer_id: entry.steerId, status: 'merged_this_run' } : {}) })
           checkpoint('steer')
         }
-      } else if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
-        for (const text of filter.push(event.assistantMessageEvent.delta)) input.publish('message_delta', { text })
+      } else if (event.type === 'message_start' && event.message.role === 'assistant') {
+        startPublicMessage(event.message)
+      } else if (event.type === 'message_update' && event.message.role === 'assistant') {
+        if (publicMessage) {
+          publicMessage.message = event.message
+          if (event.assistantMessageEvent.type === 'text_delta') {
+            for (const text of publicMessage.filter.push(event.assistantMessageEvent.delta)) input.publish('message_delta', { text, public_message_id: publicMessage.id })
+          }
+        }
       } else if (event.type === 'message_end') {
         if (event.message.role === 'assistant') {
           finalText = event.message.content.filter(b => b.type === 'text').map(b => b.text).join('')
+          if(input.publicMessageTiming==='response'&&!compacting&&!input.signal.aborted&&!['error','aborted','length'].includes(event.message.stopReason)&&finalText.trim()){
+            try{input.onAssistantMessage?.({turn:turns,text:finalText})}catch{/* Advisory channel only. */}
+          }
           errorMessage = event.message.stopReason === 'error' ? event.message.errorMessage : undefined
-          for (const text of filter.end()) input.publish('message_delta', { text })
-          filter = createDsmlDisplayFilter()
+          if (publicMessage) publicMessage.message = event.message
+          closePublicMessage(input.signal.aborted || ['error', 'aborted', 'length'].includes(event.message.stopReason) ? 'interrupted' : 'end')
         }
         if (event.message.role === 'user' && initialUser) {
           initialUser = false
           if (input.initialMessagePersisted) return
           const blocks = [{ type: 'text' as const, text: input.task }, ...(input.images ?? []).map(ref => ({ type: 'image' as const, imageId: ref.imageId, media_type: ref.media_type }))]
           appendSessionMessage(input.sessionId, { role: 'user', origin: 'user', content: blocks, timestamp: Date.now() })
-        } else {
+        } else if (event.message.role !== 'assistant') {
           const text = event.message.role === 'user' ? auditBlocks(event.message).filter(b => b.type === 'text').map(b => b.text).join('') : ''
           const index = injectedSteerTexts.indexOf(text)
           if (index >= 0) injectedSteerTexts.splice(index, 1)
@@ -270,10 +343,11 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
       } else if (event.type === 'tool_execution_start') {
         const path = typeof event.args?.path === 'string' ? event.args.path : undefined
         const progressKey = commandProgressKey(event.toolName, event.args ?? {})
-        toolCalls.push({ name: event.toolName, turn: turns, ...(progressKey ? { progressKey } : {}), ...(path ? { path } : {}) })
+        const call: AgentLoopToolCallRecord = { name: event.toolName, turn: turns, ...(progressKey ? { progressKey } : {}), ...(path ? { path } : {}) }
+        toolCalls.push(call); callsById.set(event.toolCallId, call)
         input.publish('tool_call_started', { tool: event.toolName, tool_call_id: event.toolCallId, turn: turns, input_summary: JSON.stringify(event.args).slice(0, 500) })
       } else if (event.type === 'tool_execution_end') {
-        const call = [...toolCalls].reverse().find(call => call.name === event.toolName && call.turn === turns && !call.status)
+        const call = callsById.get(event.toolCallId)
         if (call) call.status = event.isError ? 'error' : 'ok'
         const details = event.result.details as { feedback?: ToolFeedback; budgetExhausted?: boolean } | undefined
         const result = event.result as AgentToolResult<unknown>
@@ -282,10 +356,13 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
           const failureKey = toolFailureKey(call.name, result.content.filter(b => b.type === 'text').map(b => b.text).join('\n'))
           if (failureKey) call.failureKey = failureKey
         }
+        const fullOutput = result.content.filter(b => b.type === 'text').map(b => b.text).join('\n')
+        const feedbackEnd = fullOutput.indexOf('</tool-feedback>')
+        const displayOutput = fullOutput.startsWith('<tool-feedback>') && feedbackEnd >= 0 && feedbackEnd < 8192 ? fullOutput.slice(feedbackEnd + '</tool-feedback>'.length).trimStart() : fullOutput
         input.publish('tool_call_completed', { tool: event.toolName, tool_call_id: event.toolCallId, turn: turns,
           status: details?.budgetExhausted ? 'budget' : event.isError ? 'error' : 'ok', is_error: event.isError,
           ...(event.durationMs!==undefined?{duration_ms:event.durationMs}:{}),
-          feedback: details?.feedback, output_summary: result.content.filter(b => b.type === 'text').map(b => b.text).join('\n').slice(0, 500),
+          display: safeToolDisplay((result.details as Record<string,unknown>|undefined)?.display), feedback: details?.feedback, output_text_bytes: Buffer.byteLength(result.content.filter(b => b.type === 'text').map(b => b.text).join('\n')), output_summary: displayOutput.slice(0, 500),
           ...(() => {const detail=Object.fromEntries(Object.entries((result.details ?? {}) as Record<string, unknown>)
             .filter(([key,value]) => value!==undefined&&['delegation_id', 'child_session_id', 'role', 'goal', 'status', 'pending_question', 'error'].includes(key)))
             return Object.keys(detail).length?{detail}:{} })() })
@@ -294,7 +371,12 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
         if (event.toolName === 'run_security_scan') checkpoint('security')
       } else if (event.type === 'turn_end') {
         const usage = [...turnsUsage].reverse().find(usage => usage.turn === turns)
-        input.onTurn?.({ turn: turns, failed: event.message.role === 'assistant' && ['error', 'aborted', 'length'].includes(event.message.stopReason),
+        const failed=event.message.role==='assistant'&&['error','aborted','length'].includes(event.message.stopReason)
+        if(input.publicMessageTiming!=='response'&&!compacting&&!failed&&!input.signal.aborted&&event.message.role==='assistant'&&input.onAssistantMessage){
+          const text=event.message.content.filter(block=>block.type==='text').map(block=>block.text).join('')
+          if(text.trim())try{input.onAssistantMessage({turn:turns,text})}catch{/* Advisory delivery never changes execution outcomes. */}
+        }
+        input.onTurn?.({ turn: turns, failed,
           toolCalls: toolCalls.filter(call => call.turn === turns), inputTokens: usage?.inputTokens, outputTokens: usage?.outputTokens })
       } else if (event.type === 'compaction_start') compacting = true
       else if (event.type === 'compaction_end') {
@@ -332,6 +414,8 @@ export async function runPiSession(input: AgentLoopInput): Promise<AgentLoopResu
       queuedSteers.push(...drainSteerQueue(input.sessionId).map(entry => ({ entry, text: wrapSteerContent(entry.content) })))
     }
     try {
+      // Covers aborts/SDK exceptions that bypass message_end, exactly once.
+      closePublicMessage('interrupted')
       for (const { entry, text } of queuedSteers) {
         if (!input.signal.aborted) {
           const message = { role: 'user' as const, content: text, timestamp: Date.now() }

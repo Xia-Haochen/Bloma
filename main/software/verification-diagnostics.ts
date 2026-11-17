@@ -1,10 +1,13 @@
+import { independentFailureEvidence, independentCaseOutcome } from './verification-evidence'
 import { ReleaseIntegrityError } from './release-store'
 import type { SoftwareVerification } from './verification'
 import { NativeTestContractError } from './native-gui-tests'
 
 export interface VerificationFailure {
-  category: 'product_assertion' | 'test_adapter' | 'environment' | 'harness' | 'unknown'
-  classification_basis?: 'host_runtime'|'assertion'|'unresolved'|'legacy'
+  category: 'product_assertion' | 'test_adapter' | 'environment' | 'harness' | 'security_policy' | 'unknown'
+  classification_basis?: 'host_runtime'|'assertion'|'adapter_contract'|'static_policy'|'unresolved'|'legacy'
+  observation?: { status: SoftwareVerification['status']; candidate_id?: string; source?: string; expected: unknown; actual: unknown }
+  diagnosis?: { certainty: 'supported'|'suspected'|'unknown'; basis: string; root_cause_confirmed: false; note: string }
   code: string
   step?: string
   expected: unknown
@@ -12,29 +15,74 @@ export interface VerificationFailure {
   paths: string[]
   allowed_changes: string[]
   next_tool: string
+  next_action?: {tool:string;arguments:Record<string,unknown>}
   next: string
 }
 export function verificationFailure(result: SoftwareVerification, error?: unknown): VerificationFailure | undefined {
   if (result.status === 'passed') return
   if(result.status==='unverified'&&result.independent?.semantics?.ready===false)return{
     category:'unknown',classification_basis:'unresolved',code:'INDEPENDENT_SEMANTICS_UNRESOLVED',expected:'已确认需求和可追溯的冻结独立预期',actual:result.independent.semantics,paths:[],
-    allowed_changes:['核对确认来源与未明确规则，保留争议；不得让实现者修改冻结输入、断言或新增需求'],next_tool:'read_production_context(independent-design)',next:'先澄清业务预期或覆盖争议，保留现有候选和案例；这不是已确认产品缺陷，不自动修产品迎合错误预期，也不自动重发B。'}
-  const summary = result.summary, gui = result.core?.host_gui
-  const failed = gui?.steps.find(step => !step.passed)
-  const independent=result.independent&&'diagnostic'in result.independent?result.independent.diagnostic:undefined
+    observation:{status:result.status,candidate_id:result.candidate?.id,source:result.candidate?.source.digest,expected:'已确认需求和可追溯预期',actual:result.independent.semantics},
+    diagnosis:{certainty:'unknown',basis:'unresolved',root_cause_confirmed:false,note:'业务预期存在争议，尚无产品缺陷结论。'},
+    allowed_changes:['核对确认来源与未明确规则，保留争议；不得让实现者修改冻结输入、断言或新增需求'],next_tool:'read_production_context',next_action:{tool:'read_production_context',arguments:{topic:'independent-design'}},next:'先澄清业务预期或覆盖争议，保留现有候选和案例；这不是已确认产品缺陷，不自动修产品迎合错误预期，也不自动重发B。'}
+  const speech=result.core?.speech?.error
+  const speechPrerequisite=speech?.match(/^(ASR_ENTRY_INVALID|ASR_RUNTIME_UNSUPPORTED|ASR_CAPABILITY_PREPARATION_REQUIRED):/)
+  if(speechPrerequisite)return{
+    category:'test_adapter',classification_basis:'adapter_contract',code:speechPrerequisite[1],
+    observation:{status:result.status,candidate_id:result.candidate?.id,source:result.candidate?.source.digest,
+      expected:'可由宿主运行的实际语音识别入口',actual:speech},
+    diagnosis:{certainty:'supported',basis:'adapter_contract',root_cause_confirmed:false,note:'当前语音声明尚未满足正式检查入口。'},
+    expected:'可由宿主运行的实际语音识别入口',actual:speech,paths:['CORE_CHECK.json'],
+    allowed_changes:['准备或修正产品实际使用的语音组件及入口登记'],
+    next_tool:'read_production_context',next_action:{tool:'read_production_context',arguments:{topic:'verification-speech'}},
+    next:'先核对语音入口、宿主准备工具和产品实际调用关系，再执行正式检查。已执行的界面案例仍保留在回执。'}
+  const summary = result.summary??'', gui = result.core?.host_gui
+  const failed = gui?.steps?.find(step => !step.passed)
+  const independent=independentFailureEvidence(result.independent)
   const assertion = failed?.actual && typeof failed.actual === 'object' ? (failed.actual as { assertion?: { expected?: unknown; actual?: unknown } }).assertion : undefined
-  const adapter = /INDEPENDENT_ADAPTER|GUI_NATIVE_(?:PATH|SYNTAX|CASE|REPORT|ASSERTIONS|EVIDENCE|COVERAGE|INPUT|TEST_SOURCE|DEPENDENCY|PACKAGE|BOOTSTRAP)|GUI_EXISTING_EXPECTATIONS|EVIDENCE_(?:PATH|DIRECTORY)|(?:TimeoutError|strict mode violation|waiting for (?:locator|getBy))/.test(summary + JSON.stringify(failed?.actual ?? ''))
-  const kind=gui?.failure_kind
-  const explicitAssertion=assertion&&(assertion.expected!==undefined||assertion.actual!==undefined)
-  const category:VerificationFailure['category'] = result.status === 'environment_blocked' ? 'environment'
-    : kind==='runtime'?'product_assertion':kind==='bootstrap'?'test_adapter':kind==='incomplete'?'harness'
-    : kind==='assertion'?(explicitAssertion?'product_assertion':'unknown')
-    : adapter ? 'test_adapter' : result.status === 'failed' ? 'product_assertion' : 'harness'
+  const cli = result.core?.host_cli?.cases.find(row => !row.passed)
+  const security = result.security?.issues.filter(row => row.severity === 'critical' || row.severity === 'high')
+  const details = summary + '\n' + JSON.stringify(failed?.actual ?? '')
+  const serviceSetupCode = [gui?.error, independent.row?.kind === 'environment' ? independent.row.error : undefined, summary]
+    .map(value => value?.match(/\bACCEPTANCE_ENVIRONMENT_(?:SETTINGS\w*|READY_BINDING_INVALID|SETUP_FAILED|PROTOCOL_UNSUPPORTED|MANIFEST_INVALID|START_FAILED)\b/)?.[0])
+    .find(Boolean)
+  const adapterContract = /INDEPENDENT_ADAPTER|GUI_NATIVE_(?:PATH|SYNTAX|CASE|REPORT|ASSERTIONS|EVIDENCE|COVERAGE|INPUT|TEST_SOURCE|DEPENDENCY|PACKAGE|BOOTSTRAP)|GUI_EXISTING_EXPECTATIONS|EVIDENCE_(?:PATH|DIRECTORY)/.test(details)
+  // A timeout alone can be a broken UI, overlay, wrong locator or slow runtime.
+  // Only the contradictory hidden-selector + visible wait is decisive here.
+  const contradictoryWait = /waiting for (?:locator|selector)[^\n]*\[hidden\][^\n]*to be visible/i.test(details)
+  const ambiguousWait = /TimeoutError|strict mode violation|waiting for (?:locator|getBy)|intercepts pointer events/.test(details)
+  const kind = independent.row?.kind === 'product_runtime' && independentCaseOutcome(independent.row) === 'failed' ? 'runtime' : gui?.failure_kind
+  const explicitAssertion = Boolean(assertion && (assertion.expected !== undefined || assertion.actual !== undefined) || cli?.expected && cli.exit_code !== null
+    || independent.row?.kind==='product_assertion'&&independentCaseOutcome(independent.row)==='failed')
+  const category: VerificationFailure['category'] = result.status === 'environment_blocked' ? 'environment'
+    : security?.length ? 'security_policy'
+    : kind === 'runtime' ? 'product_assertion'
+    : serviceSetupCode ? 'environment'
+    : kind === 'bootstrap' || adapterContract || contradictoryWait ? 'test_adapter'
+    : explicitAssertion ? 'product_assertion'
+    : independent.row?.kind==='environment' ? 'environment'
+    : ambiguousWait || kind === 'assertion' ? 'unknown'
+    : kind === 'incomplete' ? 'harness'
+    : 'unknown'
   const release = error instanceof ReleaseIntegrityError ? error : undefined
-  return { category, classification_basis:!kind?'legacy':kind==='runtime'?'host_runtime':explicitAssertion?'assertion':'unresolved', code: summary.match(/\b[A-Z][A-Z_]{4,}\b/)?.[0] ?? (category === 'product_assertion' ? 'PRODUCT_CHECK_FAILED' : 'VERIFICATION_INCOMPLETE'),
-    step: independent?.id??failed?.id, expected: independent?.expected??assertion?.expected ?? '已确认需求、冻结的业务输入与预期、候选和依赖字节保持一致', actual: independent?.actual??assertion?.actual ?? failed?.actual ?? summary.slice(0, 4000),
+  const expected = independent?.expected ?? assertion?.expected ?? cli?.expected ?? (security?.length ? '通过现役静态安全规则；规则命中不等同已证实漏洞' : undefined)
+  const actual = independent?.actual ?? assertion?.actual ?? failed?.actual ?? (cli ? {stdout:cli.actual,exit_code:cli.exit_code,stderr:cli.stderr} : security?.length ? security : summary)
+  const basis = category==='security_policy'?'static_policy':kind==='runtime'?'host_runtime':category==='test_adapter'?'adapter_contract':explicitAssertion?'assertion':'unresolved'
+  const serviceEnvironment=serviceSetupCode||independent.row?.kind==='environment'&&independent.row.error?.includes('ACCEPTANCE_ENVIRONMENT_')
+  const contract=error instanceof NativeTestContractError?error:undefined
+  const next_action=contract?.readOriginal??(serviceEnvironment?{tool:'read_production_context',arguments:{topic:'ai-service'}}:category==='environment'?{tool:'inspect_software_environment',arguments:{}}
+    :category==='security_policy'&&security?.[0]?.file?{tool:'read_file',arguments:{path:security[0].file}}
+    :category==='product_assertion'&&explicitAssertion?{tool:'read_production_context',arguments:{topic:'features',...(cli?{feature_ids:cli.covers}:{})}}
+    :category==='test_adapter'?{tool:'read_production_context',arguments:{topic:'verification-gui'}}
+    :{tool:'read_production_context',arguments:{topic:'diagnostics'}})
+  return { category, classification_basis:basis,
+    observation:{status:result.status,candidate_id:result.candidate?.id,source:result.candidate?.source.digest,expected,actual},
+    diagnosis:{certainty:explicitAssertion||security?.length||kind==='runtime'?'supported':category==='test_adapter'?'suspected':'unknown',basis,root_cause_confirmed:false,
+      note:explicitAssertion?'仅确认实际结果不符合登记断言；先核对预期来源，不等于确认业务实现根因。':category==='security_policy'?'仅确认静态规则命中，不据此宣称漏洞可利用。':'原因未闭合；按当前现场检查，不把检查失败直接等同产品缺陷。'},
+    code: contradictoryWait && category === 'test_adapter' ? 'TEST_WAIT_STATE_CONTRADICTION' : serviceSetupCode ?? (independent.row?.kind==='environment'?independent.row.error??summary:summary).match(/\b[A-Z][A-Z_]{4,}\b/)?.[0] ?? (category === 'security_policy'?'STATIC_POLICY_BLOCKED':category === 'product_assertion' ? 'PRODUCT_CHECK_FAILED' : 'VERIFICATION_INCOMPLETE'),
+    step: independent?.id??failed?.id??cli?.name, expected, actual,
     paths: release?.differences.map(item => item.path) ?? (error instanceof NativeTestContractError ? error.paths.slice(0, 24) : []),
-    allowed_changes: category === 'unknown'?['先核对实际界面、进程和日志；原因尚未确定，不修改业务输入或断言'] : category === 'test_adapter' ? ['测试定位的静态字面量', '有界等待时间和导航等待选项；业务输入、目标页面和断言保持冻结'] : category === 'product_assertion' ? ['应用实现；不得降低已确认预期'] : ['宿主证据目录和执行环境；不得绕过完整性校验'],
-    next_tool: category === 'unknown'?'inspect_app':category === 'environment' ? 'prepare_software_environment' : category === 'test_adapter' ? 'verify_app(script)' : 'verify_app',
-    next: category==='unknown'?'根因尚未确定，先用inspect_app核对实际界面、进程及日志，再决定修复位置；不放宽预期或超时掩盖问题。':release ? '将测试输出写入上下文 evidenceDir；相对截图路径自动落入该目录。不要在成品增加验收痕迹清理逻辑。业务或依赖改变需重新生成候选并实测。' : category === 'test_adapter' ? '使用实际UI修正适配后重新verify_app(script)，宿主记录新适配版本；不得修改输入和断言。' : '查看具体失败证据，修复后重新验收。' }
+    allowed_changes: contract?.readOriginal?['恢复误改的冻结原文，或保留有意修正的草稿并提交独立裁定']:category==='security_policy'?['核对命中规则及具体数据来源；修正应用写法，不关闭规则或宣称已证实漏洞']:category === 'unknown'?['先核对实际界面、进程和日志；原因尚未确定，不修改业务输入或断言'] : category === 'test_adapter' ? ['测试定位的静态字面量', '有界等待时间和导航等待选项；业务输入、目标页面和断言保持冻结'] : category === 'product_assertion' ? ['先核对断言预期的确认来源，再修应用实现；断言不等同业务根因，不得降低已确认预期'] : ['宿主证据目录和执行环境；不得绕过完整性校验'],
+    next_tool:next_action.tool,next_action,
+    next: contract?.readOriginal?`读取所列文件的冻结原文（不依赖测试成功执行）。误改则恢复后复验；若草稿有意纠正共享逻辑、输入或预期，保留登记入口 ${contract.correctionEntry}，正常制作流程中再次 verify_app 会自动提交有变化的草稿，由宿主独立裁定后应用和复验；独立诊断调用也可用 propose_test_correction。拒绝后按裁定原因修改草稿，原样重跑不会批准被拒绝的修改。`:category==='unknown'?'根因尚未确定，先读diagnostics核对进程和日志；涉及GUI时再inspect_app，不把命令行失败送到GUI工具。不放宽预期或超时掩盖问题。':category==='environment'?'先检查实际运行环境，确认缺失的runtime后再准备；不猜参数、不修改业务预期。':release ? '将测试输出写入上下文 evidenceDir；相对截图路径自动落入该目录。不要在成品增加验收痕迹清理逻辑。业务或依赖改变需重新生成候选并实测。' : category === 'test_adapter' ? '使用inspect_app核对实际UI后修正定位或等待适配，再verify_app(script)；若冻结规则拒绝改动，保留契约错误并核对适配范围，不改产品迎合脚本，不改输入和断言。' : '先核对具体证据和确认预期，原因明确后再修复并重新验收。' }
 }

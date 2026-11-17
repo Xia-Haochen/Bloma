@@ -1,0 +1,14 @@
+{
+  "mode": "voice-cancel",
+  "started_at": "2026-11-16T06:23:22.423Z",
+  "checks": [
+    {
+      "name": "R1_cancel_via_real_recording_UI_with_Chromium_synthetic_device_no_request",
+      "status": "passed",
+      "physical_microphone": "user assured, not measured"
+    }
+  ],
+  "scope": "Actual Electron UI, local controlled service, process restart and exported artifacts. Live-provider semantics, physical microphone and human listening are separate.",
+  "status": "passed",
+  "finished_at": "2026-11-16T06:23:23.446Z"
+}

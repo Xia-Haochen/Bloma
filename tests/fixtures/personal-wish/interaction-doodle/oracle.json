@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "case_id": "interaction-doodle",
+  "core_experience": "涂画动作实际影响声音并可按规则版本回放",
+  "unacceptable_substitute": "画完后只显示一段音乐介绍",
+  "source_quote": "我想把鼠标涂鸦变成一个小乐器：线条速度影响节奏，颜色影响音色。我自己改对应关系，回放旧画时要能选择用旧规则还是新规则。先用几种简单合成音就好。",
+  "change_quote": "增加静音画画模式；静音期间画的东西以后仍可以回放。",
+  "dimensions": [
+    "intent",
+    "behavior",
+    "provenance",
+    "change_recovery",
+    "ui",
+    "delivery"
+  ],
+  "required_evidence": [
+    "actual_interaction",
+    "source_and_scope_identity",
+    "restart_readback",
+    "final_project_state"
+  ],
+  "outcomes": [
+    "passed",
+    "failed",
+    "unverified",
+    "not_applicable"
+  ],
+  "status": "authored_not_executed",
+  "independent": false
+}

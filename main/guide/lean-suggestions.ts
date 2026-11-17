@@ -36,5 +36,6 @@ export function adoptLeanSuggestions(brief: PrdBackplane, suggestions: LeanScope
     acceptance[id] = item.expected
     return { id, description: item.description, priority: 'P0' as const, behavior_assertions: [item.expected] }
   })]
-  return bindAcceptance({ ...brief, user_confirmed_at: undefined, requirements, acceptance })
+  // A changed scope needs a fresh reading plan; keep every old and adopted obligation.
+  return bindAcceptance({ ...brief, project_plan: undefined, user_confirmed_at: undefined, requirements, acceptance })
 }

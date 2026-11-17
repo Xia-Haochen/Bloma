@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync, unlinkSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { beforeEach, afterEach, expect, it } from 'vitest'
@@ -23,14 +23,15 @@ beforeEach(async()=>{
   if(parsed.action!=='brief')throw Error('fixture');parsed.brief.lean_brief!.preview='skip'
   syncDocuments({request_id:'sync',project_id:project.project_id,session_id:'s',checkpoint:'requirement_confirmed'},parsed.brief)
   const brief=markPrdUserConfirmed(project.project_id)!,scope=prdScopeFingerprint(brief);updateProject(project.project_id,{ux_confirmation:{prd_fingerprint:scope,design_hash:scope,html_hash:null}})
+  writeFileSync(join(project.root_path,'ARCHITECTURE.md'),'Static view reads application state; CSS owns presentation only. Review state identity and persistence separately from style changes.')
   writeFileSync(join(project.root_path,'index.html'),'<link rel="stylesheet" href="theme.css"><p>3件</p>')
   writeFileSync(join(project.root_path,'theme.css'),baseCss);writeFileSync(join(project.root_path,'app.cjs'),'console.log(3)')
   writeFileSync(join(project.root_path,'LAUNCH.json'),JSON.stringify({schema_version:2,ui:'browser',command:['node','app.cjs'],url:'http://127.0.0.1:49123'}))
   original=await qualityIdentity(project.project_id);release=await prepareSoftwareRelease(project.project_id,project.root_path)
   // Controlled host metadata is only a selector fixture, not a GUI acceptance
   // claim. The separate production test creates a real verified C/V baseline.
-  saveQualityLedger(project.project_id,{version:1,findings:[],reviews:[{id:'C',kind:'code',identity:original,status:'complete',at:new Date().toISOString()},
-    {id:'V',kind:'visual',identity:original,status:'complete',at:new Date().toISOString(),child:'fixture-child',image:{imageId:'fixture-child/frozen.png',media_type:'image/png'},visual:{project:project.project_id,parent:'s',review:'V',candidate:qualityHash(original),image_hash:'a'.repeat(64),manifest_hash:'b'.repeat(64),expires:0},visual_delivery:{at:new Date().toISOString(),image_hash:'a'.repeat(64),request_hash:'c'.repeat(64)},visual_observations:[{scope:'controlled_selector_fixture'}]}]})
+  saveQualityLedger(project.project_id,{version:1,findings:[],reviews:[{id:'C',kind:'code',identity:original,status:'complete',at:new Date().toISOString(),engineering:{status:'supported',evidence:'Controlled selector fixture.',limitations:'No actual GUI acceptance implied.'}},
+    {id:'V',kind:'visual',identity:original,status:'complete',at:new Date().toISOString(),child:'fixture-child',image:{imageId:'fixture-child/frozen.png',media_type:'image/png'},visual:{project:project.project_id,parent:'s',review:'V',candidate:qualityHash(original),image_hash:'a'.repeat(64),manifest_hash:'b'.repeat(64),expires:0},visual_delivery:{at:new Date().toISOString(),image_hash:'a'.repeat(64),request_hash:'c'.repeat(64)},visual_observations:['layout','interaction','content','scope'].map(area=>({area,observed:'controlled_selector_fixture'}))}]})
   await promoteSoftwareRelease(release,{version:'controlled-selector-fixture',scope,at:new Date().toISOString()})
 })
 afterEach(()=>{if(previous===undefined)delete process.env.PROMA_HOME;else process.env.PROMA_HOME=previous;rmSync(home,{recursive:true,force:true,maxRetries:5,retryDelay:100})})
@@ -38,7 +39,7 @@ const select=async()=>selectQualityCollaboration(project.project_id,await qualit
 it('requires full review without a verified baseline, and records an unchanged decision without calling any model',async()=>{
   const unchanged=await select();expect(unchanged).toMatchObject({risk:'unchanged',required:[],changed_count:0,baseline:release.id})
   await select();expect(readQualityLedger(project.project_id).collaboration).toHaveLength(1)
-  unlinkSync(join(home,'software-releases',project.project_id,'active.json'))
+  updateProject(project.project_id,{software_release_id:undefined})
   expect(await select()).toMatchObject({risk:'full',required:['code','visual']})
 })
 it('only drops C for bounded changes to existing cosmetic CSS declarations; V still requires a current image',async()=>{
@@ -67,7 +68,7 @@ it('does not accept stale selection, modified release bytes, or a confirmed targ
 })
 it('never uses a small-change choice to discharge an important reproduced finding',async()=>{
   const ledger=readQualityLedger(project.project_id)
-  ledger.findings.push({id:'defect',review:'C',identity:original,requirement:'F-001',expected_source:'显示3件',category:'data',severity:'high',location:'app.cjs',trigger:'实际操作',evidence:'失败',reproduction:'host-case',unknowns:'',disposition:'confirmed',checks:[{at:new Date().toISOString(),identity:original,case_name:'host-case',rules:'frozen',outcome:'failed',observation:'controlled_host_fixture'}]})
+  ledger.findings.push({id:'defect',review:'C',identity:original,requirement:'F-001',expected_source:'显示3件',category:'data',severity:'high',location:'app.cjs',trigger:'实际操作',evidence:'失败',reproduction:'host-case',unknowns:'',disposition:'confirmed',checks:[{at:new Date().toISOString(),identity:original,case_name:'host-case',rules:'frozen',grounded:true,outcome:'failed',observation:'controlled_host_fixture'}]})
   saveQualityLedger(project.project_id,ledger);writeFileSync(join(project.root_path,'theme.css'),baseCss.replace('#111','#236'))
   expect((await select()).risk).toBe('full')
   const quality=createQualityReview(project.project_id,'s',createSoftwareCollaborationPolicy(project.project_id,project.root_path,'s'))
@@ -78,5 +79,32 @@ it('rejects even a checksum-consistent full-review certificate that omits GUI vi
   const facts={version:1 as const,identity:original,baseline:release.id,risk:'full' as const,required:['code' as const],reasons:['controlled malformed certificate'],changed_paths:[],changed_count:0}
   const certificate={...facts,id:qualityHash(facts)};ledger.collaboration=[certificate];saveQualityLedger(project.project_id,ledger)
   await promoteSoftwareRelease(release,{version:'controlled-selector-fixture',scope:prdScopeFingerprint(readPrdBackplane(project.project_id)),at:new Date().toISOString(),collaboration_id:certificate.id})
+  expect(await select()).toMatchObject({risk:'full',required:['code','visual']})
+})
+
+it('cannot discard a serious engineering concern through unchanged or cosmetic-only selection', async () => {
+  const ledger=readQualityLedger(project.project_id)
+  ledger.reviews.find(r=>r.id==='C')!.engineering={status:'concern',severity:'high',evidence:'State ownership is unresolved.',limitations:'Needs implementation review.'}
+  saveQualityLedger(project.project_id,ledger)
+  const quality=createQualityReview(project.project_id,'s',createSoftwareCollaborationPolicy(project.project_id,project.root_path,'s'))
+  expect(await quality.gate()).toContain('QUALITY_ENGINEERING_UNRESOLVED')
+  writeFileSync(join(project.root_path,'theme.css'),baseCss.replace('#111','#236'))
+  expect(await select()).toMatchObject({risk:'full',required:['code','visual']})
+})
+
+it.each(['medium','low','unverified'] as const)('keeps %s engineering observations advisory during cosmetic changes', async level => {
+  const ledger=readQualityLedger(project.project_id)
+  ledger.reviews.find(r=>r.id==='C')!.engineering={status:level==='unverified'?'unverified':'concern',...(level!=='unverified'?{severity:level}:{}),evidence:'Additional modularization may help future changes.',limitations:'No current delivery defect demonstrated.'}
+  saveQualityLedger(project.project_id,ledger)
+  const quality=createQualityReview(project.project_id,'s',createSoftwareCollaborationPolicy(project.project_id,project.root_path,'s'))
+  expect(await quality.gate()).toBeUndefined()
+  writeFileSync(join(project.root_path,'theme.css'),baseCss.replace('#111','#236'))
+  expect(await select()).toMatchObject({risk:'visual_only',required:['visual']})
+})
+
+it('never treats an exploration-only record as a baseline code-review certificate',async()=>{
+  const ledger=readQualityLedger(project.project_id),c=ledger.reviews.find(r=>r.id==='C')!
+  c.purpose='exploration';delete c.engineering
+  saveQualityLedger(project.project_id,ledger)
   expect(await select()).toMatchObject({risk:'full',required:['code','visual']})
 })

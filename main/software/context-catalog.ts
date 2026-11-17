@@ -1,5 +1,11 @@
 /** Discovery metadata only. Full protocols remain behind the context tool. */
 export const SOFTWARE_CONTEXT_CATALOG = [
+  {name:'experiments',when:'关键未知需要查资料和实际小实验；委派experiment并读取封存结果后集成，不增加固定前置阶段',topic:'working-state',tools:['delegate_agent','read_experiment']},
+  {name:'verification-report',when:'按报告hash读取失败优先的GUI/CLI案例及省略细节；section=raw读取脱敏原始记录片段，历史记录不代替当前验证',topic:'verification-report',tools:['read_production_context']},
+  { name:'project-stages',when:'已确认阶段的累计局部GUI检查、快照和下一项；最终仍需完整验收',topic:'project-stages',tools:['verify_project_stage','verify_app'] },
+  { name:'project-tasks',when:'当前目标执行归属、attempt历史与宿主报告；不恢复旧进程',topic:'project-tasks',tools:['read_production_context'] },
+  { name:'project-activity',when:'分页读取任务活动、实际配置与策略分段；不是通过凭据',topic:'project-activity',tools:['read_production_context'] },
+  { name:'project-state',when:'整体目标、阶段阅读视图、未完成必需能力和当前范围决策',topic:'project-state',tools:['read_production_context'] },
   { name:'product-components',when:'复用设置/数据/队列/HTTP/多模态/文件/查询/分发模块，选择产品组件组合',topic:'components',tools:['prepare_software_capability'] },
   { name:'ai-service',when:'产品统一AI服务、路由和自己的Key配置；product-settings准备设置界面及后台桥',topic:'ai-service',tools:['prepare_software_capability'] },
   { name:'diagnostics',when:'一次核对执行、历史验收失败、命令及当前调试截图',topic:'diagnostics',tools:['read_process','inspect_app'] },

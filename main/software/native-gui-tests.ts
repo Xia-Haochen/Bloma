@@ -5,6 +5,8 @@ import ts from 'typescript';
 import { getPromaHome } from '../../storage/config-paths';
 import type { GuiAcceptanceSuite, GuiAcceptanceResult } from '../desktop/gui-acceptance';
 import { nativeTestInputs } from './native-test-inputs';
+import { checkNativeTestBindings } from './native-test-preflight';
+import type { SoftwareRelease } from './release-store';
 export interface NativeGuiTests {
     layout?: 'project';
     entry: string;
@@ -29,8 +31,17 @@ export function sameNativeTestBytes(a: NativeGuiTests, b: NativeGuiTests) {
         && a.files.length === b.files.length && a.files.every((f, i) => f.path === b.files[i].path && f.sha256 === b.files[i].sha256 && f.size === b.files[i].size);
 }
 export class NativeTestContractError extends Error {
-    constructor(public readonly paths: string[]) {
-        super(`GUI_EXISTING_EXPECTATIONS_CHANGED: ${JSON.stringify({ paths: paths.slice(0, 24), omitted: Math.max(0, paths.length - 24), next: '开发探针可自由修改；正式案例保留已执行的业务输入、断言和共享业务逻辑。未执行的引导计划可依据宿主失败凭据修复。' })}`);
+    readonly readOriginal?: {tool:'read_test_contract';arguments:{contract_digest:string;file:string}};
+    readonly correctionEntry?: string;
+    constructor(public readonly paths: string[], before?:NativeGuiTests, code='GUI_EXISTING_EXPECTATIONS_CHANGED') {
+        const relative = (file: string) => before?.layout === 'project' ? file : before?.directory + '/' + file;
+        const entry = before && relative(before.entry);
+        const changed = before?.files.map(file => relative(file.path)).find(file => paths.includes(file));
+        const readOriginal=before&&entry?{tool:'read_test_contract' as const,arguments:{contract_digest:before.digest,file:changed??entry}}:undefined;
+        super(`${code}: ${JSON.stringify({ paths: paths.slice(0, 24), omitted: Math.max(0, paths.length - 24),contract_digest:before?.digest,
+          read_original:readOriginal, correction_entry:entry })}`);
+        this.readOriginal=readOriginal;
+        this.correctionEntry=entry;
     }
 }
 /** Compare business contracts, allowing extra checks and layout-only migration.
@@ -117,6 +128,7 @@ export function freezeNativeGuiTests(projectId: string, root: string, script: st
     const directory = dirname(script).replaceAll('\\', '/');
     if (directory !== '.') safe(directory);
     const testRoot = realpathSync(root), selected = nativeTestInputs(testRoot, script);
+    checkNativeTestBindings(testRoot, selected);
     const files: NativeGuiTests['files'] = [], contents = new Map<string, Buffer>(), ids = new Set<string>(), cases: NativeGuiTests['cases'] = [];
     let bytes = 0, reopened = false;
         for (const path of selected) {
@@ -190,6 +202,9 @@ export function freezeNativeGuiTests(projectId: string, root: string, script: st
                                 if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.expression.getText(parsed) === 'page'
                                     && ['goto', 'waitForLoadState'].includes(n.expression.name.text) && n.arguments.length === 2 && waitOptions(n.arguments[1]))
                                     return ts.factory.updateCallExpression(n, n.expression, n.typeArguments, [n.arguments[0], ts.factory.createStringLiteral('[wait-options]')]);
+                                if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.expression.getText(parsed)==='page'
+                                    && n.expression.name.text==='waitForFunction' && n.arguments.length===3 && waitOptions(n.arguments[2]))
+                                    return ts.factory.updateCallExpression(n,n.expression,n.typeArguments,[n.arguments[0],n.arguments[1],ts.factory.createStringLiteral('[wait-options]')]);
                                 if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.expression.getText(parsed) === 'page'
                                     && n.expression.name.text === 'waitForTimeout' && n.arguments.length === 1 && ts.isNumericLiteral(n.arguments[0])
                                     && Number(n.arguments[0].text) >= 100 && Number(n.arguments[0].text) <= 30000)
@@ -247,30 +262,58 @@ export function freezeNativeGuiTests(projectId: string, root: string, script: st
     }
     return value;
 }
-export function frozenNativeGuiVersion(projectId: string, native?: NativeGuiTests, sourceRoot?: string): string | undefined {
+export function frozenNativeGuiVersion(projectId: string, native?: NativeGuiTests, sourceRoot?: string, candidate?: SoftwareRelease): string | undefined {
     if (!native)
         return;
     validateNativeGuiTests(native);
     const directory = base(projectId, native.digest);
+    if (candidate && (candidate.projectId !== projectId || candidate.root !== sourceRoot))
+        throw Error('GUI_NATIVE_CANDIDATE_OWNER_MISMATCH');
+    const changed: string[] = [];
     for (const file of native.files) {
         const frozen = fileWithin(directory, file.path);
         if (lstatSync(frozen).isSymbolicLink() || lstatSync(frozen).size !== file.size || sha(readFileSync(frozen)) !== file.sha256)
             throw Error('GUI_NATIVE_FROZEN_INPUT_CHANGED');
         if (sourceRoot) {
-            const source = fileWithin(sourceRoot, native.layout === 'project' ? file.path : native.directory + '/' + file.path);
-            if (!existsSync(source) || lstatSync(source).isSymbolicLink() || sha(readFileSync(source)) !== file.sha256)
-                throw Error('GUI_NATIVE_TEST_SOURCE_CHANGED: 输入和预期已冻结；定位修复可重新verify_app(script)，不能改断言过关');
+            const relative = native.layout === 'project' ? file.path : native.directory + '/' + file.path;
+            const source = fileWithin(sourceRoot, relative);
+            // The caller reads provenance from the host-owned candidate record.
+            // Its original launch bytes bind the frozen input; its runtime bytes
+            // bind the host-resolved executable. All other inputs stay byte exact.
+            const original = relative === 'LAUNCH.json' ? candidate?.source.files.find(entry => entry.path === relative) : undefined;
+            const runtime = original && candidate?.runtime.files.find(entry => entry.path === relative);
+            if (candidate && relative === 'LAUNCH.json' &&
+                (!original || !runtime || original.sha256 !== file.sha256 || original.size !== file.size)) {
+                changed.push(relative);
+                continue;
+            }
+            const expected = runtime?.sha256 ?? file.sha256;
+            if (!existsSync(source) || lstatSync(source).isSymbolicLink() || sha(readFileSync(source)) !== expected)
+                changed.push(relative);
         }
     }
+    if (changed.length) throw new NativeTestContractError(changed, native, 'GUI_NATIVE_TEST_SOURCE_CHANGED');
     return native.digest;
 }
 export function frozenNativeGuiEntry(projectId: string, native: NativeGuiTests, sourceRoot: string) {
     frozenNativeGuiVersion(projectId, native, sourceRoot);
     return join(base(projectId, native.digest), native.entry);
 }
-export function frozenNativeGuiRoot(projectId: string, native: NativeGuiTests, sourceRoot: string) {
-    frozenNativeGuiVersion(projectId, native, sourceRoot);
+export function frozenNativeGuiRoot(projectId: string, native: NativeGuiTests, sourceRoot: string, candidate?: SoftwareRelease) {
+    frozenNativeGuiVersion(projectId, native, sourceRoot, candidate);
     return base(projectId, native.digest);
+}
+/** Diagnostic only: the host's immutable entry, never an arbitrary filesystem read. */
+export function frozenNativeEntryPreview(projectId: string, native: NativeGuiTests) {
+    frozenNativeGuiVersion(projectId, native);
+    const text = readFileSync(join(base(projectId, native.digest), native.entry), 'utf8');
+    return { entry: native.entry, text: text.slice(0, 4000), truncated: text.length > 4000 };
+}
+/** Retention is conservative: a failed real interaction or an explicit failed
+ * assertion has executed, even when no assertion completed successfully. */
+export function nativeCheckExecuted(result:any):boolean{
+  return (result?.native_evidence?.assertions??0)>0||(result?.native_evidence?.interactions_attempted??0)>0||Boolean(result?.case_results?.some((r:any)=>r.status==='failed'&&r.interactions>0))
+    ||Boolean(result?.steps?.some((s:any)=>s.actual?.assertion&&(s.actual.assertion.expected!==undefined||s.actual.assertion.actual!==undefined)))
 }
 export function nativeGuiObservations(suite: GuiAcceptanceSuite, reports: Array<{
     code: number;
@@ -282,17 +325,21 @@ export function nativeGuiObservations(suite: GuiAcceptanceSuite, reports: Array<
         passed: boolean;
         actual: unknown;
     }> = [], covered = new Set<string>(), executed = new Set<string>();
-    let interactions = 0, assertions = 0, failed = false;
+    let interactions = 0, interactions_attempted = 0, assertions = 0, failed = false;
     const bootstrapErrors: string[] = [];
+    let incompletePhase = false;
     const case_results: NonNullable<GuiAcceptanceResult['case_results']> = suite.native_tests!.cases.map(row=>({name:row.name,feature:row.feature,status:'not_run',assertions:0,interactions:0}));
     for (const report of reports) {
+        let phasePassedCases = 0;
         if (report.code !== 0)
             failed = true;
         const trace = JSON.parse(report.trace);
         if (!Number.isSafeInteger(trace.interactions) || trace.interactions < 0 || !Number.isSafeInteger(trace.assertions) || trace.assertions < 0 || !Array.isArray(trace.cases))
             throw Error('GUI_NATIVE_TRACE_INVALID');
         interactions += trace.interactions;
+        interactions_attempted += Number.isSafeInteger(trace.interactions_attempted)?trace.interactions_attempted:trace.interactions;
         assertions += trace.assertions;
+        const finishedCases = new Set<string>();
         for (const line of report.events.split(/\r?\n/).filter(Boolean)) {
             const event = JSON.parse(line);
             if (!['test:pass', 'test:fail'].includes(event.type))
@@ -311,31 +358,55 @@ export function nativeGuiObservations(suite: GuiAcceptanceSuite, reports: Array<
             if (event.type === 'test:fail')
                 failed = true;
             if (ids.length) {
+                finishedCases.add(event.name);
                 const row=case_results.find(row=>row.name===event.name)!
                 const counts=trace.cases.find((c:{name:string})=>c.name===event.name)
                 if(counts){row.assertions+=Number.isSafeInteger(counts.assertions)&&counts.assertions>=0?counts.assertions:0;row.interactions+=Number.isSafeInteger(counts.interactions)&&counts.interactions>=0?counts.interactions:0}
-                const status=event.skip||event.todo?'not_run':passed?'passed':event.type==='test:fail'&&!String(event.error).includes('GUI_NATIVE_ASSERTION_REQUIRED')?'failed':'unverified'
+                // Node's execution classification is authoritative. Product values
+                // and assertion messages can themselves contain "cancelled".
+                const cancelled=event.failure_type==='cancelledByParent' || event.failure_type==='testTimeoutFailure'
+                    || event.failure_type===undefined && !event.assertion && /test did not finish before its parent and was cancel(?:led|ed)/i.test(String(event.error))
+                const status=event.skip||event.todo?'not_run':cancelled?'unverified':passed?'passed':event.type==='test:fail'&&!String(event.error).includes('GUI_NATIVE_ASSERTION_REQUIRED')?'failed':'unverified'
                 // A later success must never erase an earlier failure of this case.
-                if(row.status!=='failed')row.status=status==='failed'?'failed':row.status==='unverified'||status==='unverified'?'unverified':status
+                if(row.status!=='failed')row.status=status==='failed'?'failed':row.status==='unverified'||status==='unverified'?'unverified':row.status==='passed'||status==='passed'?'passed':status
                 if(event.error)row.error=String(event.error).slice(0,4000)
                 if (passed) {
+                    phasePassedCases++;
                     ids.forEach((id: string) => covered.add(id));
                     executed.add(event.name);
                 }
                 steps.push({ id: `native-${steps.length + 1}`, passed, actual: { test: event.name, error: event.error, assertion: event.assertion } });
             }
         }
+        // A trace row is written when the callback starts. Missing completion
+        // is interrupted execution, not a case that was never started.
+        for (const started of trace.cases) {
+            const row = case_results.find(row => row.name === started.name);
+            if (!row || finishedCases.has(started.name)) continue;
+            if (row.status !== 'failed') row.status = 'unverified';
+            row.assertions += Number.isSafeInteger(started.assertions) && started.assertions >= 0 ? started.assertions : 0;
+            row.interactions += Number.isSafeInteger(started.interactions) && started.interactions >= 0 ? started.interactions : 0;
+            const operation = started.last_operation;
+            const detail = operation && typeof operation.method === 'string' && ['started','completed','failed'].includes(operation.state)
+                ? `; last_operation=${operation.method.slice(0,80)} (${operation.state})` : '';
+            row.error = `GUI_NATIVE_CASE_INTERRUPTED: ${row.name}${detail}`;
+        }
+        if (!phasePassedCases) incompletePhase = true;
     }
     const missing = suite.covers.filter(id => !covered.has(id));
-    const finish=<T extends {status:string;error?:string}>(value:T)=>({...value,case_results,native_evidence:{interactions,assertions},
-      ...(value.status==='passed'?{}:{failure_kind:(bootstrapErrors.length&&!steps.length?'bootstrap':value.status==='failed'?'assertion':'incomplete') as GuiAcceptanceResult['failure_kind']})})
+    const assertionFailed=steps.some(s=>{const a=(s.actual as {assertion?:{expected?:unknown;actual?:unknown}})?.assertion;return!s.passed&&a&&(a.expected!==undefined||a.actual!==undefined)})
+    const finish=<T extends {status:string;error?:string}>(value:T)=>({...value,case_results,native_evidence:{interactions,assertions,interactions_attempted,interaction_count_semantics:'completed' as const},
+      ...(value.status==='passed'?{}:{failure_kind:(bootstrapErrors.length&&!steps.length?'bootstrap':value.status==='failed'?assertionFailed?'assertion':'unresolved':'incomplete') as GuiAcceptanceResult['failure_kind']})})
     if (!steps.length && !assertions && failed && bootstrapErrors.length) return finish({ status: 'unverified' as const, steps,
         error: `GUI_NATIVE_BOOTSTRAP_FAILED: ${bootstrapErrors[0].slice(0, 4000)}` });
     if(!assertions&&steps.length&&steps.every(step=>!step.passed&&String((step.actual as {error?:string}).error).includes('GUI_NATIVE_ASSERTION_REQUIRED')))return finish({status:'unverified' as const,steps,error:'GUI_NATIVE_ASSERTIONS_MISSING: 没有实际业务断言，需修正测试计划，不能据此交付'})
+    if(failed&&!case_results.some(row=>row.status==='failed'))return finish({status:'unverified' as const,steps,error:'GUI_NATIVE_EXECUTION_INCOMPLETE: 测试取消、被跳过或未完成；没有据此确认业务断言失败'})
     if (failed && steps.some(step => !step.passed))
-        return finish({ status: 'failed' as const, steps, error: '原生应用测试的真实断言失败，见测试结果' });
+        return finish({ status: 'failed' as const, steps, error: '原生测试执行失败；须核对实际断言或运行错误，不能仅凭退出状态确定产品根因' });
     if (suite.native_tests!.cases.some(c => !executed.has(c.name)))
         return finish({ status: 'unverified' as const, steps, error: 'GUI_NATIVE_CASE_NOT_RUN: 仍有声明的业务测试未执行或被跳过' });
+    if (incompletePhase || reports.length !== (suite.native_tests!.restart ? 2 : 1) || case_results.some(row=>row.status==='unverified'))
+        return finish({ status: 'unverified' as const, steps, error: 'GUI_NATIVE_PHASE_INCOMPLETE: 每次启动都须实际执行带业务断言的案例，不能沿用另一阶段的通过证据' });
     if (!steps.length || !interactions || !assertions || missing.length)
         return finish({ status: 'unverified' as const, steps, error: `GUI_NATIVE_EVIDENCE_INCOMPLETE: 未通过覆盖${missing.join(',') || '或缺少真实交互/断言'}` });
     return finish({ status: failed ? 'failed' as const : 'passed' as const, steps, ...(failed ? { error: '原生应用测试失败，见实际断言结果' } : {}) });

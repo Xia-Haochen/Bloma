@@ -104,14 +104,14 @@ describe('agent-tools（PR2 L2）', () => {
       expect(outcome.output).not.toContain('node_modules')
     })
 
-    it('grep：只列命中 file:line（≤50），不给上下文行；无命中显式反馈', async () => {
+    it('grep：直接列命中 file:line及内容（默认≤50）；无命中显式反馈', async () => {
       const project = createProject({ request_id: 'req-g1', mode: 'quick' })
       mkdirSync(join(project.root_path, 'src'), { recursive: true })
       writeFileSync(join(project.root_path, 'src', 'app.js'), 'const a = 1\nconst target = 2\n', 'utf8')
       const tools = composeTools({ projectId: project.project_id })
       const hit = await byName(tools, 'grep').execute({ pattern: 'target', glob: '*.js' }, ctxFor(project.project_id))
       expect(hit.output).toContain('src/app.js:2')
-      expect(hit.output).not.toContain('const target = 2')
+      expect(hit.output).toContain('const target = 2')
       const miss = await byName(tools, 'grep').execute({ pattern: '不存在的关键词' }, ctxFor(project.project_id))
       expect(miss.output).toContain('未找到匹配')
       const bad = await byName(tools, 'grep').execute({ pattern: '(' }, ctxFor(project.project_id))
@@ -322,11 +322,11 @@ describe('agent-tools（PR2 L2）', () => {
       expect(readFileSync(join(project.root_path, 'src', 'app.js'), 'utf8')).toBe('const a = 1;\n')
     })
 
-    it('edit_file schema：diff 模式 required 含 path/old_string/new_string', async () => {
+    it('edit_file schema：单文件各形态要求path，多文件显式files及每项path/edits', async () => {
       const project = createProject({ request_id: 'req-e4', mode: 'quick' })
       const tools = composeTools({ projectId: project.project_id })
       const edit = byName(tools, 'edit_file')
-      expect(edit.input_schema.required).toEqual(['path', 'old_string', 'new_string'])
+      expect(edit.input_schema).toMatchObject({ anyOf: [{ required: ['path','old_string','new_string'] }, { required: ['path','edits'] }, { required: ['path','content'] }, { required: ['files'] }], properties: { files: { minItems: 1, maxItems: 8, items: { required: ['path','edits'] } } } })
     })
 
     it('edit_file whole 模式：content 整文件重写（弱渠道能力位）', async () => {

@@ -1,3 +1,4 @@
+import { intentSources } from '../model/personal-intent'
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -13,7 +14,7 @@ import { prdScopeFingerprint } from '../project/requirement-contract'
 import { readGuideConfirmation, saveGuideConfirmation } from './confirmation-journal'
 import { LEAN_BRIEF_PROMPT, parseLeanBrief } from './lean-brief'
 import { authorizesDirectBuild, authorizesSkipPreview, publishLeanScope, stageLeanScope } from './lean-scope'
-import { leanBudget, withLeanRuntime } from '../desktop/lean-budget'
+import { withLeanRuntime } from '../desktop/lean-budget'
 import { renderMaterialContext, materialImageRefs } from '../platform/attachments/material-context'
 import { runUxConfirmGate, restoreUxConfirmation, replayUxConfirmation, hasPendingUxConfirm, resolveUxConfirmCardAnswer, resumeUxConfirmConfirmed, retryUxSketch,
   consumeUxConfirmDismiss, startUxAdjustAwait, takeUxAdjustFeedback, takeUxSketchCorrection, runUxAdjustRound } from './ux-confirm'
@@ -22,6 +23,10 @@ import { isSoftwareProject } from '../desktop/workflow-policy'
 import { appendSessionMessage } from '../platform/sessions/session-tree'
 import { adoptLeanSuggestions, parseLeanSuggestions } from './lean-suggestions'
 import { workflowRetirementReason } from '../desktop/workflow-retirement'
+import { independentClarificationText, readIndependentClarification } from '../software/independent-quality'
+import { resolveChannelEnv } from '../platform/llm/runtime-fallback'
+import { resolveGenerationMaxTokens } from '../platform/llm/model-resolution'
+import { assistantDisplayText } from '../../shared/message-presentation'
 
 /** One extraction includes optional ideas; no separate research or audit pipeline. */
 export async function handleLeanGuide(input: AgentSendMessageInput, publish: (event: AgentEvent) => void, model?: GuideModelOptions): Promise<void> {
@@ -41,6 +46,38 @@ export async function handleLeanGuide(input: AgentSendMessageInput, publish: (ev
   const brief = readPrdBackplane(input.project_id)
   const saved = readGuideConfirmation('prd', input.project_id)
   if (saved && (saved.session_id !== input.session_id || saved.data.lean !== true)) throw new Error('LEAN_CONFIRMATION_OWNER_MISMATCH')
+  const clarification = !saved && isSoftwareProject(input.project_id)
+    ? readIndependentClarification(input.project_id, input.session_id) : undefined
+  const enterProduction = async (redesignIndependentCases = false) => {
+    const production = resolveChannelEnv({ channelId: input.channel_id, category: 'mvp',
+      projectId: input.project_id, sessionId: input.session_id })
+    await enterDesktopLine({ projectId: input.project_id, sessionId: input.session_id, requestId: input.request_id,
+      content: '按已确认目标制作', initialMessagePersisted: true, signal: model.signal,
+      maxTokens: production.channel ? resolveGenerationMaxTokens(production.channel) : model.maxTokens, redesignIndependentCases },
+    model.query, production.env ?? model.env, {
+      publish: (_target, type, payload) => emit(type, payload),
+      persistAssistant: (sessionId, text) => appendSessionMessage(sessionId, { role: 'assistant', content: [{ type: 'text', text }], timestamp: Date.now() }),
+      persistSystem: () => {},
+      complete: (_s, _p, subtype) => emit('message_completed', { subtype: subtype ?? 'success' }),
+    })
+  }
+  if (clarification) {
+    const action = input.content.trim().replace(/[。！!]+$/, '')
+    if (!clarification.questions.length && clarification.canRedesign && /^(?:继续|继续制作|恢复|确认|按这份做)$/.test(action)
+      && input.metadata?.source !== 'system_resume') {
+      await enterProduction(true)
+      return
+    }
+    if (input.metadata?.source === 'system_resume' || /^(?:继续|继续制作|恢复|查看进度|查看结果|查看任务单|确认|按这份做)$/.test(action)) {
+      say(independentClarificationText(clarification))
+      return
+    }
+    if (action === '重新设计验收') {
+      if (input.metadata?.source !== 'card_option' && clarification.canRedesign) await enterProduction(true)
+      else say(independentClarificationText(clarification))
+      return
+    }
+  }
   const suggestions = parseLeanSuggestions(saved?.data.suggestions, brief.requirements.map(row => row.description))
   const publishScope = () => {
     if (saved?.state === 'dismissed') saveGuideConfirmation({ ...saved, state: 'pending' })
@@ -59,12 +96,7 @@ export async function handleLeanGuide(input: AgentSendMessageInput, publish: (ev
         writeTextFileAtomic(join(project.root_path, '00_UX/confirmed.json'), JSON.stringify({ version: 2, mode: 'lean', scope_hash: prdScopeFingerprint(brief), html_hash: hash }))
         updateProject(input.project_id, { ux_confirmation: { prd_fingerprint: prdScopeFingerprint(brief), design_hash: hash, html_hash: hash } })
       }
-      await enterDesktopLine({ projectId: input.project_id, sessionId: input.session_id, requestId: input.request_id,
-        content: '按已确认目标制作', initialMessagePersisted: true, signal: model.signal, maxTokens: model.maxTokens }, model.query, model.env, {
-        publish: (_target, type, payload) => emit(type, payload),
-        persistAssistant: (sessionId, text) => appendSessionMessage(sessionId, { role: 'assistant', content: [{ type: 'text', text }], timestamp: Date.now() }), persistSystem: () => {},
-        complete: (_s, _p, subtype) => emit('message_completed', { subtype: subtype ?? 'success' }),
-      })
+      await enterProduction()
     }
   }
   const selected = input.metadata?.source === 'card_option' ? input.metadata.selected_option_id : undefined
@@ -116,19 +148,37 @@ export async function handleLeanGuide(input: AgentSendMessageInput, publish: (ev
     : turn.content.filter(block => block.type === 'text').map(block => block.text).join('\n'))
   if (humanTexts.at(-1) !== input.content) humanTexts.push(input.content)
   const source = humanTexts.join('\n\n')
+  // Public dialogue carries what the user is answering/correcting. Keep the
+  // existing user-only source identity separate; never expose host/tool blocks.
+  const dialogue = model.history.filter(turn => turn.role === 'user' || turn.role === 'assistant').flatMap(turn => {
+    const content = typeof turn.content === 'string' ? turn.content
+      : turn.content.filter(block => block.type === 'text' && typeof block.text === 'string').map(block => block.text).join('\n')
+    const publicText = turn.role === 'assistant' ? assistantDisplayText(content) : content
+    return publicText.trim() ? [{ role: turn.role, content: publicText }] : []
+  }).slice(-20)
+  if (dialogue.at(-1)?.role !== 'user' || dialogue.at(-1)?.content !== input.content) dialogue.push({ role: 'user', content: input.content })
+  const guideContext = { project_name: project.name, stage: project.current_stage, confirmation: saved?.state ?? null,
+    ...(clarification && { acceptance_questions: clarification.questions.slice(0, 3) }) }
   const materials = model.materials ? renderMaterialContext(model.materials, input.session_id, true) : ''
   const images = [...(input.images ?? []), ...(model.materials ? materialImageRefs(model.materials) : [])]
-  const budget = leanBudget(input.project_id, 'prepare')
-  const query = budget.wrap(model.query)
   const software = isSoftwareProject(input.project_id)
-  emit('stage_changed', { stage: 'clarifying' })
-  const result = await withLeanRuntime(input.project_id, 'prepare', model.signal, signal => callLlmForJson({ systemPrompt: LEAN_BRIEF_PROMPT + (software ? '\n另填delivery=desktop/browser/command描述用户使用方式；有界面默认desktop，仅用户明确要在浏览器使用才browser；无界面command。distribution描述交付：默认local本机使用，用户明确要复制到其他电脑直接运行用portable，要安装包用installer，只移交源码用source。框架、依赖、语言由工程Agent选择，不让用户做技术问卷。' : ''),
-    prompt: JSON.stringify({ previous: brief.lean_brief ? brief : undefined, conversation: source, materials, latest: input.content }),
-    query: (text, options) => query(text, { ...options, images, accounting: { projectId: input.project_id, runId: input.request_id, role: 'brief', scope: 'prepare', phase: 'requirements' } }),
-    env: model.env, signal, sessionId: input.session_id, maxTokens: Math.min(model.maxTokens, 8192), temperature: .1, attempts: 2,
-    parse: text => parseLeanBrief(text, { projectId: input.project_id, sessionId: input.session_id, source, previous: brief, software }) }))
+  // An ordinary reply must not move a paused/pending task back to clarifying.
+  emit('stage_changed', { stage: project.current_stage })
+  let briefIssues: string[] = []
+  const result = await withLeanRuntime(input.project_id, 'prepare', model.signal, (signal,budget) => callLlmForJson({ systemPrompt: LEAN_BRIEF_PROMPT
+    + (clarification ? '\n如果 latest 在回答 guide_context.acceptance_questions，或补充了本任务的验收样例，把用户明确给出的结果和边界补到对应功能的 expected 或 constraints 并输出 brief，即使用户没说“修改软件”。仅纳入用户确认的内容，保留原功能、交付方式与范围。提问原文不是已确认需求。' : '')
+    + (software ? '\n另填delivery=desktop/browser/command描述用户使用方式；有界面默认desktop，仅用户明确要在浏览器使用才browser；无界面command。distribution描述交付：默认local本机使用，用户明确要复制到其他电脑直接运行用portable，要安装包用installer，只移交源码用source。框架、依赖、语言由工程Agent选择，不让用户做技术问卷。' : ''),
+    prompt: JSON.stringify({ previous: brief.lean_brief ? brief : undefined, dialogue, guide_context: guideContext, conversation: source, sources: intentSources(source, brief.requirements_model?.sources ?? brief.lean_brief?.intent_sources), materials, latest: input.content }),
+    query: (text, options) => budget.wrap(model.query)(text, { ...options, images, accounting: { projectId: input.project_id, runId: input.request_id, phase: 'requirements', role: 'brief', scope: 'prepare' } }),
+    env: model.env, signal, sessionId: input.session_id, maxTokens: model.maxTokens, temperature: .1, attempts: 2,
+    retryFeedback: () => JSON.stringify({ dialogue, guide_context: guideContext, conversation: source, sources: intentSources(source, brief.requirements_model?.sources ?? brief.lean_brief?.intent_sources), previous: brief.lean_brief ? brief : undefined, materials, latest: input.content, errors: briefIssues, instruction: '按具体错误重新给出完整JSON，不删除原始要求以规避校验。' }),
+    parse: text => parseLeanBrief(text, { projectId: input.project_id, sessionId: input.session_id, source, previous: brief, software, assets: model.materials?.attachments, onIssues: issues => { briefIssues = issues } }) }))
   model.signal.throwIfAborted()
-  if (!result) { say('任务整理未完成，原始需求已保留；可重试，不会自动开工。'); emit('message_completed', { subtype: 'incomplete' }); return }
+  if (!result) { say('任务单暂未就绪：'+(briefIssues.length?briefIssues.join('；'):'返回内容不完整或缺少可观察的完成标准。')+' 原始需求已保留，尚未开工。'); emit('message_completed', { subtype: 'incomplete' }); return }
+  if (result.action === 'reply') {
+    say(result.text)
+    return
+  }
   if (result.action === 'clarify') {
     say(result.question)
     if (result.options.length) emit('user_decision_required', { kind: 'clarification', title: result.question,
@@ -139,7 +189,7 @@ export async function handleLeanGuide(input: AgentSendMessageInput, publish: (ev
   if (authorizesSkipPreview(input.content) && next.lean_brief?.ui === 'required') next.lean_brief.preview = 'skip'
   stageLeanScope(input.project_id, input.session_id, input.request_id, brief, next, emit, { suggestions: result.suggestions })
   applyGeneratedProjectName(input.project_id, project.name, next.name)
-  if (authorizesDirectBuild(input.content)) {
+  if (!clarification && authorizesDirectBuild(input.content)) {
     model.signal.throwIfAborted()
     // Read the just-accepted sheet, rather than the prior closure snapshot.
     await handleLeanGuide({ ...input, content: '按这份做', metadata: { source: 'chat' } }, publish, model)

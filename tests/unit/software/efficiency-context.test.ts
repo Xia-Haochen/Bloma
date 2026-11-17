@@ -33,7 +33,7 @@ it('summarizes a historical failure with unknown cause, scrubs credentials and c
  const result={status:'failed',failure:{category:'unknown',classification_basis:'unresolved',code:'LOCATOR_PENDING',expected:'目标控件',actual:'Authorization: Bearer PRIVATE_DIAGNOSTIC_KEY',next:'先看实际界面'},core:{host_gui:{case_results:[{name:'F-001 pending',status:'not_run',error:'api_key=PRIVATE_DIAGNOSTIC_KEY'}]}}}
  const file=join(dir,project.project_id+'.json');writeFileSync(file,JSON.stringify({version:1,state:'complete',at:Date.now(),result,result_hash:createHash('sha256').update(JSON.stringify(result)).digest('hex')}))
  const tool=buildProductionContextTool(project.project_id),output=await tool.execute({topic:'diagnostics'},ctx());expect(output.isError,output.output).not.toBe(true)
- const facts=JSON.parse(output.output);expect(facts.verification).toMatchObject({historical:true,revalidated:false,status:'failed',failure:{category:'unknown',classification_basis:'unresolved'}});expect(output.output).not.toContain('PRIVATE_DIAGNOSTIC_KEY')
+ const facts=JSON.parse(output.output);expect(facts.verification).toMatchObject({historical:true,revalidated:false,recorded_status:'failed',failure:{category:'unknown',classification_basis:'unresolved'}});expect(output.output).not.toContain('PRIVATE_DIAGNOSTIC_KEY')
  writeFileSync(file,'corrupt');const broken=JSON.parse((await tool.execute({topic:'diagnostics'},ctx())).output);expect(broken.verification.available).toBe(false)
  expect(readFileSync(budget.file,'utf8')).toBe(budgetBefore)
  for(const topic of ['components','ai-service'])expect((await tool.execute({topic},ctx())).isError).not.toBe(true)

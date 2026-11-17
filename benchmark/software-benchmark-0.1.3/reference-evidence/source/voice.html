@@ -1,0 +1,6 @@
+<!doctype html><html lang="zh"><meta charset="utf-8"><title>语音参考应用</title>
+<style>body{font:16px system-ui;margin:24px}input,button{font:inherit;padding:5px;margin:4px}article{padding:12px;border:1px solid #ddd;margin:8px}article[data-role=user]{background:#e9f2ff}audio{width:100%}</style>
+<h1>语音对话</h1><label>服务地址<input id="endpoint"></label><label>模型<input id="model"></label><label>密钥<input id="key" type="password"></label><label>角色<input id="role" value="中文助手"></label><button id="save-settings">保存设置</button>
+<p><input id="files" type="file" accept=".wav"><button id="import">导入语音</button><button id="record">开始录音</button><button id="stop" disabled>停止并发送</button><button id="cancel" disabled>取消录音</button><button id="reset">新会话</button></p>
+<p id="status" role="status"></p><p id="phase">就绪</p><audio id="audio" controls></audio><div id="history"></div>
+<script src="common-renderer.js"></script><script src="voice-renderer.js"></script></html>

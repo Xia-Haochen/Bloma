@@ -104,6 +104,7 @@ export const IPC_CHANNELS = {
   /** 交付面板（2026-10-04 呈现层收口）：桌面项目文件清单+DELIVERY.md+启动声明；启动程序 */
   PROJECT_DELIVERABLES: 'project:deliverables',
   PROJECT_LAUNCH_APP: 'project:launch-app',
+  ASSISTED_ACCEPTANCE: 'project:assisted-acceptance',
   SOFTWARE_SUGGESTIONS_DECIDE: 'software:suggestions-decide',
   SOFTWARE_LONGTERM_ACTION: 'software:longterm-action',
   SOFTWARE_MODEL_SETTINGS_GET: 'software:model-settings-get',
@@ -265,6 +266,8 @@ export interface ChannelModel {
 }
 
 export interface SoftwareModelSettings {
+  funding?: 'project' | 'independent'
+  design_request_limit?:number
   project_id: string; revision: string; variant: 'single'|'independent'; locked: boolean; lock_reason?: string
   channels: Array<{ id: string; name: string; models: string[] }>
   channel_id?: string; model?: string
@@ -273,6 +276,7 @@ export interface SoftwareModelSettings {
   budget_error?: string; design_status: string; admission: 'not_checked'
 }
 export interface SoftwareModelSettingsSave extends RequestEnvelope {
+  funding?: 'project' | 'independent'
   project_id: string; revision: string; variant: 'single'|'independent'
   channel_id?: string; model?: string; authorize_budget?: boolean
   budget?: { cap_rmb: number; context_tokens: number; input_rmb_per_million: number; output_rmb_per_million: number }
@@ -460,17 +464,31 @@ export interface DesktopArtifactSubscribeResult {
 
 /** 交付面板输入（2026-10-04 呈现层收口）。 */
 export interface ProjectDeliverablesInput extends RequestEnvelope {
+  /** Read-only, bounded status projection; never enumerate/build/verify/launch a product. */
+  status_only?: boolean
   project_id: string
 }
 
 /** 交付面板快照：文件清单 + 交付说明 + 启动声明。 */
 export interface SoftwareStatusView {
-  execution: { status: string; label: string; reason?: string }
+  observed_at?: number
+  operation_id?: string
+  guidance?: { headline: string; detail: string; action?: 'continue' | 'settings' | 'inspect' | 'open' | 'assisted_acceptance'; action_label?: string }
+  execution: { status: string; label: string; reason?: string; review_purpose?: 'candidate' | 'binding' | 'coverage' }
   verification: { status: 'not_run' | 'running' | 'last_passed' | 'last_failed' | 'last_unverified' | 'unavailable'; label: string; at?: number; scope_note?: string }
   goal: { status: 'not_delivered' | 'waiting_confirmation' | 'delivered' | 'archived'; label: string }
   active_commands: number
 }
+export interface SoftwareProjectProgress {
+  environment:string;execution:string;next_stage:string|null
+  stages:Array<{id:string;title:string;status:string;current_source:boolean}>
+  delegation_count:number;delegations:Array<{id:string;reason:string;status:'running'|'ended'|'interrupted';required_review:boolean}>
+  observed_strategy_segments:number;note:string
+}
 export interface ProjectDeliverablesResult {
+  assisted_acceptance?: AssistedAcceptanceView
+  project_progress?:SoftwareProjectProgress
+  project_progress_error?:string
   status_view?: SoftwareStatusView
   longterm?:LongtermProjectState
   longterm_error?:string
@@ -501,6 +519,27 @@ export interface ProjectDeliverablesResult {
   can_launch: boolean
 }
 
+export interface AssistedAcceptanceView {
+  candidate_id: string
+  attempt_id?: string
+  phase: 'available'|'preparing'|'ready'|'recording'|'decoding'|'verifying'|'passed'|'failed'|'unavailable'|'cancelled'|'interrupted'|'stale'
+  devices?: Array<{id:number;name:string}>
+  observation?: { text?:string; rms?:number; device_name?:string }
+  can_confirm?: boolean
+  assessment_source?: 'automatic'|'user_observation'
+  remaining_seconds?:number
+  level?:number
+  detail: string
+}
+export interface AssistedAcceptanceInput extends RequestEnvelope {
+  project_id: string
+  action: 'query'|'start'|'capture'|'cancel'|'open'|'feedback'
+  candidate_id?: string
+  attempt_id?: string
+  device?: number
+  accepted?: boolean
+}
+
 /** 启动程序输入。 */
 export interface ProjectLaunchAppInput extends RequestEnvelope {
   project_id: string
@@ -514,7 +553,7 @@ export interface ProjectLaunchAppInput extends RequestEnvelope {
 }
 export interface SoftwareTrial {
   release_id: string; source: string; process_id: string; pid?: number; state: string; data_dir: string; url?: string
-  qualification: 'unverified_test_data'|'host_verified_test_data'; at: string; last_output?:string
+  qualification: 'unverified_test_data'|'host_verified_test_data'|'stage_checked_test_data'; at: string; last_output?:string
 }
 export interface SoftwareSuggestions {
   version:1; id:string; project_id:string; session_id:string; scope:string; operation:string
@@ -529,10 +568,10 @@ export interface LongtermProjectState {
     features:Array<{id:string;description:string;expected:string}>;candidate_id?:string;source_digest?:string;request_id?:string;created_at:string;verified_at?:string;confirmed_at?:string;deferred_at?:string;
     confirmation_requested_at?:string;versions?:Array<{candidate_id:string;source_digest:string;at:string}>}>
   backlog:Array<LeanScopeSuggestion&{state:'deferred'|'rejected'|'adopt_requested'|'staged';origin_scope:string;at:string}>
-  decisions:Array<{id:string;decision:string;reason:string;author:'agent'|'user';at:string;scope:string}>
+  decisions:Array<{id:string;decision:string;reason:string;author:'agent'|'user';at:string;scope:string;supersedes?:string[];feature_ids?:string[]}>
 }
 export interface LongtermActionInput extends RequestEnvelope {
-  project_id:string;session_id:string;revision:number;action:'confirm'|'later'|'adopt_backlog'|'archive';backlog_id?:string
+  project_id:string;session_id:string;revision:number;action:'confirm'|'later'|'adopt_backlog'|'archive'|'handoff';backlog_id?:string
 }
 
 /** 启动程序结果。 */
@@ -801,6 +840,8 @@ export interface CategoryRoutingUpdateEnvelope extends RequestEnvelope {
 
 export interface MessageContentBlock {
   type: 'text' | 'tool_use' | 'tool_result' | 'image'
+  /** Host-only bounded UI facts, never sent as model authority. */
+  tool_display?: import('./tool-display').ToolDisplay
   text?: string
   id?: string
   name?: string
@@ -875,6 +916,8 @@ export interface SpeechTranscribeResult {
 }
 
 export interface AgentMessage {
+  /** Stable identity shared by streamed public text and the existing audit record. Not a run/receipt ID. */
+  public_message_id?: string
   /** Display-only provenance when recovering consecutive project conversations. */
   source_session_id?: string
   /** SDK role is independent of the human origin of a persisted message. */
@@ -1146,6 +1189,8 @@ export interface LeanScopeSuggestion {
 }
 
 export interface LeanScopeView {
+  intent?: { experience?: import('./personal-intent-types').PersonalExperience; rules: Array<{ id: string; statement: string }> }
+  design_assets?: import('./personal-intent-types').DesignAsset[]
   goal: string
   features: Array<{ id: string; description: string; expected: string }>
   constraints: string[]
@@ -1253,6 +1298,7 @@ export interface AgentEvent {
   session_id: string
   project_id?: string
   type:
+    | 'assistant_message_boundary'
     | 'message_delta'
     | 'message_completed'
     | 'stage_changed'
@@ -1333,6 +1379,9 @@ export interface RepairLedgerEntry {
 }
 
 export interface Project {
+  /** Active software release committed atomically with lifecycle fields. */
+  software_release_id?: string
+
   longterm_summary?:{status:'planning'|'building'|'awaiting_confirmation'|'milestone_delivered'|'backlog_pending'|'archived';pending_items:number;milestone?:string}
   imported_source?: { path: string; head?: string; branch?: string; dirty: boolean; baseline_digest: string }
   /** Host-selected production workflow. Missing = historical compatibility. */
@@ -1342,6 +1391,8 @@ export interface Project {
   workflow_retirement?: string
   /** Stable during a task/repair/resume; a new user task after delivery gets a new allowance. */
   lean_operation_id?: string
+  /** New GUI projects use a separate acceptance-design context by default. */
+  independent_design_default?: 'project'
   gui_acceptance?: { status: 'pending' | 'sealed' | 'unverified'; scope_hash: string; reason?: string }
   /** Host-owned UX confirmation; generated project files cannot grant a new confirmation. */
   ux_confirmation?: { prd_fingerprint: string; design_hash: string; html_hash: string | null }
@@ -1933,6 +1984,7 @@ export type ElectronAPI = {
     onArtifactEvent(listener: (payload: DesktopArtifactEventPayload) => void): () => void
   }
   projectDeliverables: {
+    assistedAcceptance(input:AssistedAcceptanceInput):Promise<ApiResult<AssistedAcceptanceView | null>>
     modelSettings(input:ProjectDeliverablesInput):Promise<ApiResult<SoftwareModelSettings>>
     saveModelSettings(input:SoftwareModelSettingsSave):Promise<ApiResult<SoftwareModelSettings>>
     longtermAction(input:LongtermActionInput):Promise<ApiResult<{state:LongtermProjectState;detail:string}>>

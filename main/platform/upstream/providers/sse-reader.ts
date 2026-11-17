@@ -1,3 +1,4 @@
+export const DEFAULT_STREAM_PROGRESS_TIMEOUT_MS = 120_000
 /**
  * 共享 SSE 流式读取器（照抄 Proma 上游 packages/core/src/providers/sse-reader.ts
  * @ bf3e98c 的流式子集；裁剪 fetchTitle——Bloma 标题生成不走本层）。
@@ -16,6 +17,7 @@ import type { ProviderRequest, StreamAdapter, StreamEventCallback, ThinkingBlock
 import { MonetaryBudgetError, reserveModelRequestWhenAvailable, fitMonetaryRequest } from '../../llm/monetary-budget'
 import type { SDKMessage, ModelTransportReceipt } from '../../../../shared/types'
 import { createHash } from 'node:crypto'
+import { appendFileSync } from 'node:fs'
 
 // ===== 流式请求 =====
 
@@ -91,6 +93,7 @@ class HTTPError extends Error {
     readonly providerCode?: string,
     readonly nonRetryable = false,
     readonly providerResetAt?: string,
+    readonly generationRejected = false,
   ) {
     super(message)
     this.name = 'HTTPError'
@@ -99,7 +102,7 @@ class HTTPError extends Error {
 
 /** Host admission/validation failures must never turn into transport retries. */
 class RequestGuardError extends Error {
-  constructor(error: unknown) { super(error instanceof Error ? error.message : String(error)); this.name = 'RequestGuardError' }
+  constructor(readonly original: unknown) { super(original instanceof Error ? original.message : String(original)); this.name = 'RequestGuardError' }
 }
 
 /** Provider 在 200 流内返回的语义错误，通常不是瞬时网络问题，不应自动重试。 */
@@ -187,7 +190,7 @@ export async function streamSSE(options: StreamSSEOptions): Promise<StreamSSERes
       // 已发出过事件：重试会导致内容重复
       if (hasEmitted) throw error
       // 永久性错误（4xx 等）或已达重试上限：直接抛出
-      if (!isRetriableError(error) || attempt >= MAX_SSE_RETRIES) throw error
+      if (!isRetriableError(error) || attempt >= MAX_SSE_RETRIES) throw error instanceof RequestGuardError ? error.original : error
 
       const delay = getSSERetryDelayMs(attempt, elapsedRetryDelayMs)
       if (delay <= 0) throw error // 等待预算耗尽
@@ -216,6 +219,7 @@ async function runStreamAttempt(options: StreamSSEOptions): Promise<StreamSSERes
     policyPath)
   let usage: SDKMessage['usage']
   let completed = false
+  let rejection: 'rejected_before_generation' | undefined
   try {
     const result = await runReservedStreamAttempt({ ...options, onEvent: event => {
       if (event.type === 'usage') {
@@ -229,11 +233,16 @@ async function runStreamAttempt(options: StreamSSEOptions): Promise<StreamSSERes
     } })
     completed = true
     return result
-  } finally { reservation?.settle(usage, completed) }
+  } catch (error) {
+    if (error instanceof HTTPError && error.generationRejected && !usage) {
+      rejection = 'rejected_before_generation'
+    }
+    throw error
+  } finally { reservation?.settle(usage, completed, rejection) }
 }
 
 async function runReservedStreamAttempt(options: StreamSSEOptions): Promise<StreamSSEResult> {
-  const { request, adapter, onEvent, signal, fetchFn = fetch, timeoutMs = 30_000, streamIdleTimeoutMs = 120_000, streamProgressTimeoutMs = 120_000 } = options
+  const { request, adapter, onEvent, signal, fetchFn = fetch, timeoutMs = 30_000, streamIdleTimeoutMs = 120_000, streamProgressTimeoutMs = DEFAULT_STREAM_PROGRESS_TIMEOUT_MS } = options
 
   // 真正的"首字节超时"：仅在等待 HTTP 响应期间计时，收到响应后立即清除。
   const timeoutController = new AbortController()
@@ -244,6 +253,15 @@ async function runReservedStreamAttempt(options: StreamSSEOptions): Promise<Stre
 
   // 1. 发起请求（支持通过 fetchFn 注入代理）
   effectiveSignal.throwIfAborted()
+  if (process.env.BLOMA_BENCHMARK_REQUEST_LOG) {
+    const body = JSON.parse(request.body)
+    appendFileSync(process.env.BLOMA_BENCHMARK_REQUEST_LOG, JSON.stringify({
+      at: new Date().toISOString(),
+      endpoint: new URL(request.url).origin + new URL(request.url).pathname,
+      model: body.model, max_tokens: body.max_tokens, thinking: body.thinking?.type,
+      effort: body.output_config?.effort ?? body.reasoning_effort ?? body.reasoning?.effort,
+    }) + '\n')
+  }
   options.onAttempt?.('started')
   let response: Response
   try {
@@ -269,8 +287,8 @@ async function runReservedStreamAttempt(options: StreamSSEOptions): Promise<Stre
   // 2. 错误检查
   if (!response.ok) {
     const text = await response.text().catch(() => '')
-    let code: unknown, providerMessage = ''
-    try { const raw = JSON.parse(text); code = raw.error?.code ?? raw.code; providerMessage = typeof raw.error?.message === 'string' ? raw.error.message : '' } catch { /* non-JSON errors keep the ordinary HTTP retry policy */ }
+    let code: unknown, providerType: unknown, providerMessage = ''
+    try { const raw = JSON.parse(text); code = raw.error?.code ?? raw.code; providerType = raw.error?.type; providerMessage = typeof raw.error?.message === 'string' ? raw.error.message : '' } catch { /* non-JSON errors keep the ordinary HTTP retry policy */ }
     const safeCode = typeof code === 'number' || typeof code === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(code) ? String(code) : undefined
     receipt({ response_bytes: Buffer.byteLength(text), body_sha256: createHash('sha256').update(text).digest('hex'), json_error_code: safeCode })
     // BigModel documents 1113 as insufficient prepaid credit, despite HTTP 429.
@@ -279,7 +297,10 @@ async function runReservedStreamAttempt(options: StreamSSEOptions): Promise<Stre
     const fixedQuotaExhausted = new URL(request.url).hostname === 'open.bigmodel.cn' && response.status === 429 && safeCode === '1308'
       && /小时.*(?:上限|限额)|限额将在|(?:usage|quota).*(?:limit|reset)/i.test(providerMessage)
     const resetAt = fixedQuotaExhausted ? providerMessage.match(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/)?.[0] : undefined
-    throw new HTTPError(`provider API 错误 (${response.status}): ${text.slice(0, 300)}`, response.status, safeCode, creditExhausted || fixedQuotaExhausted, resetAt)
+    const generationRejected = new URL(request.url).hostname === 'api.deepseek.com'
+      && response.status === 402 && (providerType === 'insufficient_balance_error' || /^Insufficient Balance\b/i.test(providerMessage))
+    throw new HTTPError(`provider API 错误 (${response.status}): ${text.slice(0, 300)}`, response.status, safeCode,
+      generationRejected || creditExhausted || fixedQuotaExhausted, resetAt, generationRejected)
   }
 
   if (!response.body) {

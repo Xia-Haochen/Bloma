@@ -16,22 +16,35 @@ import { activeSoftwarePreview, stopSoftwareSession, ownedSoftwarePreview } from
 import { restoreSourceFiles, sourceCheckpointChanges } from './source-checkpoints'
 import { GUI_FIXTURE_SCHEMA, materializeGuiFixtures, sealGuiFixtures } from '../desktop/gui-fixtures'
 import { guiVerificationReadiness } from './verification-readiness'
+import { SOFTWARE_UI_CAPABILITIES, type UiQuery, type UiControl } from './ui-semantics'
+import { DEBUG_EVIDENCE_CAPABILITIES, validateDiagnosticQuery, type DiagnosticQuery } from './debug-evidence'
+import { NATIVE_UI_CAPABILITIES, validateNativeRequest, type NativeRequest } from './native-ui'
 
 export function buildSoftwareInspectTool(projectId: string, policy: ReturnType<typeof createSoftwareCollaborationPolicy>, previewChanged?: (url?: string) => void): AgentLoopTool {
-  return { name: 'inspect_app', description: '实际操作Electron/浏览器程序。script填写项目内JS模块路径，export default async({page,context,expect,assert,dataDir})使用标准Playwright；脚本在不注入平台密钥的独立工程进程执行，支持交互、等待、上传下载及断言。steps兼容旧动作，与script二选一。默认复用实例并自动重载变化；read显示源码检查点、current_source与差异；restore用checkpoint_id/expected_source/paths还原所选文件并备份旧内容。mode=once仅旧steps单次现场。调试和恢复均不等于验收，通过规则后verify_app。',
-    input_schema: { type: 'object', properties: { mode: { type: 'string', enum: ['once', 'open', 'act', 'read', 'reload', 'close', 'restore'] },
+  return { name: 'inspect_app', description: '实际操作Electron/浏览器程序。临时观察优先用script_source正文，宿主保存到隔离诊断目录，不改候选源码；已有工程脚本用script路径。export default async({page,context,expect,assert,dataDir})使用标准Playwright；脚本在不注入平台密钥的独立工程进程执行，支持交互、等待、上传下载及断言。steps兼容旧动作，与script二选一。默认复用实例并自动重载变化；read显示源码检查点、current_source与差异；restore用checkpoint_id/expected_source/paths还原所选文件并备份旧内容。mode=once仅旧steps单次现场。observation按selector/role/name/query/frame局部观察并用cursor续读，返回当前snapshot控件ref；control用ref/kind执行click/fill/select/press/scroll，页面/实例/源码变化必须重新观察，歧义不取第一个。native按自有Windows Electron进程树观察UIA系统窗口（query/window_ref）并以native.control.ref进行有限UIA pattern操作；不接受PID/HWND，不抢前台或发送全局键鼠，native与DOM/script/steps互斥，原生截图为选定自有HWND的PrintWindow，可能不完整；从不回退全桌面，DOM截图不代表系统对话框。capabilities列真实能力与Canvas/封闭shadow/虚拟列表缺口。mode=read可用diagnostics按kind前缀/action/trace_id/process_id/source/version/from/to过滤本会话原有证据，since_seq+diagnostic_page.next_seq续读；application.*仅应用自报，backend/存储只证明有界观察，不自动归因或PASS。调试和恢复均不等于验收，通过规则后verify_app。',
+    input_schema: { type: 'object', properties: { mode: { type: 'string', enum: ['once', 'open', 'act', 'read', 'reload', 'close', 'restore', 'capabilities'] },
       debug_session_id: { type: 'string' }, process_id: { type: 'string' }, since_seq: { type: 'integer', minimum: 0 },
-      script: { type: 'string', minLength: 1, maxLength: 512 }, timeout_ms: { type: 'integer', minimum: 100, maximum: 300000 },
+      diagnostics:{type:'object',additionalProperties:false,properties:{kind:{type:'string',maxLength:160},action:{type:'string',maxLength:160},operation_id:{type:'string',maxLength:160},trace_id:{type:'string',maxLength:160},process_id:{type:'string',maxLength:160},source:{type:'string',pattern:'^[a-f0-9]{64}$'},version:{type:'integer',minimum:1},from:{type:'string',maxLength:40},to:{type:'string',maxLength:40},limit:{type:'integer',minimum:1,maximum:80}}},
+      script: { type: 'string', minLength: 1, maxLength: 512 }, script_source: {type:'string',minLength:1,maxLength:65536,description:'临时观察脚本正文，export default async({page,expect,assert,dataDir})。宿主保存到隔离诊断目录，不改候选源码，不作为正式验收。与script/steps互斥。'}, timeout_ms: { type: 'integer', minimum: 100, maximum: 300000 },
       phase:{type:'string',enum:['initial','reopened'],description:'node:test开发检查可区分初次与重开；正式verify_app自动管理两次执行。'},
       checkpoint_id: { type: 'string' }, expected_source: { type: 'string' }, paths: { type: 'array', minItems: 1, maxItems: 100, items: { type: 'string' } },
+      observation: { type: 'object', additionalProperties: false, properties: { selector: { type: 'string', maxLength: 512 }, role: { type: 'string', maxLength: 100 }, name: { type: 'string', maxLength: 512 }, query: { type: 'string', maxLength: 512 }, frame: { type: 'integer', minimum: 0, maximum: 15 }, cursor: { type: 'string', maxLength: 1000 }, limit: { type: 'integer', minimum: 1, maximum: 80 } } },
+      control: { type: 'object', additionalProperties: false, required: ['ref', 'kind'], properties: { ref: { type: 'string', maxLength: 160 }, kind: { type: 'string', enum: ['click','fill','select','press','scroll'] }, value: { type: 'string', maxLength: 4096 }, key: { type: 'string', maxLength: 128 } } },
+      native:{type:'object',additionalProperties:false,properties:{window_ref:{type:'string',maxLength:160},query:{type:'object',additionalProperties:false,properties:{role:{type:'string',maxLength:100},name:{type:'string',maxLength:512},automation_id:{type:'string',maxLength:512},query:{type:'string',maxLength:512},limit:{type:'integer',minimum:1,maximum:80}}},control:{type:'object',additionalProperties:false,required:['ref','kind'],properties:{ref:{type:'string',maxLength:160},kind:{type:'string',enum:['invoke','fill','toggle','select','expand','collapse']},value:{type:'string',maxLength:4096}}}}},
       include_image: { type: 'boolean' }, fixtures: GUI_FIXTURE_SCHEMA, steps: guiStepsSchema(32, SOFTWARE_GUI_ACTION_KINDS) } },
     execute: async (input, ctx) => {
       let temporary: string | undefined
       let openingDebugId: string | undefined
       try {
         policy.assertCommand(ctx)
+        if(input.since_seq!==undefined&&(!Number.isSafeInteger(input.since_seq)||Number(input.since_seq)<0))throw Error('DEBUG_CURSOR_INVALID')
+        if(input.diagnostics!==undefined){if(input.mode!=='read'||input.script||input.script_source||input.steps||input.control||input.native)throw Error('DIAGNOSTIC_READ_ONLY');validateDiagnosticQuery(input.diagnostics as DiagnosticQuery)}
+        if (input.mode === 'capabilities') return { output: JSON.stringify({ capabilities: SOFTWARE_UI_CAPABILITIES, native_capabilities:NATIVE_UI_CAPABILITIES,diagnostic_capabilities:DEBUG_EVIDENCE_CAPABILITIES, verification: 'not_applicable' }) }
+        if(input.native!==undefined&&(typeof input.native!=='object'||input.native===null||Array.isArray(input.native)||[input.script,input.script_source,input.steps,input.control,input.observation].some(v=>v!==undefined)||['once','reload','restore','read','close'].includes(String(input.mode))))throw Error('NATIVE_MIXED_INPUT')
+        if(input.native!==undefined)validateNativeRequest(input.native as NativeRequest)
+        if (input.control !== undefined && (input.steps !== undefined || input.script !== undefined || input.script_source !== undefined || input.mode === 'reload' || input.mode === 'once' || input.mode === 'read' || input.mode === 'close')) throw Error('UI_CONTROL_MIXED_INPUT')
         if (input.mode === 'restore') {
-          if (input.script !== undefined || input.steps !== undefined || typeof input.checkpoint_id !== 'string' || typeof input.expected_source !== 'string' || !Array.isArray(input.paths)) throw Error('SOURCE_RESTORE_ARGUMENTS_REQUIRED: 提供checkpoint_id、read返回的current_source和要恢复的paths')
+          if (input.script !== undefined || input.script_source !== undefined || input.steps !== undefined || typeof input.checkpoint_id !== 'string' || typeof input.expected_source !== 'string' || !Array.isArray(input.paths)) throw Error('SOURCE_RESTORE_ARGUMENTS_REQUIRED: 提供checkpoint_id、read返回的current_source和要恢复的paths')
           for (const path of input.paths) { if (typeof path !== 'string') throw Error('SOURCE_RESTORE_PATH_INVALID'); policy.assertFileWrite(path, ctx) }
           const before = sourceCheckpointChanges(projectId, ctx.sessionId, findProject(projectId).root_path, input.checkpoint_id)
           if (before.current_source !== input.expected_source) throw Error('SOURCE_RESTORE_CURRENT_CHANGED')
@@ -42,13 +55,14 @@ export function buildSoftwareInspectTool(projectId: string, policy: ReturnType<t
           return { output: JSON.stringify(result), feedback: { schema_version: 1, execution: 'completed', verification: 'not_applicable', source: 'host', scope: 'source_restore' } }
         }
         if (input.script !== undefined && (typeof input.script !== 'string' || !input.script || input.steps !== undefined || ['once', 'read', 'close'].includes(String(input.mode)))) throw Error('BROWSER_SCRIPT_INPUT_INVALID: script需项目内JS模块路径，与steps二选一；不能用于once/read/close')
+        if(input.script_source!==undefined&&(typeof input.script_source!=='string'||!input.script_source.trim()||Buffer.byteLength(input.script_source)>65536||input.script!==undefined||input.steps!==undefined||['once','read','close'].includes(String(input.mode))))throw Error('BROWSER_SCRIPT_SOURCE_INVALID: 临时脚本与script/steps互斥，仅用于实际观察')
         let mode = input.mode
         const explicitDebugSession = Boolean(input.debug_session_id)
         if (mode === undefined || ['open', 'act', 'reload'].includes(String(mode))) {
           const existing = input.debug_session_id as string | undefined ?? activeDebugSessionId(projectId, ctx.sessionId)
           if (existing) {
             const snapshot = readDebugSession(projectId, ctx.sessionId, existing)
-            if (!['opening', 'ready'].includes(snapshot.state)) { input = { ...input, debug_session_id: undefined }; mode = 'open' }
+            if (!['opening', 'ready'].includes(snapshot.state)) { if(input.control||(input.native as NativeRequest|undefined)?.control)throw Error('DEBUG_SESSION_NOT_READY: do not reopen and replay a saved input; open and observe first'); input = { ...input, debug_session_id: undefined }; mode = 'open' }
             else {
               let switched = false
               if (!explicitDebugSession && input.process_id) {
@@ -69,10 +83,12 @@ export function buildSoftwareInspectTool(projectId: string, policy: ReturnType<t
               }
               if (!switched) {
                 input = { ...input, debug_session_id: existing }
+                if(snapshot.stale&&(input.control||(input.native as NativeRequest|undefined)?.control))throw Error('DEBUG_SOURCE_CHANGED: re-open/reload then observe; a stale ref must not restart and replay input')
                 if (mode === undefined || mode === 'open' || mode === 'act') mode = snapshot.stale ? 'reload' : 'act'
+                if(input.native&&mode==='reload')throw Error('DEBUG_SOURCE_CHANGED: reload separately before native observation')
               }
             }
-          } else mode = 'open'
+          } else {if(input.control||(input.native as NativeRequest|undefined)?.control)throw Error('DEBUG_SESSION_NOT_READY: open and observe before input');mode = 'open'}
         }
         if (!['once', 'open', 'act', 'read', 'reload', 'close'].includes(String(mode))) throw Error('GUI_DEBUG_MODE_INVALID: mode需once/open/act/read/reload/close')
         if (mode !== 'once') {
@@ -99,16 +115,17 @@ export function buildSoftwareInspectTool(projectId: string, policy: ReturnType<t
             snapshot = await openDebugSession({ projectId, sessionId: ctx.sessionId, root, launch, signal: ctx.signal, processId: input.process_id as string | undefined })
             openingDebugId = snapshot.id
             if (additions) installDebugFixtures(projectId, ctx.sessionId, snapshot.id, additions)
-            snapshot = await actDebugSession({ ...args, id: snapshot.id, script: input.script as string | undefined, timeoutMs: input.timeout_ms as number | undefined,
+            snapshot = await actDebugSession({ ...args, id: snapshot.id, observation: input.observation as UiQuery | undefined, control: input.control as UiControl | undefined, native:input.native as NativeRequest|undefined, script: input.script as string | undefined, scriptSource:input.script_source as string|undefined, timeoutMs: input.timeout_ms as number | undefined,
               phase:input.phase as 'initial'|'reopened'|undefined,
-              steps: input.script ? undefined : steps ?? [{ id: 'screen', kind: 'expect', selector: 'body', nonempty: true }] })
+              steps: input.script || input.script_source || input.native ? undefined : steps ?? [{ id: 'screen', kind: 'expect', selector: 'body', nonempty: true }] })
           } else if (mode === 'close') snapshot = await closeDebugSession(projectId, ctx.sessionId, args.id)
-          else if (mode === 'read') snapshot = readDebugSession(projectId, ctx.sessionId, args.id, Number(input.since_seq ?? 0))
-          else { if (additions) installDebugFixtures(projectId, ctx.sessionId, args.id, additions); snapshot = await actDebugSession({ ...args, steps, script: input.script as string | undefined, phase:input.phase as 'initial'|'reopened'|undefined, timeoutMs: input.timeout_ms as number | undefined, reload: mode === 'reload' }) }
+          else if (mode === 'read') snapshot = readDebugSession(projectId, ctx.sessionId, args.id, Number(input.since_seq ?? 0),(input.diagnostics??(input.since_seq!==undefined?{}:undefined)) as DiagnosticQuery|undefined)
+          else { if (additions) installDebugFixtures(projectId, ctx.sessionId, args.id, additions); snapshot = await actDebugSession({ ...args, native:input.native as NativeRequest|undefined, observation: input.observation as UiQuery | undefined, control: input.control as UiControl | undefined, steps, script: input.script as string | undefined, scriptSource:input.script_source as string|undefined, phase:input.phase as 'initial'|'reopened'|undefined, timeoutMs: input.timeout_ms as number | undefined, reload: mode === 'reload' }) }
           if (mode === 'act' || mode === 'reload') snapshot = readDebugSession(projectId, ctx.sessionId, args.id, Number(cursor))
           if (mode === 'open' && snapshot.url) previewChanged?.(snapshot.url)
           if (mode === 'close') previewChanged?.(activeSoftwarePreview(projectId, ctx.sessionId))
-          const imageBytes = input.include_image === true && snapshot.screenshot ? readFileSync(snapshot.screenshot) : undefined
+          const selectedScreenshot=input.native?snapshot.native_ui?.screenshot:snapshot.screenshot
+          const imageBytes = input.include_image === true && selectedScreenshot ? readFileSync(selectedScreenshot) : undefined
           const images = imageBytes && imageBytes.length <= MAX_PASTED_IMAGE_BYTES ? [savePastedImage(ctx.sessionId, imageBytes.toString('base64'), 'png')] : undefined
           const failed = snapshot.steps.find(step => !step.passed)
           const root = findProject(projectId).root_path
@@ -117,12 +134,12 @@ export function buildSoftwareInspectTool(projectId: string, policy: ReturnType<t
             try { changes = sourceCheckpointChanges(projectId, ctx.sessionId, root, snapshot.source_checkpoint.id) }
             catch (error) { changes = { error: String(error) } }
           }
-          return { output: JSON.stringify({ debug_session_id: snapshot.id, state: snapshot.state, stale: snapshot.stale, error: snapshot.error, failed_step: failed,
+          return { output: JSON.stringify({ debug_session_id: snapshot.id, state: snapshot.state, runtime_attached:snapshot.runtime_attached,retained_snapshot:snapshot.retained_snapshot, stale: snapshot.stale, error: snapshot.error, failed_step: failed,
             observed_source: snapshot.source, current_source: verificationFingerprint(root), source_checkpoint: snapshot.source_checkpoint, checkpoint_error: snapshot.checkpoint_error, source_changes: changes,
             verification_readiness: guiVerificationReadiness(projectId),
-            version: snapshot.version, resumed_from: snapshot.resumed_from, ui: snapshot.ui, steps: snapshot.steps, observations: snapshot.observations, log_cursor: snapshot.log_cursor,
-            observations_omitted: snapshot.observations_omitted, data_dir: snapshot.data_dir, url: snapshot.url, screenshot: snapshot.screenshot,
-            screenshot_error: snapshot.screenshot_error, visual_review: images ? 'image_attached_not_reviewed' : 'not_reviewed_by_model', evidence: '持续开发观察，非最终验收凭据' }), images,
+            version: snapshot.version, resumed_from: snapshot.resumed_from, capabilities: SOFTWARE_UI_CAPABILITIES, native_capabilities:NATIVE_UI_CAPABILITIES, native_ui:snapshot.native_ui, screenshot_surface:input.native?'native owned HWND (PrintWindow, unreviewed)':'renderer (not native dialog)', ui: snapshot.ui, steps: snapshot.steps, observations: snapshot.observations, log_cursor: snapshot.log_cursor,
+            diagnostic_page:snapshot.diagnostic_page,storage:snapshot.storage,observations_omitted: snapshot.observations_omitted, data_dir: snapshot.data_dir, url: snapshot.url, screenshot: selectedScreenshot,
+            screenshot_error: input.native?snapshot.native_ui?.screenshot_error:snapshot.screenshot_error, visual_review: images ? 'image_attached_not_reviewed' : 'not_reviewed_by_model', evidence: '持续开发观察，非最终验收凭据' }), images,
             isError: snapshot.state === 'failed' || Boolean(snapshot.error) || snapshot.stale || snapshot.steps.some(step => !step.passed)
               || snapshot.observations.some(row => row.version === snapshot.version && /^renderer\.(?:error|startup_error)$/.test(row.kind)) }
         }

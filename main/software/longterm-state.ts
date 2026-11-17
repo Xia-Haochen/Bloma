@@ -1,3 +1,4 @@
+import { validateDecisionHistory } from './project-decisions'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -22,9 +23,11 @@ export function readLongtermState(projectId:string):LongtermProjectState|undefin
     ||!Array.isArray(state.milestones)||state.milestones.length>100||!Array.isArray(state.backlog)||state.backlog.length>100||!Array.isArray(state.decisions)||state.decisions.length>200
     ||new Set(state.milestones.map(item=>item.id)).size!==state.milestones.length||new Set(state.backlog.map(item=>item.id)).size!==state.backlog.length
     ||state.milestones.some(item=>!['building','awaiting_confirmation','confirming','delivered','superseded'].includes(item.status)||!item.id||!item.session_id||!/^[a-f0-9]{64}$/.test(item.scope_hash)))throw Error('LONGTERM_STATE_INVALID')
+  validateDecisionHistory(state.decisions)
   return state
 }
 export function saveLongtermState(state:LongtermProjectState){
+  validateDecisionHistory(state.decisions)
   if(state.milestones.length>100||state.backlog.length>100||state.decisions.length>200)throw Error('LONGTERM_HISTORY_LIMIT: 历史已保留，请先归档整理')
   const before=readLongtermState(state.project_id)
   if(before&&before.revision!==state.revision)throw Error('LONGTERM_STATE_STALE')
@@ -40,7 +43,7 @@ export function ensureLongtermState(projectId:string,sessionId:string){
   if(!brief.user_confirmed_at)throw Error('LONGTERM_CONFIRMED_SCOPE_REQUIRED')
   const state=readLongtermState(projectId)??{version:1 as const,project_id:projectId,revision:0,milestones:[],backlog:[],decisions:[]}
   const scope=prdScopeFingerprint(brief),current=state.milestones.find(item=>item.id===state.current_id)
-  if(current?.scope_hash===scope&&current.status!=='delivered'&&current.status!=='superseded'){
+  if(current?.scope_hash===scope&&current.operation_id===(findProject(projectId).lean_operation_id??'initial')&&current.status!=='delivered'&&current.status!=='superseded'){
     if(current.session_id!==sessionId)throw Error('LONGTERM_SESSION_MISMATCH: 先回到当前里程碑所属会话')
     return state
   }
@@ -80,9 +83,13 @@ export function noteLongtermSuggestion(projectId:string,sessionId:string,item:Le
   else value.backlog.push({...item,state,origin_scope:prdScopeFingerprint(readPrdBackplane(projectId)),at:new Date().toISOString()})
   return saveLongtermState(value)
 }
-export function recordLongtermDecision(projectId:string,sessionId:string,decision:string,reason:string){
+export function recordLongtermDecision(projectId:string,sessionId:string,decision:string,reason:string,options:{supersedes?:string[];feature_ids?:string[];expected_revision?:number}={}){
   if(!decision.trim()||!reason.trim()||decision.length>1200||reason.length>1600)throw Error('LONGTERM_DECISION_INVALID')
   const state=ensureLongtermState(projectId,sessionId)
-  state.decisions.push({id:randomUUID(),decision:redactSoftwareOutput(decision.trim()),reason:redactSoftwareOutput(reason),author:'agent',at:new Date().toISOString(),scope:prdScopeFingerprint(readPrdBackplane(projectId))})
+  if(options.expected_revision!==undefined&&options.expected_revision!==state.revision)throw Error('LONGTERM_STATE_STALE')
+  if(options.supersedes?.length&&options.expected_revision===undefined)throw Error('PROJECT_DECISION_REVISION_REQUIRED')
+  const features=readPrdBackplane(projectId).requirements.map(r=>r.id)
+  if(options.feature_ids!==undefined&&(!Array.isArray(options.feature_ids)||options.feature_ids.some(id=>!features.includes(id))))throw Error('PROJECT_DECISION_FEATURE_INVALID')
+  state.decisions.push({...options.supersedes?{supersedes:options.supersedes}:{},...options.feature_ids?{feature_ids:options.feature_ids}:{},id:randomUUID(),decision:redactSoftwareOutput(decision.trim()),reason:redactSoftwareOutput(reason),author:'agent',at:new Date().toISOString(),scope:prdScopeFingerprint(readPrdBackplane(projectId))})
   return saveLongtermState(state)
 }

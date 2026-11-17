@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
+import { constants, openSync, closeSync, readSync, fstatSync, lstatSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:net'
@@ -19,19 +19,23 @@ import { startSoftwareProcess, stopSoftwareSession, softwareProcess, ownedSoftwa
 import { softwareVerificationFingerprint as verificationFingerprint } from '../desktop/verification-fingerprint'
 import { materializeGuiFixtures } from '../desktop/gui-fixtures'
 import { observeSoftwareUi, captureDiagnosticScreenshot } from './ui-observation'
+import { actSemanticUi, invalidateSoftwareUi, type UiQuery, type UiControl } from './ui-semantics'
 import { debugWorkspace } from './debug-workspace'
 import { saveSourceCheckpoint } from './source-checkpoints'
 import { isNativeGuiTestModule } from './native-gui-tests'
 import { softwareStartupError, waitForSoftwareWindow } from './startup-diagnostics'
+import { isolateNativeTestWindows } from './native-window-isolation'
+import { OwnedNativeUi, type NativeRequest } from './native-ui'
+import { applicationDiagnostic, diagnosticPage, snapshotDebugData, compareDebugData, type DiagnosticQuery, type StorageDelta, type StorageSnapshot } from './debug-evidence'
 
 export interface DebugObservation { seq: number; at: string; version: number; action?: string; kind: string; message: string;
-  duration_ms?: number; method?: string; url?: string; status?: number }
-export interface DebugSnapshot { id: string; projectId: string; sessionId: string; state: 'opening' | 'ready' | 'closed' | 'failed' | 'interrupted'; version: number; source?: string;
-  ui?: Awaited<ReturnType<typeof observeSoftwareUi>>; data_dir?: string; resumed_from?: string;
-  stale: boolean; url?: string; screenshot?: string; screenshot_error?: string; source_checkpoint?: { id: string; files?: number }; checkpoint_error?: string; fixtures?: GuiAcceptanceSuite['fixtures']; log_cursor?: number; observations_omitted?: number; observations: DebugObservation[]; steps: Array<{ id: string; passed: boolean; actual?: unknown }>; error?: string }
+  duration_ms?: number; method?: string; url?: string; status?: number; source?:string; process_id?:string; process_seq?:number; trace_id?:string; code?:string; operation_id?:string; correlation?:'temporal-only'|'request-start'|'host-dispatch'|'application-reported'; storage?:StorageDelta }
+export interface DebugSnapshot { runtime_attached?:boolean; retained_snapshot?:boolean; id: string; projectId: string; sessionId: string; state: 'opening' | 'ready' | 'closed' | 'failed' | 'interrupted'; version: number; source?: string;
+  ui?: Awaited<ReturnType<typeof observeSoftwareUi>>; native_ui?: Awaited<ReturnType<OwnedNativeUi['inspect']>>; data_dir?: string; resumed_from?: string;
+  storage?:StorageDelta; diagnostic_page?:ReturnType<typeof diagnosticPage>['diagnostic_page']; stale: boolean; url?: string; screenshot?: string; screenshot_error?: string; source_checkpoint?: { id: string; files?: number }; checkpoint_error?: string; fixtures?: GuiAcceptanceSuite['fixtures']; log_cursor?: number; observations_omitted?: number; observations: DebugObservation[]; steps: Array<{ id: string; passed: boolean; actual?: unknown }>; error?: string }
 interface DebugSession { snapshot: DebugSnapshot; root: string; temporary: string; workspace: string; data: string; file: string; owner: string; page?: Page;
-  child?: ChildProcess; nativeRoot?: number; browser?: BrowserContext; browserClient?: Browser; browserServer?: BrowserServer; externalProcessId?: string; ownedProcessId?: string; stdout?: string; stderr?: string; signal: AbortSignal; abort: () => void;
-  activeAction?: string; formal?:boolean; cdpEndpoint?: string; seq: number; logBytes: number; closing?: Promise<void>; finished?: boolean; timer?: ReturnType<typeof setTimeout>; busy: boolean; launch: LaunchDeclaration }
+  child?: ChildProcess; nativeRoot?: number; native?:OwnedNativeUi; browser?: BrowserContext; browserClient?: Browser; browserServer?: BrowserServer; externalProcessId?: string; ownedProcessId?: string; stdout?: string; stderr?: string; signal: AbortSignal; abort: () => void;
+  processCursor?:number; observedProcess?:string; processGap?:string; operationId?:string; activeAction?: string; formal?:boolean; cdpEndpoint?: string; seq: number; logBytes: number; closing?: Promise<void>; finished?: boolean; timer?: ReturnType<typeof setTimeout>; busy: boolean; launch: LaunchDeclaration; declarationKey: string }
 const sessions = new Map<string, DebugSession>()
 const observedPages = new WeakSet<Page>()
 async function debugTarget(page:Page){const cdp=await page.context().newCDPSession(page);try{return(await cdp.send('Target.getTargetInfo')).targetInfo.targetId as string}finally{await cdp.detach()}}
@@ -40,19 +44,40 @@ const metadataPath = (id: string) => {
   return join(getPromaHome(), 'software-debug-sessions', `${id}.json`)
 }
 function persist(session: DebugSession) {
+  session.snapshot.log_cursor=session.seq
   writeTextFileAtomic(session.file, JSON.stringify(session.snapshot))
   writeTextFileAtomic(join(session.workspace, 'checkpoint.json'), JSON.stringify(session.snapshot))
 }
-function savedSnapshot(projectId: string, sessionId: string, id: string): DebugSnapshot {
-  const previous = JSON.parse(readFileSync(metadataPath(id), 'utf8')) as DebugSnapshot
-  if (previous.projectId !== projectId || previous.sessionId !== sessionId || previous.id !== id) throw Error('DEBUG_SESSION_NOT_OWNED')
+/** Bounded historical metadata, never a capability to adopt an old PID/ref. */
+function readSnapshotFile(file:string):DebugSnapshot{
+  const stat=lstatSync(file),rel=relative(realpathSync(getPromaHome()),realpathSync(file))
+  if(isAbsolute(rel)||rel==='..'||rel.startsWith('..\\')||rel.startsWith('../'))throw Error('DEBUG_METADATA_LIMIT_OR_LINK')
+  if(stat.isSymbolicLink()||!stat.isFile()||stat.size>2*1024*1024)throw Error('DEBUG_METADATA_LIMIT_OR_LINK')
+  const fd=openSync(file,constants.O_RDONLY|(constants.O_NOFOLLOW??0))
+  try{
+    const same=(x:typeof stat,y:typeof stat)=>x.dev===y.dev&&x.ino===y.ino&&x.size===y.size&&x.mtimeMs===y.mtimeMs&&x.ctimeMs===y.ctimeMs
+    if(!same(stat,fstatSync(fd)))throw Error('DEBUG_METADATA_CHANGED')
+    const bytes=Buffer.alloc(stat.size+1);let count=0
+    while(count<bytes.length){const n=readSync(fd,bytes,count,bytes.length-count,null);if(!n)break;count+=n}
+    if(count!==stat.size||!same(stat,fstatSync(fd))||!same(stat,lstatSync(file)))throw Error('DEBUG_METADATA_CHANGED')
+    let value:DebugSnapshot;try{value=JSON.parse(bytes.subarray(0,count).toString('utf8')) as DebugSnapshot}catch{throw Error('DEBUG_METADATA_INVALID')}
+    if(!value||!['opening','ready','closed','failed','interrupted'].includes(value.state)||!Number.isSafeInteger(value.version)||value.version<1||!Array.isArray(value.observations)||value.observations.length>200||!Array.isArray(value.steps)||value.steps.length>1000||value.source!==undefined&&!/^[a-f0-9]{64}$/.test(value.source))throw Error('DEBUG_METADATA_INVALID')
+    let last=0
+    for(const row of value.observations){if(!row||!Number.isSafeInteger(row.seq)||row.seq<=last||typeof row.kind!=='string'||typeof row.message!=='string'||!Number.isFinite(Date.parse(row.at)))throw Error('DEBUG_METADATA_INVALID');last=row.seq}
+    if(value.log_cursor!==undefined&&(!Number.isSafeInteger(value.log_cursor)||value.log_cursor<last))throw Error('DEBUG_METADATA_INVALID')
+    return value
+  }finally{closeSync(fd)}
+}
+function savedSnapshot(projectId:string,sessionId:string,id:string):DebugSnapshot{
+  const previous=readSnapshotFile(metadataPath(id))
+  if(previous.projectId!==projectId||previous.sessionId!==sessionId||previous.id!==id)throw Error('DEBUG_SESSION_NOT_OWNED')
   return previous
 }
-function savedCheckpoint(projectId: string, sessionId: string): DebugSnapshot | undefined {
-  const file = join(debugWorkspace(projectId, sessionId), 'checkpoint.json')
-  if (!existsSync(file)) return
-  const previous = JSON.parse(readFileSync(file, 'utf8')) as DebugSnapshot
-  if (previous.projectId !== projectId || previous.sessionId !== sessionId) throw Error('DEBUG_CHECKPOINT_IDENTITY_INVALID')
+function savedCheckpoint(projectId:string,sessionId:string):DebugSnapshot|undefined{
+  const file=join(debugWorkspace(projectId,sessionId),'checkpoint.json')
+  if(!existsSync(file))return
+  const previous=readSnapshotFile(file)
+  if(previous.projectId!==projectId||previous.sessionId!==sessionId)throw Error('DEBUG_CHECKPOINT_IDENTITY_INVALID')
   return previous
 }
 export function retainedDebugFixtures(projectId: string, sessionId: string) {
@@ -64,20 +89,22 @@ export function retainedDebugVersion(projectId: string, sessionId: string) {
   const snapshot = savedCheckpoint(projectId, sessionId)
   return snapshot?.source ? { source: snapshot.source, version: snapshot.version } : undefined
 }
+/** Read-only historical execution evidence; does not adopt a window or PID. */
+export function retainedDebugObservation(projectId:string,sessionId:string){return savedCheckpoint(projectId,sessionId)}
 function owned(projectId: string, sessionId: string, id: string): DebugSession {
   const session = sessions.get(id)
   if (!session) {
     let previous: DebugSnapshot | undefined
-    try { previous = JSON.parse(readFileSync(metadataPath(id), 'utf8')) } catch {}
+    try { previous = savedSnapshot(projectId,sessionId,id) } catch {}
     if (previous?.projectId === projectId && previous.sessionId === sessionId) throw Error('DEBUG_SESSION_INTERRUPTED: 重启后旧PID不会被接管，请重新打开调试会话')
     throw Error('DEBUG_SESSION_NOT_OWNED')
   }
   if (session.snapshot.projectId !== projectId || session.snapshot.sessionId !== sessionId) throw Error('DEBUG_SESSION_NOT_OWNED')
   return session
 }
-function log(session: DebugSession, kind: string, message: string, metadata: Partial<Pick<DebugObservation, 'version' | 'action' | 'duration_ms' | 'method' | 'url' | 'status'>> = {}) {
+function log(session: DebugSession, kind: string, message: string, metadata: Partial<Omit<DebugObservation,'seq'|'at'|'kind'|'message'>> = {}) {
   const entry: DebugObservation = { seq: ++session.seq, at: new Date().toISOString(), version: session.snapshot.version, action: session.activeAction,
-    kind, message: redactSoftwareOutput(message).slice(0, 1800), ...metadata }
+    kind, source:session.snapshot.source,operation_id:session.operationId,correlation:'temporal-only',message: redactSoftwareOutput(message).slice(0, 1800), ...metadata }
   session.snapshot.observations.push(entry); session.logBytes += JSON.stringify(entry).length
   while (session.snapshot.observations.length > 200 || session.logBytes > 64000) session.logBytes -= JSON.stringify(session.snapshot.observations.shift()!).length
   if (['opening', 'ready'].includes(session.snapshot.state) && !session.timer) session.timer = setTimeout(() => {
@@ -85,13 +112,40 @@ function log(session: DebugSession, kind: string, message: string, metadata: Par
     try { persist(session) } catch { session.abort() }
   }, 100)
 }
+function reportApplication(session:DebugSession,text:string,metadata:Partial<DebugObservation>={}){
+  try{const value=applicationDiagnostic(text.trim());if(value)log(session,value.kind,value.message,{...metadata,trace_id:value.trace_id,code:value.code,correlation:'application-reported'})}
+  catch(error){log(session,'diagnostic.invalid',String(error),metadata)}
+}
+function observeBackend(session:DebugSession){
+  const id=session.externalProcessId??session.ownedProcessId;if(!id)return
+  const process=softwareProcess(session.snapshot.projectId,id,session.externalProcessId?session.snapshot.sessionId:session.owner)
+  if(session.observedProcess!==id){session.observedProcess=id;session.processCursor=0;session.processGap=undefined}
+  const metadata={process_id:id,source:process.source,action:undefined,operation_id:undefined,correlation:'temporal-only' as const}
+  if(process.output){
+    const fresh=process.output.filter(record=>record.seq>(session.processCursor??0))
+    const gap=(fresh[0]&&fresh[0].seq>(session.processCursor??0)+1?'retained output sequence gap; read_process(mode=log) may retain earlier records':undefined)??(!process.log?.complete?'process archive incomplete/unavailable; not a complete stderr/IPC trace':undefined)
+    if(gap&&session.processGap!==gap){session.processGap=gap;log(session,'backend.gap',gap,metadata)}
+    for(const record of fresh){
+      const text=record.text.trim();session.processCursor=record.seq
+      if(!text||/^(?:DevTools listening on|Debugger listening on)/.test(text))continue
+      const scoped={...metadata,process_seq:record.seq}
+      log(session,`backend.${record.stream}`,text,scoped)
+      if(record.truncated)log(session,'backend.gap','logical record truncated; use owned process archive when available',scoped)
+      else for(const line of text.split(/\r?\n/))reportApplication(session,line,scoped)
+    }
+  }else for(const key of ['stdout','stderr'] as const)if(process[key]!==session[key]){
+    session[key]=process[key];log(session,`backend.${key}`,process[key],metadata)
+    log(session,'backend.gap','legacy tail only; no sequence-bound IPC parser',metadata)
+  }
+  if(['ready','opening'].includes(session.snapshot.state)&&['failed','exited','stopped'].includes(process.state))session.snapshot.error=`DEBUG_BACKEND_UNAVAILABLE: ${process.state}`
+}
 function safeUrl(value: string): string {
   try { const url = new URL(value); return redactSoftwareOutput(`${url.origin}${url.pathname}`).slice(0, 1200) } catch { return '[unavailable URL]' }
 }
 function observePage(session: DebugSession, page: Page) {
   if (observedPages.has(page)) return
   observedPages.add(page)
-  page.on('console', event => log(session, `console.${event.type()}`, event.text()))
+  page.on('console', event => {log(session, `console.${event.type()}`, event.text());for(const line of event.text().split(/\r?\n/))reportApplication(session,line)})
   page.on('pageerror', error => log(session, 'renderer.error', error.stack || error.message || String(error)))
   const requests = new WeakMap<Request, { start: number; action?: string; version: number; status?: number }>()
   page.on('request', request => requests.set(request, { start: performance.now(), action: session.activeAction, version: session.snapshot.version }))
@@ -105,7 +159,7 @@ function observePage(session: DebugSession, page: Page) {
     const kind = failed ? 'network.failed' : (state?.status ?? 0) >= 400 ? 'network.error' : 'network.slow'
     const url = safeUrl(request.url()), method = request.method()
     log(session, kind, `${method} ${url}: ${failed ? request.failure()?.errorText ?? 'request failed' : `HTTP ${state?.status ?? 'unknown'}`}${duration === undefined ? '' : ` (${duration}ms)`}`,
-      { action: state?.action, version: state?.version ?? session.snapshot.version, duration_ms: duration, method, url, status: state?.status })
+      { action: state?.action, version: state?.version ?? session.snapshot.version, duration_ms: duration, method, url, status: state?.status, correlation:'request-start' })
   }
   page.on('requestfailed', request => finished(request, true))
   page.on('requestfinished', request => finished(request, false))
@@ -125,7 +179,7 @@ async function debugOrigin(signal: AbortSignal) {
   return `http://127.0.0.1:${address.port}`
 }
 async function openManagedElectron(session: DebugSession, signal: AbortSignal) {
-  const entry = electronEntry(session.root, session.launch.command), origin = await debugOrigin(signal)
+  const entry = electronEntry(session.root, session.launch.command, session.snapshot.projectId), origin = await debugOrigin(signal)
   session.cdpEndpoint = origin
   const process = await startSoftwareProcess({ root: session.root, projectId: session.snapshot.projectId, sessionId: session.owner,
     command: [entry.executablePath, ...entry.args, `--user-data-dir=${join(session.workspace, 'profile')}`, '--remote-debugging-address=127.0.0.1', `--remote-debugging-port=${new URL(origin).port}`],
@@ -140,6 +194,7 @@ async function openManagedElectron(session: DebugSession, signal: AbortSignal) {
   if (!session.browser) throw Error('DEBUG_BROWSER_CONTEXT_MISSING')
   session.browser.on('page', page => observePage(session, page))
   session.page = await waitForSoftwareWindow(session.browser, () => softwareProcess(session.snapshot.projectId, process.id, session.owner), signal)
+  if (session.formal && session.nativeRoot) log(session, 'environment.input_isolation', JSON.stringify(await isolateNativeTestWindows(session.nativeRoot, signal)))
   observePage(session, session.page)
 }
 export function hasDebugSession(projectId: string, sessionId: string): boolean {
@@ -153,13 +208,18 @@ export function assertDebugSessionProcess(projectId: string, sessionId: string, 
   if (processId !== (session.externalProcessId ?? session.ownedProcessId)) throw Error('DEBUG_PROCESS_MISMATCH: 当前调试窗口连接另一进程，请先关闭再连接指定进程')
 }
 export async function closeDebugSession(projectId: string, sessionId: string, id: string): Promise<DebugSnapshot> {
+  if(!sessions.has(id)){const previous=readDebugSession(projectId,sessionId,id);if(['closed','failed'].includes(previous.state))return previous;throw Error('DEBUG_SESSION_INTERRUPTED: 不接管旧PID，也不重放旧输入')}
   const session = owned(projectId, sessionId, id)
   if (session.closing) { await session.closing; return readDebugSession(projectId, sessionId, id) }
+  observeBackend(session)
   if (session.snapshot.state !== 'failed') session.snapshot.state = 'closed'
+  session.snapshot.native_ui=undefined
   session.signal.removeEventListener('abort', session.abort)
   session.closing = (async () => {
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
+      if(session.native){const cleanup=await session.native.close();if(cleanup.metadata_cleanup==='unknown')log(session,'native.cleanup',`metadata cleanup unknown: ${cleanup.error}`)}session.native=undefined
+      if (session.page) await invalidateSoftwareUi(session.page)
       if (session.launch.ui === 'browser' && !session.formal && session.browser) {
         try { const state = await session.browser.storageState(); writeTextFileAtomic(join(session.workspace, 'browser-state.json'), JSON.stringify(state)) }
         catch (error) { log(session, 'state.save_failed', String(error)) }
@@ -180,6 +240,7 @@ export async function closeDebugSession(projectId: string, sessionId: string, id
         if (dirname(target) !== tempRoot || !basename(target).startsWith('bloma-debug-')) throw Error('DEBUG_CLEANUP_PATH_INVALID')
         rmSync(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 150 })
       }
+      observeBackend(session)
       clearTimeout(session.timer); session.timer = undefined; persist(session); session.finished = true
     }
   })()
@@ -204,32 +265,21 @@ export function installDebugFixtures(projectId: string, sessionId: string, id: s
   session.snapshot.fixtures = [...new Map([...(session.snapshot.fixtures ?? []), ...(suite.fixtures ?? [])].map(file => [file.path, file])).values()]
   persist(session)
 }
-export function readDebugSession(projectId: string, sessionId: string, id: string, since = 0): DebugSnapshot {
-  if (!sessions.has(id)) {
-    const previous = savedSnapshot(projectId, sessionId, id)
-    return { ...previous, state: 'interrupted', stale: true, error: 'DEBUG_SESSION_INTERRUPTED: 旧进程未接管，下一次操作将用保留数据重新打开。' }
+export function readDebugSession(projectId:string,sessionId:string,id:string,since=0,query?:DiagnosticQuery):DebugSnapshot{
+  if(!sessions.has(id)){
+    const previous=savedSnapshot(projectId,sessionId,id)
+    const interrupted=['opening','ready'].includes(previous.state)
+    return {...previous,...diagnosticPage(previous.observations,previous.log_cursor??previous.observations.at(-1)?.seq??0,since,query),runtime_attached:false,retained_snapshot:true,state:interrupted?'interrupted':previous.state,stale:true,...(interrupted?{error:'DEBUG_SESSION_INTERRUPTED: 旧进程未接管，需显式重新打开；旧输入不会自动重放。'}:{})}
   }
-  const session = owned(projectId, sessionId, id), current = verificationFingerprint(session.root)
-  const processId = session.externalProcessId ?? session.ownedProcessId
-  if (processId && ['ready', 'opening'].includes(session.snapshot.state)) {
-    const process = softwareProcess(projectId, processId, session.externalProcessId ? sessionId : session.owner)
-    for (const key of ['stdout', 'stderr'] as const) if (process[key] !== (session[key] ?? '')) {
-      const previous = session[key] ?? '', delta = process[key].startsWith(previous) ? process[key].slice(previous.length) : process[key].slice(-2000)
-      session[key] = process[key]
-      const visible = delta.split('\n').filter(line => !/DevTools listening on|Debugger listening on/.test(line)).join('\n').trim()
-      if (visible) log(session, `backend.${key}`, visible)
-    }
-    if (process.state === 'failed' || process.state === 'exited' || process.state === 'stopped') session.snapshot.error = `DEBUG_BACKEND_UNAVAILABLE: ${process.state}`
-  }
-  const available = session.snapshot.observations.filter(row => row.seq > since), recent = available.slice(-16)
-  let characters = recent.reduce((total, row) => total + JSON.stringify(row).length, 0)
-  while (characters > 12000 && recent.length > 1) characters -= JSON.stringify(recent.shift()!).length
-  return { ...session.snapshot, stale: !current || current !== session.snapshot.source,
-    log_cursor: session.seq, observations_omitted: available.length - recent.length,
-    observations: recent, steps: [...session.snapshot.steps] }
+  const session=owned(projectId,sessionId,id),current=verificationFingerprint(session.root)
+  observeBackend(session)
+  return {...session.snapshot,runtime_attached:!!session.page&&!session.page.isClosed()&&!session.finished&&['opening','ready'].includes(session.snapshot.state),retained_snapshot:false,...diagnosticPage(session.snapshot.observations,session.seq,since,query),stale:!current||current!==session.snapshot.source,log_cursor:session.seq,steps:[...session.snapshot.steps]}
 }
-export async function openDebugSession(input: { projectId: string; sessionId: string; root: string; launch: LaunchDeclaration; signal: AbortSignal; processId?: string; formal?:boolean }): Promise<DebugSnapshot> {
+const debugLaunchKey = (launch: LaunchDeclaration) => JSON.stringify([launch.schema_version, launch.command, launch.ui, launch.mode, launch.url, launch.artifact, launch.window_title])
+export async function openDebugSession(input: { projectId: string; sessionId: string; root: string; launch: LaunchDeclaration; signal: AbortSignal; processId?: string; formal?:boolean; declaration?:LaunchDeclaration; preparePage?: (page:Page) => Promise<void> }): Promise<DebugSnapshot> {
   input.signal.throwIfAborted()
+  // Host-only pinned relocation overlay. Public inspect_app has no such field.
+  if (input.declaration) { const actual=readLaunchDeclaration(input.root); if(!actual?.ok||debugLaunchKey(actual.launch)!==debugLaunchKey(input.declaration))throw Error('DEBUG_LAUNCH_DECLARATION_MISMATCH') }
   if (hasDebugSession(input.projectId, input.sessionId)) throw Error('DEBUG_SESSION_ALREADY_OPEN: 复用现有debug_session_id，或先close')
   const workspace = debugWorkspace(input.projectId, input.sessionId), previous = savedCheckpoint(input.projectId, input.sessionId)
   const id = randomUUID(), temporary = mkdtempSync(join(tmpdir(), 'bloma-debug-')), source = verificationFingerprint(input.root)
@@ -241,7 +291,7 @@ export async function openDebugSession(input: { projectId: string; sessionId: st
   const session: DebugSession = { root: resolve(input.root), temporary, workspace, data, file: metadataPath(id), owner: `debug-${id}`,
     snapshot: { id, projectId: input.projectId, sessionId: input.sessionId, state: 'opening', version: (previous?.version ?? 0) + 1, source, stale: false, observations: [], steps: [], data_dir: data,
       ...(previous ? { resumed_from: previous.id, fixtures: previous.fixtures, source_checkpoint: previous.source_checkpoint } : {}) },
-    signal: input.signal, formal:input.formal, abort: () => { void closeDebugSession(input.projectId, input.sessionId, id).catch(() => {}) }, seq: 0, logBytes: 0, busy: false, launch: input.launch }
+    signal: input.signal, formal:input.formal, abort: () => { void closeDebugSession(input.projectId, input.sessionId, id).catch(() => {}) }, seq: 0, logBytes: 0, busy: false, launch: input.launch, declarationKey:debugLaunchKey(input.declaration??input.launch) }
   sessions.set(id, session); persist(session); input.signal.addEventListener('abort', session.abort, { once: true })
   for (const [key, previous] of sessions) if (sessions.size > 128 && previous.finished) sessions.delete(key)
   try {
@@ -282,6 +332,7 @@ export async function openDebugSession(input: { projectId: string; sessionId: st
     } else throw Error('DEBUG_RUNTIME_UNSUPPORTED: 持续会话首期支持Electron/浏览器；Python仍使用固定GUI检查')
     if (!session.page) throw Error('DEBUG_PAGE_UNAVAILABLE')
     input.signal.throwIfAborted(); session.page.setDefaultTimeout(4000)
+    await input.preparePage?.(session.page)
     for (const error of await session.page.pageErrors()) log(session, 'renderer.startup_error', error.stack || error.message || String(error))
     session.snapshot.state = 'ready'; persist(session)
     return readDebugSession(input.projectId, input.sessionId, id)
@@ -291,18 +342,25 @@ export async function openDebugSession(input: { projectId: string; sessionId: st
     await closeDebugSession(input.projectId, input.sessionId, id); session.snapshot.state = 'failed'; persist(session); throw error
   }
 }
-export async function actDebugSession(input: { projectId: string; sessionId: string; id: string; steps?: GuiAcceptanceSuite['steps']; script?: string; phase?:'initial'|'reopened'; nativeTests?: { file: string; phase: string; report: string; trace: string }; timeoutMs?: number; reload?: boolean; signal: AbortSignal }): Promise<DebugSnapshot> {
+export async function actDebugSession(input: { projectId: string; sessionId: string; id: string; steps?: GuiAcceptanceSuite['steps']; script?: string; scriptSource?: string; phase?:'initial'|'reopened'; nativeTests?: { file: string; phase: string; report: string; trace: string }; timeoutMs?: number; reload?: boolean; observation?: UiQuery; control?: UiControl; native?: NativeRequest; signal: AbortSignal }): Promise<DebugSnapshot> {
+  if(input.scriptSource!==undefined&&(typeof input.scriptSource!=='string'||!input.scriptSource.trim()||Buffer.byteLength(input.scriptSource)>65536||input.script||input.nativeTests||input.steps))throw Error('BROWSER_SCRIPT_SOURCE_INVALID')
+  if (input.control && (input.script || input.scriptSource || input.steps || input.nativeTests || input.reload)) throw Error('UI_CONTROL_MIXED_INPUT: use control alone against a current observation')
+  if(input.native&&(input.control||input.observation||input.script||input.scriptSource||input.steps||input.nativeTests||input.reload))throw Error('NATIVE_MIXED_INPUT')
   const session = owned(input.projectId, input.sessionId, input.id)
   if (session.snapshot.state !== 'ready' || !session.page || session.page.isClosed()) throw Error('DEBUG_SESSION_NOT_READY')
   if (session.busy) throw Error('DEBUG_SESSION_BUSY')
   session.busy = true
+  let nativeDispatched:string|undefined,beforeData:StorageSnapshot|undefined,beforeVersion=session.snapshot.version,beforeSource=session.snapshot.source
+  const changing=Boolean(input.reload||input.control||input.native?.control||input.script||input.scriptSource||input.nativeTests||input.steps?.some(step=>step.kind!=='expect'))
+  session.operationId=randomUUID()
   try {
     input.signal.throwIfAborted()
     const restart = async () => {
       const source = verificationFingerprint(session.root); if (!source) throw Error('DEBUG_SOURCE_UNREADABLE')
       const declared = readLaunchDeclaration(session.root)
-      const launchKey = (launch: LaunchDeclaration) => JSON.stringify([launch.schema_version, launch.command, launch.ui, launch.mode, launch.url, launch.artifact, launch.window_title])
-      if (!declared?.ok || launchKey(declared.launch) !== launchKey(session.launch)) throw Error('DEBUG_LAUNCH_CHANGED: 正常入口声明已改变，请close后重新open；不能把旧入口冒充当前程序')
+      if (!declared?.ok || debugLaunchKey(declared.launch) !== session.declarationKey) throw Error('DEBUG_LAUNCH_CHANGED: 正常入口声明已改变，请close后重新open；不能把旧入口冒充当前程序')
+      if(session.native){const cleanup=await session.native.close();if(cleanup.metadata_cleanup==='unknown')log(session,'native.cleanup',`metadata cleanup unknown: ${cleanup.error}`)}session.native=undefined;session.snapshot.native_ui=undefined
+      if (session.page) await invalidateSoftwareUi(session.page)
       session.activeAction = 'reload'; session.snapshot.state = 'opening'
       if (session.launch.ui === 'electron') {
         await stopSoftwareSession(input.projectId, session.owner); await session.browserClient?.close().catch(() => {})
@@ -324,9 +382,27 @@ export async function actDebugSession(input: { projectId: string; sessionId: str
       session.page.setDefaultTimeout(4000); session.snapshot.state = 'ready'
       session.snapshot.error = undefined; session.stdout = ''; session.stderr = ''; log(session, 'version.reload', '已重启调试入口以绑定新代码，保留隔离持久数据；旧观察保留原版本编号')
     }
+    if(changing)beforeData=await snapshotDebugData(session.data,input.signal,undefined,session.launch.ui==='electron'?['electron-profile']:[])
     if (input.reload) await restart()
     else if (readDebugSession(input.projectId, input.sessionId, input.id).stale) throw Error('DEBUG_SOURCE_CHANGED: 先reload以标记新版本；若每次保存业务数据都会触发，核对是否把APP_DATA_DIR覆盖到了项目内，使用宿主提供的工程外数据目录。不能把旧窗口当作新代码')
     session.snapshot.steps = []
+    let nativeResult: DebugSnapshot['native_ui']
+    if(input.native){
+      session.snapshot.native_ui=undefined;await invalidateSoftwareUi(session.page)
+      const nativeRoot=session.nativeRoot,processId=session.ownedProcessId
+      if(session.launch.ui!=='electron'||!nativeRoot||!processId)throw Error('NATIVE_RUNTIME_UNSUPPORTED: requires this debug session owned managed Electron process tree')
+      const native=session.native??=new OwnedNativeUi(nativeRoot,()=>{try{const state=softwareProcess(input.projectId,processId,session.owner);return state.pid===nativeRoot&&['running','starting'].includes(state.state)}catch{return false}},join(session.workspace,'evidence','native'))
+      if(input.native.control){
+        session.activeAction=`native:${input.native.control.kind}:${randomUUID()}`
+        try{nativeResult=await native.inspect(input.native,input.signal);nativeDispatched=nativeResult.method;session.snapshot.steps.push({id:session.activeAction,passed:true,actual:{method:nativeResult.method,dispatch:'pattern returned; not a business result'}});log(session,'native.action',nativeResult.method??'UIA pattern returned',{correlation:'host-dispatch'})}
+        catch(error){log(session,'native.action_failed',String(error));throw error}
+      }
+    }else {session.native?.invalidate();session.snapshot.native_ui=undefined}
+    if (input.control) {
+      session.activeAction = `ui:${input.control.kind}`
+      try { session.snapshot.steps.push({ id: session.activeAction, passed: true, actual: await actSemanticUi(session.page, input.control, input.signal) }) }
+      catch (error) { log(session, 'action.failed', String(error)); throw error }
+    }
     for (const step of input.steps ?? []) {
       input.signal.throwIfAborted(); session.activeAction = step.id
       if (step.kind === 'restart') { await restart(); session.snapshot.steps.push({ id: step.id, passed: true, actual: '正常入口已重启，隔离数据保留' }); continue }
@@ -334,9 +410,18 @@ export async function actDebugSession(input: { projectId: string; sessionId: str
       try { const actual = await observeGuiStep(session.page, step, { data: session.data, fixtures: session.snapshot.fixtures, nativeProcessRoot: session.nativeRoot, signal: input.signal }); session.snapshot.steps.push({ id: step.id, passed: true, actual: bounded(actual) }) }
       catch (error) { session.snapshot.steps.push({ id: step.id, passed: false, actual: bounded((error as { actual?: unknown }).actual ?? String(error)) }); log(session, 'action.failed', String(error)); break }
     }
-    if (input.script) {
-      const script = realpathSync(resolve(session.root, input.script)), rel = relative(realpathSync(session.root), script)
-      if (!rel || rel === '..' || rel.startsWith('..\\') || rel.startsWith('../') || isAbsolute(rel) || !/\.(?:c|m)?js$/i.test(script)) throw Error('BROWSER_SCRIPT_PROJECT_FILE_REQUIRED')
+    if (input.script || input.scriptSource) {
+      let script: string
+      if(input.scriptSource){
+        // Diagnostic artifacts belong to the host, not the release candidate.
+        // Same isolated browser runner and stripped environment as project scripts.
+        script=join(session.workspace,`diagnostic-${randomUUID()}.mjs`)
+        writeFileSync(script,input.scriptSource,{flag:'wx'})
+      }else{
+        script = realpathSync(resolve(session.root, input.script!))
+        const rel = relative(realpathSync(session.root), script)
+        if (!rel || rel === '..' || rel.startsWith('..\\') || rel.startsWith('../') || isAbsolute(rel) || !/\.(?:c|m)?js$/i.test(script)) throw Error('BROWSER_SCRIPT_PROJECT_FILE_REQUIRED')
+      }
       if (!session.cdpEndpoint) throw Error('BROWSER_SCRIPT_CONNECTION_UNAVAILABLE')
       session.activeAction = 'browser-script'
       const native=isNativeGuiTestModule(script), report=join(session.workspace,`development-${Date.now()}.jsonl`),trace=report+'.trace.json'
@@ -362,7 +447,6 @@ export async function actDebugSession(input: { projectId: string; sessionId: str
       session.snapshot.steps.push({id:'native-tests',passed:result.code===0,actual:{exit_code:result.code,stderr:redactSoftwareOutput(result.stderr).slice(-4000)}})
     }
     session.activeAction = undefined
-    session.snapshot.ui = await observeSoftwareUi(session.page)
     if (session.launch.ui === 'browser' && !session.formal && session.browser) {
       writeTextFileAtomic(join(session.workspace, 'browser-state.json'), JSON.stringify(await session.browser.storageState()))
     }
@@ -377,9 +461,27 @@ export async function actDebugSession(input: { projectId: string; sessionId: str
         session.snapshot.checkpoint_error = undefined
       } catch (error) { session.snapshot.checkpoint_error = String(error) }
     }
-    persist(session); return readDebugSession(input.projectId, input.sessionId, input.id)
+    // Observe last: diagnostic screenshots may temporarily alter page styles;
+    // a reference must describe the final view returned to this caller.
+    session.snapshot.ui = await observeSoftwareUi(session.page, input.observation)
+    if(input.native&&session.native){
+      const method=nativeResult?.method
+      const observed=await session.native.inspect({query:input.native.query,...(nativeResult?.selected?{window_ref:nativeResult.selected}:input.native.window_ref?{window_ref:input.native.window_ref}:{})},input.signal)
+      session.snapshot.native_ui={...observed,method}
+    }
+    persist(session)
   } catch (error) {
     if (input.reload) { session.snapshot.state = 'failed'; session.snapshot.error = String(error); await closeDebugSession(input.projectId, input.sessionId, input.id) }
+    if(nativeDispatched)throw Error(`NATIVE_ACTION_DISPATCHED_OBSERVATION_FAILED: ${nativeDispatched}; do not replay; ${String(error)}`)
     throw error
-  } finally { session.activeAction = undefined; session.busy = false }
+  } finally {
+    try{if(beforeData){
+      const after=await snapshotDebugData(session.data,input.signal,undefined,session.launch.ui==='electron'?['electron-profile']:[])
+      session.snapshot.storage={...compareDebugData(beforeData,after),operation_id:session.operationId,at:new Date().toISOString(),before_version:beforeVersion,after_version:session.snapshot.version,before_source:beforeSource,after_source:session.snapshot.source}
+      log(session,'storage.observed',`Owned data interval v${beforeVersion}->v${session.snapshot.version}; ${session.snapshot.storage.complete?'bounded comparison complete':'incomplete; do not infer unchanged'}; ${session.snapshot.storage.changed} observed changes`,{storage:session.snapshot.storage,action:undefined})
+      persist(session)
+    }}catch(error){log(session,'storage.observation_failed',String(error),{action:undefined})}
+    finally{session.activeAction = undefined; session.operationId=undefined; session.busy = false}
+  }
+  return readDebugSession(input.projectId,input.sessionId,input.id)
 }

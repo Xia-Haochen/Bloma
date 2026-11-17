@@ -3,8 +3,10 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createRequestBudget } from '../../main/platform/llm/request-budget'
+import {trialOutputCap} from '../../scripts/trial-output-cap'
 import { streamSSE, setSseRetryWaitBudgetForTests } from '../../main/platform/upstream/providers/sse-reader'
 import { ANTHROPIC_SSE_ADAPTER } from '../../main/platform/upstream/providers/anthropic-sse-adapter'
+import { MonetaryBudgetError, readMonetaryBudget } from '../../main/platform/llm/monetary-budget'
 import type { SDKQuery, SDKQueryOptions } from '../../main/orchestration/stages/orchestration-contracts'
 
 describe('operation request budget', () => {
@@ -26,6 +28,51 @@ describe('operation request budget', () => {
   const options = (): SDKQueryOptions => ({ env: {}, sessionId: 'budget', signal: new AbortController().signal, maxTokens: 100 })
   const drain = async (query: SDKQuery) => { for await (const _ of query('test', options())) {} }
   const request = { url: 'https://test.invalid/messages', headers: {}, body: JSON.stringify({ model: 'test', max_tokens: 100, messages: [] }) }
+  it('settles both monetary reservations on a verified DeepSeek balance rejection', async () => {
+    const policy = process.env.BLOMA_MONETARY_POLICY!
+    writeFileSync(policy, JSON.stringify({version:1,models:[{host:'api.deepseek.com',model:'test',cap_rmb:5,
+      context_tokens:10000,input_rmb_per_million:2,output_rmb_per_million:8,cache_rmb_per_million:.04}]}))
+    const budget = createRequestBudget({}, {requests:3,outputTokens:100,rmb:5})
+    const fetchFn = vi.fn().mockResolvedValue(new Response(JSON.stringify({error:{type:'insufficient_balance_error',message:'Insufficient Balance'}}), {status:402}))
+    const query: SDKQuery = async function* (_prompt, opts) {
+      await streamSSE({
+        request:{...request,url:'https://api.deepseek.com/v1/messages'}, adapter:ANTHROPIC_SSE_ADAPTER, onEvent:()=>{},
+        requestGuard:opts.requestGuard, onAttempt:opts.onTransportAttempt, monetaryPolicyPath:opts.monetaryPolicyPath, fetchFn,
+      })
+    }
+    await expect(drain(budget.wrap(query))).rejects.toMatchObject({status:402,generationRejected:true})
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+    expect(budget.snapshot()).toMatchObject({physical_requests:1,upper_rmb:0,unreported_requests:0})
+    expect(readMonetaryBudget(policy)[0]).toMatchObject({accounted_upper_rmb:0,remaining_rmb:5})
+  })
+  it('fits a later request to the remaining operation allowance without releasing previous charges or the full image input reserve',async()=>{
+    const rate={context_tokens:10000,input_rmb_per_million:2,output_rmb_per_million:8}
+    const budget=createRequestBudget({}, {requests:3,outputTokens:10000,rmb:.1})
+    const first:SDKQuery=async function*(_p,opt){opt.requestGuard!({...request,body:JSON.stringify({model:'test',max_tokens:10000,messages:[]})});yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:5000}}}
+    await drain(budget.wrap(first))
+    const spent=budget.snapshot().upper_rmb!
+    expect(spent).toBe(.04002)
+    const cap=trialOutputCap(.1-spent,10000,rate)
+    let sent=false
+    const second:SDKQuery=async function*(_p,opt){opt.requestGuard!({...request,body:JSON.stringify({model:'test',max_tokens:opt.maxTokens,messages:[{type:'image'}]})});sent=true;yield{type:'result',subtype:'success',usage:{input_tokens:10000,output_tokens:10}}}
+    for await(const _ of budget.wrap(second)('test',{...options(),maxTokens:cap})){}
+    expect(sent).toBe(true);expect(cap).toBeLessThan(10000)
+    expect(Math.ceil(rate.context_tokens*rate.input_rmb_per_million)+Math.ceil(cap*rate.output_rmb_per_million)).toBeLessThanOrEqual(Math.floor((.1-spent)*1e6))
+    expect(budget.snapshot().upper_rmb).toBeGreaterThan(spent);expect(budget.snapshot().upper_rmb).toBeLessThanOrEqual(.1)
+  })
+  it('admits an exact micro-RMB boundary after many receipts and rejects the next micro-RMB',async()=>{
+    writeFileSync(process.env.BLOMA_MONETARY_POLICY!,JSON.stringify({version:1,models:[{host:'test.invalid',model:'test',cap_rmb:5,context_tokens:100,input_rmb_per_million:0,output_rmb_per_million:1,cache_rmb_per_million:0}]}))
+    const budget=createRequestBudget({}, {requests:20,outputTokens:100,rmb:.00001})
+    const one:SDKQuery=async function*(_p,opt){opt.requestGuard!({...request,body:JSON.stringify({model:'test',max_tokens:1,messages:[]})});yield{type:'result',subtype:'success',usage:{input_tokens:0,output_tokens:1}}}
+    for(let n=0;n<10;n++)await drain(budget.wrap(one))
+    expect(budget.snapshot().upper_rmb).toBe(.00001)
+    await expect(drain(budget.wrap(one))).rejects.toThrow('MONETARY_OPERATION_EXHAUSTED')
+  })
+  it('preserves the typed pre-transport refusal through the SSE guard wrapper',async()=>{
+    const fetchFn=vi.fn()
+    await expect(streamSSE({request,adapter:ANTHROPIC_SSE_ADAPTER,onEvent:()=>{},fetchFn,requestGuard:()=>{throw new MonetaryBudgetError('MONETARY_OPERATION_EXHAUSTED')}})).rejects.toBeInstanceOf(MonetaryBudgetError)
+    expect(fetchFn).not.toHaveBeenCalled()
+  })
 
   it('explicitly uncapped experiments skip shared and operation RMB policies but retain request admission', async () => {
     vi.stubEnv('BLOMA_DISPATCH_EXPERIMENT', '1')
@@ -100,5 +147,15 @@ describe('operation request budget', () => {
     const query: SDKQuery = async function* (_prompt, opt) { opt.requestGuard!(request); throw new Error('shared policy rejected before HTTP') }
     await expect(drain(budget.wrap(query))).rejects.toThrow('shared policy rejected')
     expect(budget.snapshot()).toMatchObject({ admitted_requests: 1, physical_requests: 0, unreported_requests: 1 })
+  })
+  it('releases a typed shared admission refusal before transport without resetting attempt counts',async()=>{
+    const budget=createRequestBudget({}, {requests:3,outputTokens:100,rmb:5})
+    const denied:SDKQuery=async function*(_prompt,opt){opt.requestGuard!(request);throw new MonetaryBudgetError('MONETARY_BUDGET_EXHAUSTED')}
+    await expect(drain(budget.wrap(denied))).rejects.toThrow('MONETARY_BUDGET_EXHAUSTED')
+    expect(budget.snapshot()).toMatchObject({logical_queries:1,prepared_requests:1,admitted_requests:0,physical_requests:0,unsent_requests:1,unreported_requests:0,upper_rmb:0})
+    const sent:SDKQuery=async function*(_prompt,opt){opt.requestGuard!(request);opt.onTransportAttempt?.('started');throw new MonetaryBudgetError('MONETARY_BUDGET_EXHAUSTED')}
+    await expect(drain(budget.wrap(sent))).rejects.toThrow('MONETARY_BUDGET_EXHAUSTED')
+    expect(budget.snapshot()).toMatchObject({logical_queries:2,prepared_requests:2,admitted_requests:1,physical_requests:1,unsent_requests:1,unreported_requests:1})
+    expect(budget.snapshot().upper_rmb).toBeGreaterThan(0)
   })
 })

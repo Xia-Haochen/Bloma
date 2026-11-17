@@ -1,0 +1,14 @@
+"id","sources","status","result"
+"T1","documents/交付.pdf","completed","根据 `documents/交付.pdf`：  
+- **青禾交付清单**：交付物包括桌面程序、使用说明和数据备份。  
+- **验收安排**：2026年11月20日检查保存和重启。  
+
+来源：`documents/交付.pdf`（第1–2页）"
+"T2","documents/预算.md","completed","据 documents/预算.md：青禾预算本次预算为300元，界面采用蓝色主题。"
+"T3","documents/a/项目纪要.txt","completed","**中文摘要（来源：documents/a/项目纪要.txt）**  
+青禾项目负责人是林舟，计划于2026年11月20日交付；验收时先检查记录重启，再检查导出。"
+"T4","documents/交付.pdf;documents/预算.md;documents/a/项目纪要.txt","completed","**中文摘要**
+
+- 青禾项目负责人是林舟；计划2026年11月20日交付；验收先检查记录重启，再检查导出。（来源：`documents/a/项目纪要.txt`）
+- 青禾交付清单中的交付物包括桌面程序、使用说明和数据备份；验收安排为2026年11月20日检查保存和重启。（来源：`documents/交付.pdf`）
+- 青禾本次预算300元；界面采用蓝色主题。（来源：`documents/预算.md`）"

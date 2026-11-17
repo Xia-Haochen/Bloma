@@ -1,3 +1,7 @@
+import type { MaterialContext } from '../../shared/attachment-types'
+import { ATTACHMENT_LIMITS } from '../../shared/attachment-types'
+import { materialImageRefs, renderMaterialContext } from '../platform/attachments/material-context'
+import { productDesignPolicy } from '../project/product-design-policy'
 /**
  * UX 外观草图生成（2026-10-04 确认门新规，实施稿《Bloma-确认门与呈现层-20261004》）。
  *
@@ -38,6 +42,13 @@ const UX_SKETCH_FILENAME = 'ux-sketch.html'
 const UX_SKETCH_TIMEOUT_MS = 240_000
 const UX_SKETCH_ATTEMPTS = 2
 
+export function sketchFormatIssues(raw: string): string[] {
+  const issues: string[] = []
+  if (!/^(?:<!doctype html>|<html[\s>])/i.test(raw.trim())) issues.push('OUTPUT_FORMAT_PREFIX: 必须直接以<!DOCTYPE html>开始，不输出解释或代码围栏')
+  if (/<(?:!doctype html|html[\s>])/i.test(raw) && !/<\/html\s*>/i.test(raw)) issues.push('HTML_INCOMPLETE: HTML在文档闭合前结束，不补写猜测内容；重新生成精简完整文档')
+  return issues
+}
+
 const UX_SKETCH_RETRY_FEEDBACK = '上一次输出不是可用的 HTML 文档（可能带了解释文字或代码围栏）。请只输出完整 HTML 文档本身：<!DOCTYPE html> 开头，单文件内联样式，无脚本，无解释，无代码围栏。'
 
 const DESIGN_OUTPUT_PROTOCOL = `【宿主输出协议，优先于自定义提示词中的格式要求】只输出JSON：
@@ -74,7 +85,13 @@ export interface UxSketchResult {
 export function parseSketchHtml(text: string): UxSketchResult | undefined {
   let html = text.trim()
   const fence = html.match(/^```[a-zA-Z]*\s*\n([\s\S]*?)\n?```$/)
-  if (fence) html = fence[1].trim()
+  if (fence) { if ((html.match(/```/g) ?? []).length !== 2) return undefined; html = fence[1].trim() }
+  else {
+    // Transport prose is not the artifact. Accept exactly one explicitly marked
+    // HTML block; never guess missing closing bytes or select among candidates.
+    const blocks = [...html.matchAll(/```html[ \t]*\r?\n([\s\S]*?)\r?\n?```/gi)]
+    if (blocks.length === 1 && (html.match(/```/g) ?? []).length === 2) html = blocks[0][1].trim()
+  }
   const looksHtml = /^<!DOCTYPE html>/i.test(html) || /^<html[\s>]/i.test(html)
   if (!looksHtml || !html.includes('</html>')) return undefined
   if (/<script\b|\bon[a-z]+\s*=|javascript\s*:/i.test(html)) return undefined
@@ -187,6 +204,7 @@ function escapeHtml(text: string): string {
 }
 
 export interface UxSketchOptions {
+  materials?: MaterialContext
   visualDirection?: string
   feedbackSource?: 'user' | 'visual_review'
   attempts?: 1 | 2 | 3 | 4
@@ -207,8 +225,21 @@ export interface UxSketchOptions {
 }
 export async function generateUxSketch(options: UxSketchOptions): Promise<UxSketchResult> {
   if (options.signal?.aborted) throw new Error('UX_SKETCH_ABORTED')
-  const prompt = buildSketchPrompt(options)
+  const boundAssets = options.backplane?.lean_brief?.design_assets?.filter(a => a.role !== 'content') ?? []
+  let materials = options.materials
+  if (materials && (materials.project_id !== options.project_id || materials.owner_session_id !== options.session_id)) throw Error('UX_MATERIAL_OWNER_MISMATCH')
+  if (boundAssets.length) {
+    if (boundAssets.some(a => !materials?.attachments.some(m => m.attachment_id === a.attachment_id && m.sha256 === a.sha256))) throw Error('UX_REQUIRED_MATERIAL_UNAVAILABLE')
+    materials = { ...materials!, attachments: materials!.attachments.filter(m => boundAssets.some(a => a.attachment_id === m.attachment_id)) }
+  }
+  if (materials && materials.attachments.filter(m => m.kind !== 'text').length > ATTACHMENT_LIMITS.images) throw Error('UX_REFERENCE_IMAGE_CAPACITY: 参考图超过单次容量，需分批设计，不得静默忽略')
+  const referenceImages = materials ? materialImageRefs(materials) : []
+  const referenceText = materials ? renderMaterialContext(materials, options.session_id, true) : ''
+  const prompt = buildSketchPrompt(options) + (options.backplane?.lean_brief ? '\n输出约束：直接输出完整静态HTML，不加解释或代码围栏；只精绘主工作区，不重复展开全部表单和历史。' : '') + (referenceText ? '\n用户设计材料（用途以确认策略为准）：' + referenceText : '') + (options.backplane?.lean_brief ? '\n项目视觉策略：' + JSON.stringify(productDesignPolicy(options.backplane)) : '')
   const lean = Boolean(options.backplane?.lean_brief)
+  // Software preparation shares the host execution lease and caller's cancel
+  // signal. Do not cut a funded, still-streaming generation at a stage timer.
+  const timeoutMs = lean && options.signal ? 0 : UX_SKETCH_TIMEOUT_MS
   const structured = Boolean(options.backplane && !lean)
   const resolvedPrompt = loadPromptWithSource('sketch-system', lean ? LEAN_SKETCH_PROMPT : UX_SKETCH_SYSTEM_PROMPT)
   const systemPrompt = resolvedPrompt.content +
@@ -224,7 +255,7 @@ export async function generateUxSketch(options: UxSketchOptions): Promise<UxSket
     user_prompt_sha256: hash(prompt), requested_model: options.env.ANTHROPIC_MODEL,
     requested_channel_id: routing?.channelId, requested_category: routing?.category,
     temperature: categoryTemperature('sketch'), max_tokens: options.maxTokens,
-    max_attempts: options.attempts ?? UX_SKETCH_ATTEMPTS, timeout_ms: UX_SKETCH_TIMEOUT_MS }
+    max_attempts: options.attempts ?? UX_SKETCH_ATTEMPTS, timeout_ms: timeoutMs, deadline_owner: timeoutMs ? 'stage' : 'caller' }
   const diagnostic = (event: Record<string, unknown>, candidate?: string): void => {
     try {
       const project = findProject(options.project_id)
@@ -243,7 +274,7 @@ export async function generateUxSketch(options: UxSketchOptions): Promise<UxSket
   const llm = await callLlmForJson<UxSketchResult>({
     systemPrompt,
     prompt,
-    query: options.query,
+    query: (prompt, queryOptions) => options.query(prompt, { ...queryOptions, ...(referenceImages.length ? { images: referenceImages } : {}) }),
     env: options.env,
     sessionId: options.session_id,
     maxTokens: options.maxTokens,
@@ -258,9 +289,10 @@ export async function generateUxSketch(options: UxSketchOptions): Promise<UxSket
         : '没有可复用的安全HTML，必须同时输出完整html。'}原任务：\n${prompt}`
       : `${UX_SKETCH_RETRY_FEEDBACK}${lean ? `\n上次问题：${lastIssues.join('；')}。${LEAN_SKETCH_SIZE_GUIDANCE}请重新生成更精炼的完整文档，不续写残片。` : ''}\n原任务：\n${prompt}` },
     signal: options.signal,
-    timeoutMs: UX_SKETCH_TIMEOUT_MS,
+    timeoutMs,
     onAttemptFailure: failure => {
       const kind = failure.termination ?? failure.kind
+      if (failure.termination === 'output_limit') lastIssues = ['OUTPUT_LIMIT: 服务端报告本轮输出耗尽；保持输出额度，减少重复样例、装饰路径和非当前表单，重新生成完整主工作区', ...lastIssues]
       generation.failures.push({ attempt: failure.attempt, kind })
       diagnostic({ event: 'attempt_failed', attempt: failure.attempt, failure_kind: kind })
     },
@@ -270,9 +302,7 @@ export async function generateUxSketch(options: UxSketchOptions): Promise<UxSket
       let freshCandidate: string | undefined
       const parsed = parseUxOutput(raw, options.backplane, issues => { lastIssues = issues }, candidateHtml,
         html => { candidateHtml = html; freshCandidate = html })
-      if (lean && !parsed && /^(?:```html\s*)?(?:<!doctype html>|<html[\s>])/i.test(raw.trim()) && !/<\/html\s*>/i.test(raw)) {
-        lastIssues = ['HTML在文档闭合前结束，可能达到输出上限；需缩减界面体量后重新生成']
-      }
+      if (lean && !parsed) lastIssues = [...lastIssues, ...sketchFormatIssues(raw)]
       diagnostic({ event: 'output_checked', attempt: parseAttempt - 1, raw_output: raw.slice(0, 65536),
         raw_output_truncated: raw.length > 65536, output_sha256: hash(raw), validation_issues: lastIssues,
         accepted_for_preview: Boolean(parsed && !parsed.requires_prd_revision), requested_prd_revision: Boolean(parsed?.requires_prd_revision),

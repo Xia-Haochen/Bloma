@@ -1,3 +1,12 @@
+import { existsSync, readFileSync } from 'node:fs'
+import { guiSuitePath, parseGuiSuite } from './gui-acceptance'
+import { productDesignPolicy } from '../project/product-design-policy'
+import { projectStageView,readProjectStageReport } from '../software/project-stages'
+import { projectTaskView } from '../software/task-assignment'
+import { projectActivityView } from '../software/project-activity'
+import { decisionPage } from '../software/project-decisions'
+import { projectEvaluation } from '../software/project-evaluation'
+import { projectPlanView } from '../software/project-plan'
 import { guiControlBindings } from './gui-acceptance-preparation'
 import type { AgentLoopTool } from '../agent/loop/agent-loop'
 import type { PrdBackplane } from '../model/prd-backplane'
@@ -5,7 +14,7 @@ import { readPrdBackplane } from '../project/prd-store'
 import { isSoftwareProject } from './workflow-policy'
 import { readDesktopRequirementsDigest } from './requirement-digest'
 import { CORE_DECLARATION_BRIEF, MODEL_VERIFICATION_BRIEF, SPEECH_VERIFICATION_BRIEF } from './core-verification'
-import { requirementEvidenceHash, trustedAcceptance, acceptanceAssociationIssues } from '../project/requirement-contract'
+import { prdScopeFingerprint, requirementEvidenceHash, trustedAcceptance, acceptanceAssociationIssues } from '../project/requirement-contract'
 import type { DispatchExperiment } from './dispatch-experiment'
 import type { RequirementsModel } from '../model/requirements-model'
 import { guiStepsSchema, GUI_CHECK_EXAMPLE, SOFTWARE_GUI_ACTION_KINDS } from './gui-tool-contract'
@@ -23,6 +32,7 @@ import { DOCUMENT_GUIDANCE } from '../software/document-capability'
 import { COUNTEREXAMPLE_GUIDANCE } from '../software/acceptance-counterexamples'
 import { MULTIMODAL_GUIDANCE, HTTP_GUIDANCE, VISION_GUIDANCE, AI_SERVICE_GUIDANCE, PRODUCT_COMPONENT_RECIPES } from '../software/integration-capabilities'
 import {softwareDiagnosticContext} from '../software/diagnostic-context'
+import {readVerificationReport} from '../software/verification-report'
 
 /** Read the authoritative scope on demand; never rewrite or truncate business requirements. */
 export function productionContext(backplane: PrdBackplane, topic: string, featureIds: string[] = []): unknown {
@@ -37,6 +47,7 @@ export function productionContext(backplane: PrdBackplane, topic: string, featur
   if (topic === 'verification-llm') return { protocol: MODEL_VERIFICATION_BRIEF }
   if (topic === 'verification-speech') return { protocol: SPEECH_VERIFICATION_BRIEF }
   if (topic === 'overview') return {
+    work_items: backplane.lean_brief?.work_items, intent_assessment: backplane.lean_brief?.intent_assessment, intent_sources: backplane.lean_brief?.intent_sources, project_plan: projectPlanView(backplane), design_policy: productDesignPolicy(backplane),
     positioning: backplane.positioning, features: backplane.requirements.map(({ id, description, priority }) => ({ id, description, priority })),
     ...(backplane.lean_brief ? { delivery: backplane.lean_brief.delivery, distribution: backplane.lean_brief.distribution, ui: backplane.lean_brief.ui } : {}),
     constraints: backplane.constraints, out_of_scope: backplane.out_of_scope, assumptions: backplane.assumptions,
@@ -48,7 +59,7 @@ export function productionContext(backplane: PrdBackplane, topic: string, featur
   return {
     requirements: backplane.requirements.filter(item => selected.has(item.id)).map(item => ({ ...item,
       requirement_hash: requirementEvidenceHash(backplane, item), acceptance: trustedAcceptance(backplane, item) })),
-    acceptance_integrity_issues: acceptanceAssociationIssues(backplane), constraints: backplane.constraints, out_of_scope: backplane.out_of_scope, assumptions: backplane.assumptions,
+    work_items: backplane.lean_brief?.work_items, intent_assessment: backplane.lean_brief?.intent_assessment, intent_sources: backplane.lean_brief?.intent_sources, design_policy: productDesignPolicy(backplane), acceptance_integrity_issues: acceptanceAssociationIssues(backplane), constraints: backplane.constraints, out_of_scope: backplane.out_of_scope, assumptions: backplane.assumptions,
     // Include shared objects and provenance intact. Filter only explicitly linked feature rows.
     requirements_model: model && { ...model,
       workflows: model.workflows.filter(item => item.feature_ids.some(id => selected.has(id))),
@@ -63,12 +74,15 @@ export function buildProductionContextTool(projectId: string): AgentLoopTool {
   return { name: 'read_production_context', parallelSafe: true,
     description: '只读按需上下文：components看可复用组合，ai-service看通用AI模板与Key/路由；diagnostics汇总故障现场。capabilities列目录；documents/vision/multimodal/http-integration看能力；existing-project/working-state看工程与现场，features看范围，verification-gui/llm/speech看验收协议。',
     input_schema: { type: 'object', properties: {
-      topic: { type: 'string', enum: ['capabilities','components','ai-service','diagnostics','execution','working-state','documents','multimodal','vision','http-integration','acceptance-counterexamples','existing-project','overview', 'features', 'prd', 'launch', 'verification', 'verification-llm', 'verification-speech', 'verification-gui', 'data-update', 'delivery', 'resume', 'independent-design', 'longterm'] },
+      topic: { type: 'string', enum: ['capabilities','components','ai-service','diagnostics','verification-report','execution','working-state','documents','multimodal','vision','http-integration','acceptance-counterexamples','existing-project','overview', 'features', 'prd', 'launch', 'verification', 'verification-llm', 'verification-speech', 'verification-gui', 'data-update', 'delivery', 'resume', 'independent-design', 'longterm', 'project-state', 'project-activity', 'project-tasks', 'project-stages'] },
+      report_hash:{type:'string'},attempt_id:{type:'string'},section:{type:'string',enum:['cases','raw']},
+      offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 50 }, history: { type: 'boolean' },
       feature_ids: { type: 'array', items: { type: 'string' }, description: 'features主题的功能编号，如F-001；未知编号拒绝，不默默过滤。' },
     }, required: ['topic'] },
     execute: async (input, ctx) => {
       try {
         if (ctx.projectId !== projectId) throw Error('PRODUCTION_CONTEXT_PROJECT_MISMATCH')
+        if(isSoftwareProject(projectId)&&input.topic==='verification-report')return{output:JSON.stringify(readVerificationReport(projectId,input))}
         if (isSoftwareProject(projectId) && input.topic === 'capabilities') return { output: JSON.stringify({ catalog: SOFTWARE_CONTEXT_CATALOG, note: '目录不代表本轮需求或环境已就绪；按topic读取需要的说明，不扩大目标。' }) }
         if(isSoftwareProject(projectId)&&input.topic==='components')return{output:JSON.stringify(PRODUCT_COMPONENT_RECIPES)}
         if(isSoftwareProject(projectId)&&input.topic==='ai-service')return{output:JSON.stringify(AI_SERVICE_GUIDANCE)}
@@ -89,13 +103,18 @@ export function buildProductionContextTool(projectId: string): AgentLoopTool {
           completion: '命令结束、本轮结束、最近验证和项目交付是不同事实。仍运行的命令先接续读取；命令成功不签发产品通过。' }) }
         if (isSoftwareProject(projectId) && input.topic === 'working-state') return { output: JSON.stringify(softwareWorkingContext(projectId)) }
         if (ctx.projectId !== projectId) throw new Error('PRODUCTION_CONTEXT_MISMATCH')
+        if(input.topic==='project-stages')return{output:JSON.stringify(input.attempt_id?readProjectStageReport(projectId,input as {attempt_id:unknown}):projectStageView(projectId))}
+        if(input.topic==='project-tasks')return{output:JSON.stringify(projectTaskView(projectId,input.offset as number|undefined,input.limit as number|undefined))}
+        if(input.topic==='project-activity')return{output:JSON.stringify(projectActivityView(projectId,input.offset as number|undefined,input.limit as number|undefined))}
+        if(input.topic==='project-state')return{output:JSON.stringify(projectEvaluation(projectId,{offset:input.offset as number|undefined,limit:input.limit as number|undefined,history:input.history as boolean|undefined}))}
         if(input.topic==='longterm'){
           const state=isLongtermSoftware(projectId)?readLongtermState(projectId):undefined
-          return{output:JSON.stringify({enabled:isLongtermSoftware(projectId),current:state?.milestones.find(item=>item.id===state.current_id),backlog:state?.backlog.slice(-20),decisions:state?.decisions.slice(-12),
+          return{output:JSON.stringify({enabled:isLongtermSoftware(projectId),current:state?.milestones.find(item=>item.id===state.current_id),backlog:state?.backlog.slice(-20),decisions:decisionPage(state?.decisions??[],prdScopeFingerprint(readPrdBackplane(projectId))).items,
             note:'待办和历史决策是上下文，不是当前范围或通过证据。只有已确认的当前任务单可实现；复杂能力/接口/数据变化时记录影响、兼容和迁移决定，不重做整套旧架构流程。'})}
         }
         if(input.topic==='independent-design')return{output:JSON.stringify({enabled:readIndependentPolicy(projectId)?.enabled??false,design:readIndependentDesign(projectId)??{status:'disabled',reason:'未启用第二模型验收设计；当前为单模型验收。'},
           semantics:readIndependentDesign(projectId)?.contract?currentIndependentSemantics(projectId,readIndependentDesign(projectId)!.contract!):undefined,
+          environment:'依赖模型的GUI案例先由宿主准备隔离受控服务。CORE_CHECK.llm.settings绑定正常设置入口，字段契约见read_production_context(ai-service)，固定模型不必绑定model控件；配置不就绪属于环境未验证，不让用户补验收标准。冻结案例不含配置步骤，重开不重新配置，受控服务结果不证明真实供应商或模型效果。',
           adapter:'启用时，在项目根INDEPENDENT_ADAPTER.json提供{version:1,design_digest:冻结设计digest,controls:{逻辑控件名:静态CSS选择器}}。不得包含输入、预期或脚本；宿主按冻结业务设计编排并执行，B的文字不能签发PASS。'})}
         if(input.topic==='verification-speech'&&isSoftwareProject(projectId))return{output:JSON.stringify({protocol:SPEECH_VERIFICATION_BRIEF,
           prepare:'先inspect_software_capabilities；准备用prepare_software_capability({capability:"speech"})，缺资源可显式download_models:true下载固定公开资产；普通pip不会物化平台组件。',
@@ -107,17 +126,26 @@ export function buildProductionContextTool(projectId: string): AgentLoopTool {
         if (input.topic === 'resume' && isSoftwareProject(projectId)) return { output: JSON.stringify(softwareResumeContext(projectId)) }
         if (['verification', 'verification-gui'].includes(String(input.topic)) && isSoftwareProject(projectId)) {
           const brief = readPrdBackplane(projectId)
+          const suiteFile=guiSuitePath(projectId)
+          let actions=false,registrationError:string|undefined,controlBindings:ReturnType<typeof guiControlBindings>
+          try { actions=existsSync(suiteFile)&&!parseGuiSuite(JSON.parse(readFileSync(suiteFile,'utf8'))).native_tests;controlBindings=guiControlBindings(projectId) }
+          catch { registrationError='已登记规则无法读取；保留原文件，先核对诊断。协议说明仍可读取。' }
           return { output: JSON.stringify({ launch: SOFTWARE_LAUNCH_GUIDANCE, protocol: '界面测试可直接verify_app({script:"tests/acceptance.mjs"})，不必展开动作表；使用模块参数提供的test/expect/assert。旧steps+acceptance_refs仍兼容，kind不是action，精确预期填equals。开发观察不等于验收。CLI仍用register_cli_check固定args/stdout/exit_code和任务单expectations。',
             native_tests: {call:'verify_app({script:"tests/acceptance.mjs"})',
-              example:'export default async({test,page,expect,assert,dataDir,phase})=>{ await test("F-001 主路径",async()=>{await page.locator("#input").fill("已确认输入");await page.locator("#save").click();await expect(page.locator("#result")).toHaveText("已确认预期")}) }',
+              repair:'后续直接修改当前测试并 verify_app()。定位和等待按适配规则登记；其他修订由宿主自动封存、隔离执行并独立裁定，保留已确认业务预期。拒绝后按具体原因修改，不需要另外管理修订协议。',
+              example:'export default async({test,page,context,app,expect,assert,dataDir,phase})=>{ await test("F-001 主路径",async()=>{await page.locator("#input").fill("已确认输入");await page.locator("#save").click();await expect(page.locator("#result")).toHaveText("已确认预期")}) }',
+              wait:'page.waitForFunction(fn, arg, options) 的超时填第三个参数，例如 page.waitForFunction(()=>document.querySelector("#status")?.textContent==="完成", null, {timeout:30000})。第二个参数是传给页面函数的数据。',
+              append:'保留已冻结入口与依赖。将新增案例放在单独的 default 导出模块。组合入口仅导入旧入口和新模块，随后原样顺序调用：import prior from "./acceptance.mjs"; import added from "./additional.mjs"; export default async(ctx)=>{await prior(ctx);await added(ctx)}。用 verify_app({script:"tests/combined.mjs"}) 登记并执行组合入口；沿用原套件的 restart 设置。',
+              execution_context:'app.origin来自当前实际窗口；app.waitForWindow(action)等待正常产品动作打开的窗口，不替产品开窗。app.readProductFile(path)读取当前候选文档；测试夹具仍从冻结输入读取。Electron不支持context.newPage；每次重开重新从产品获取当前身份，不复用旧端口或凭据。助手函数通过参数或闭包取得context/expect/assert。',
               rules:'使用参数中的test/expect/assert，每个业务案例名含一个F编号。开发测试与探针用inspect_app自由调试。verify_app先检查实际入口与依赖，只封存入口引用的模块/夹具，保留工程相对路径；动态资产可在脚本同目录native-inputs.json的files中列出工程相对路径，无关探针不参与封存。允许追加检查、修定位、有界等待100–30000ms和导航等待选项；未执行过的引导计划按宿主失败凭据修复并留痕，已执行的业务输入/断言及共享业务逻辑不能降低。截图报告写evidenceDir；宿主诊断截图失败单列告警，不代表视觉通过。phase===reopened触发真实重开，不从宿主源码猜协议。'},
-            gui_step_schema: guiStepsSchema(96, SOFTWARE_GUI_ACTION_KINDS), gui_fixture_schema: GUI_FIXTURE_SCHEMA, example: GUI_CHECK_EXAMPLE,
+            registration_error:registrationError,
+            ...(actions?{gui_step_schema: guiStepsSchema(96, SOFTWARE_GUI_ACTION_KINDS), gui_fixture_schema: GUI_FIXTURE_SCHEMA, example: GUI_CHECK_EXAMPLE}:{}),
             selector_guidance: '列表记录按稳定身份定位，避免nth-child随着新增/编辑后的排序改变。Electron/浏览器观察器支持Playwright可见文本选择器，如#note-list .note-item:has-text("笔记B")；Python固定观察器仍需真实CSS。修正selector可以，不能降低固定输入/预期。',
             authoritative_expectations: Object.fromEntries(brief.requirements.map(row => [row.id, trustedAcceptance(brief, row)])),
-            control_bindings: guiControlBindings(projectId), data_directory: 'APP_DATA_DIR' }) }
+            control_bindings: controlBindings, data_directory: 'APP_DATA_DIR' }) }
         }
         if (input.topic === 'verification-llm' && isSoftwareProject(projectId)) return { output: JSON.stringify({ vision:VISION_GUIDANCE.verify, protocol:
-          '登记CORE_CHECK.json llm:{runtime:"node",module:"src/llm-client.cjs",factory:"Client",method:"enhance",covers:["模型功能F编号"]}。Node模块须是产品实际使用的入口，导出可无参new的类；method异步接收{prompt,config:{endpoint,model,api_key,provider,timeout}}，返回{ok,kind,text/message}，kind为success/auth_error/model_error/rate_limited/invalid_response/unconfigured。宿主调用真实客户端验证本机HTTP请求及5类异常，不请求付费端点。Python入口沿用module/factory/method协议（不填runtime）。不能登记只为探针伪造的替身；外部质量另列待实测。' }) }
+          '登记CORE_CHECK.json llm:{runtime:"node",module:"src/llm-client.cjs",factory:"Client",method:"enhance",covers:可选，宿主已关联确认需求里的模型功能}。Node模块须是产品实际使用的入口，导出可无参new的类；Node的timeout单位为毫秒；method异步接收{prompt,config:{endpoint,model,api_key,provider,timeout}}，返回{ok,kind,text/message}，kind为success/auth_error/model_error/rate_limited/invalid_response/unconfigured。宿主调用真实客户端验证本机HTTP请求及5类异常，不请求付费端点。Python入口沿用module/factory/method协议（不填runtime）。不能登记只为探针伪造的替身；外部质量另列待实测。' }) }
         if (input.topic === 'verification-gui') return { output: JSON.stringify({ control_bindings: guiControlBindings(projectId), note: '实现需保留这些已确认控件身份，固定业务期望由宿主管理。' }) }
         if (input.feature_ids !== undefined && (!Array.isArray(input.feature_ids) || input.feature_ids.some(id => typeof id !== 'string'))) throw new Error('PRODUCTION_INVALID_FEATURES')
         return { output: JSON.stringify(productionContext(readPrdBackplane(projectId), String(input.topic), input.feature_ids as string[] | undefined)) }

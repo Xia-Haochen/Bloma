@@ -18,7 +18,7 @@ describe('Sprint 1 waiting feedback acceptance', () => {
     vi.restoreAllMocks()
   })
 
-  it('[S1-UI-005] 等待反馈应在超过 5 秒后显示当前操作但尚不显示安全感说明', () => {
+  it('[S1-UI-005] 等待反馈应在超过 5 秒后显示当前操作但尚不显示额外提示', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-25T00:00:00.000Z'))
     Element.prototype.scrollIntoView = vi.fn()
@@ -47,7 +47,7 @@ describe('Sprint 1 waiting feedback acceptance', () => {
     expect(status.textContent).not.toMatch(/安全|放心|不会影响/)
   })
 
-  it('[S1-UI-010] 等待反馈应在超过 10 秒后加入安全感说明', () => {
+  it('[S1-UI-010] 等待反馈应在超过 10 秒后显示查看进展的提示', () => {
     const { rerender } = render(
       <WaitingFeedback
         elapsedSeconds={10}

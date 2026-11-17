@@ -110,7 +110,7 @@ function deriveBannerState(
   desktopPhase?: string,
 ): BannerState {
   if (desktopPhase && desktopPhase !== 'delivered' && RETIRED_ACTIVE_STAGES.has(stage)) {
-    const label = ({ 'desktop-arch': '架构准备', 'desktop-scaffold': '工程准备', 'desktop-implement': '实现与验证', 'desktop-verify': '验收检查' } as Record<string, string>)[desktopPhase] ?? '制作'
+    const label = ({ 'desktop-arch': '规划程序结构', 'desktop-scaffold': '准备程序文件', 'desktop-implement': '制作与检查', 'desktop-verify': '验收检查' } as Record<string, string>)[desktopPhase] ?? '制作'
     return running
       ? { visible: true, variant: desktopPhase === 'desktop-verify' ? 'testing' : 'generating', title: `正在${label}`, detail: '正在处理当前任务，结果会记录在工作区。', stage }
       : { visible: true, variant: 'blocked', title: '制作已暂停', detail: `当前进度：${label}。已有文件和验证记录保留，可继续制作。`, stage }
@@ -126,16 +126,16 @@ function deriveBannerState(
   switch (stage) {
     case 'sketch_ready':
       return running
-        ? { visible: true, variant: 'ready', title: STAGE_LABEL_MAP[stage], detail: '草图已生成，确认后即可生成完整功能，或继续对话调整方向', stage }
+        ? { visible: true, variant: 'ready', title: STAGE_LABEL_MAP[stage], detail: '草图已生成。请核对布局与外观，确认后开始制作功能，也可以继续提出调整。', stage }
         : legacyWeb
           ? { visible: true, variant: 'retired', title: '历史项目', detail: '这个项目使用旧交付格式，资料与产物保留，可查看或导出。', stage }
           : { visible: true, variant: 'ready', title: '界面设计待确认', detail: '查看当前设计，确认后开始制作，也可以继续调整。', stage }
     // 2026-10-04 web 线残留清理：mvp_ready 死事件腿删除后，导出/升级入口改由权威阶段
     // 驱动——ready（旧线终态）与 completed（桌面线 delivered）都应能导出项目。
     case 'ready':
-      return { visible: true, variant: 'ready', title: STAGE_LABEL_MAP[stage], detail: '完整功能已生成，可导出项目或继续迭代', stage }
+      return { visible: true, variant: 'ready', title: STAGE_LABEL_MAP[stage], detail: '已有生成结果，可导出项目；功能检查情况请查看验证记录。', stage }
     case 'completed':
-      return { visible: true, variant: 'ready', title: '项目已交付', detail: '完整功能已交付，可导出项目或继续迭代', stage }
+      return { visible: true, variant: 'ready', title: '项目已交付', detail: '当前版本已交付，可以启动使用，也可以继续提出修改。', stage }
     case 'blocked_for_user_decision':
       return { visible: true, variant: 'blocked', title: STAGE_LABEL_MAP[stage], detail: '需要你做出决定后才能继续', stage }
     default:
@@ -155,13 +155,13 @@ function deriveBannerState(
   }
   switch (stage) {
     case 'generating_mvp':
-      return { visible: true, variant: 'generating', title: STAGE_LABEL_MAP[stage], detail: '正在生成完整项目，请稍候…', stage }
+      return { visible: true, variant: 'generating', title: STAGE_LABEL_MAP[stage], detail: '正在按已确认的需求制作程序，可查看最近进展。', stage }
     case 'iterating':
-      return { visible: true, variant: 'generating', title: STAGE_LABEL_MAP[stage], detail: '正在按你的新想法重新生成，稍候会自动测试并审查…', stage }
+      return { visible: true, variant: 'generating', title: STAGE_LABEL_MAP[stage], detail: '正在按你的修改意见调整程序，检查结果会另行显示。', stage }
     case 'testing':
       return { visible: true, variant: 'testing', title: STAGE_LABEL_MAP[stage], detail: '正在运行功能检查…', stage }
     case 'judge_review':
-      return { visible: true, variant: 'judging', title: STAGE_LABEL_MAP[stage], detail: '裁判正在审查功能完整性…', stage }
+      return { visible: true, variant: 'judging', title: STAGE_LABEL_MAP[stage], detail: '正在审查功能是否符合需求…', stage }
     case 'repairing':
       return { visible: true, variant: 'repairing', title: STAGE_LABEL_MAP[stage], detail: '正在修复检测到的问题…', stage }
     default:
@@ -189,7 +189,7 @@ const VARIANT_STYLE: Record<BannerState['variant'], { bg: string; border: string
 // 组件
 // =========================================================================
 
-export const MvpStatusBanner: React.FC<{ suppressBlocked?: boolean }> = ({ suppressBlocked = false }) => {
+export const MvpStatusBanner: React.FC<{ suppressBlocked?: boolean; compact?: boolean }> = ({ suppressBlocked = false, compact = false }) => {
   const sessionId = useAtomValue(activeAgentSessionIdAtom)
   const stage = useAtomValue(workflowStageAtom)
   const project = useAtomValue(currentProjectAtom)
@@ -288,6 +288,7 @@ export const MvpStatusBanner: React.FC<{ suppressBlocked?: boolean }> = ({ suppr
       role="status"
       aria-live="polite"
       data-ai-id="mvp-status-banner"
+      data-compact={compact}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -301,7 +302,7 @@ export const MvpStatusBanner: React.FC<{ suppressBlocked?: boolean }> = ({ suppr
       }}
     >
       {/* 左侧图标 */}
-      {Icon ? (
+      {!compact && Icon ? (
         <span
           style={{
             width: 28,
@@ -316,7 +317,7 @@ export const MvpStatusBanner: React.FC<{ suppressBlocked?: boolean }> = ({ suppr
         >
           <Icon size={18} />
         </span>
-      ) : style.animated ? (
+      ) : !compact && style.animated ? (
         /* 旋转脉冲指示器（generating/testing/judging/repairing） */
         <span
           style={{
@@ -348,7 +349,7 @@ export const MvpStatusBanner: React.FC<{ suppressBlocked?: boolean }> = ({ suppr
         >
           {banner.title}
         </p>
-        {banner.detail && (
+        {banner.detail && !compact && (
           <p
             style={{
               fontSize: 'var(--font-size-xs)',
@@ -380,7 +381,7 @@ export const MvpStatusBanner: React.FC<{ suppressBlocked?: boolean }> = ({ suppr
               whiteSpace: 'nowrap',
             }}
           >
-            已导出到 {exportedPath}（线上状态未知）
+            已导出到 {exportedPath}
           </span>
         ) : (
           <button

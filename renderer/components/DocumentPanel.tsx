@@ -49,34 +49,44 @@ export const DocumentPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
   const [reading, setReading] = React.useState(false)
   const [filePath, setFilePath] = React.useState('')
   const [fileError, setFileError] = React.useState('')
+  const readGeneration = React.useRef(0)
 
   React.useEffect(() => {
     if (!expanded || !project) return
     const api = window.electronAPI
     if (!api?.documents?.list) return
     setLoading(true)
-    setSelected(null)
+    let cancelled = false
     void api.documents
       .list({ request_id: crypto.randomUUID(), project_id: project.project_id })
       .then((result) => {
-        if (result.ok) setDocuments(result.data.documents)
+        if (!cancelled && result.ok) setDocuments(result.data.documents)
+        else if (!cancelled && !result.ok) setFileError(result.error.user_visible_message || result.error.message)
       })
-      .finally(() => setLoading(false))
+      .catch(() => { if (!cancelled) setFileError('文档列表读取失败，请重新打开重试。') })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
   }, [expanded, project?.project_id])
 
-  if (!expanded) return null
+  React.useEffect(() => { readGeneration.current++; setSelected(null); setReading(false); setFilePath(''); setFileError(''); return () => { readGeneration.current++ } }, [project?.project_id])
 
   const handleSelect = (doc: DocumentRef) => {
     if (!project) return
     const api = window.electronAPI
     if (!api?.documents?.read) return
+    const generation = ++readGeneration.current
     setReading(true)
+    setFileError('')
+    setSelected(null)
     void api.documents
       .read({ request_id: crypto.randomUUID(), project_id: project.project_id, document_id: doc.document_id })
       .then((result) => {
+        if (generation !== readGeneration.current) return
         if (result.ok) setSelected({ kind: 'document', document: doc, content: result.data.content })
+        else setFileError(result.error.user_visible_message || result.error.message)
       })
-      .finally(() => setReading(false))
+      .catch((error: unknown) => { if (generation === readGeneration.current) setFileError(error instanceof Error ? error.message : String(error)) })
+      .finally(() => { if (generation === readGeneration.current) setReading(false) })
   }
 
   /** 产物文件打开（W6）：主进程校验项目根内+拒基础设施目录/二进制，256KB 截断如实标注 */
@@ -88,11 +98,13 @@ export const DocumentPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
       setFileError('当前环境不支持文件查看（preload 桥未就绪）。')
       return
     }
+    const generation = ++readGeneration.current
     setReading(true)
     setFileError('')
     void api.project
       .fileRead({ request_id: crypto.randomUUID(), project_id: project.project_id, path: trimmed })
       .then((result) => {
+        if (generation !== readGeneration.current) return
         if (result.ok) {
           setSelected({ kind: 'file', path: result.data.path, content: result.data.content, truncated: result.data.truncated })
         } else {
@@ -101,9 +113,11 @@ export const DocumentPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
         }
       })
       .catch((error: unknown) => {
+        if (generation !== readGeneration.current) return
+        setSelected(null)
         setFileError(error instanceof Error ? error.message : String(error))
       })
-      .finally(() => setReading(false))
+      .finally(() => { if (generation === readGeneration.current) setReading(false) })
   }
 
   return (
@@ -114,8 +128,8 @@ export const DocumentPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
       style={{
         position: embedded ? 'relative' : 'fixed', top: 0, right: 0, bottom: 0, zIndex: embedded ? undefined : 900,
         width: embedded ? '100%' : 'min(420px, 92vw)', minHeight: 0, height: embedded ? '100%' : undefined,
-        display: 'flex', flexDirection: 'column',
-        background: 'var(--color-surface)',
+        display: expanded ? 'flex' : 'none', flexDirection: 'column',
+        background: embedded ? 'transparent' : 'var(--color-surface)',
         borderLeft: '1px solid var(--color-border)',
         boxShadow: embedded ? 'none' : 'var(--shadow-lg)',
         animation: 'tile-enter 0.2s ease both',
@@ -169,12 +183,13 @@ export const DocumentPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
               <button
                 key={doc.document_id}
                 data-ai-id="document-list-item"
+                aria-pressed={active}
                 onClick={() => handleSelect(doc)}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 'var(--space-3)',
                   width: '100%', textAlign: 'left', padding: 'var(--space-2) var(--space-3)',
                   borderRadius: 'var(--radius-sm)', cursor: 'pointer',
-                  background: active ? 'var(--glass-bg-strong)' : 'transparent',
+                  background: active ? 'var(--workspace-selected, #dfe8da)' : 'transparent',
                   border: 'none', fontFamily: 'inherit', marginBottom: 2,
                 }}
               >
@@ -272,6 +287,7 @@ export const DocumentPanel: React.FC<{ embedded?: boolean }> = ({ embedded = fal
           </div>
         ) : selected?.kind === 'document' ? (
           <div data-ai-id="document-content">
+            <p className="document-source">{basename(selected.document.path)} · 只读</p>
             <DocumentContent source={selected.document.path || selected.document.type} content={selected.content} variant="docs" />
           </div>
         ) : (

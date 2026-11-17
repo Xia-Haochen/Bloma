@@ -1,0 +1,4 @@
+{
+  "after": "first_usable_candidate",
+  "request": "增加一个临时低音量模式，退出后回到原配方，不改保存的音量。"
+}

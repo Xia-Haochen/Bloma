@@ -1,9 +1,13 @@
+import {build} from 'esbuild'
+import {spawn} from 'node:child_process'
+import {cpSync} from 'node:fs'
 import { withEmptyQualityReview } from '../../fixtures/quality-review-query'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { createProject, findProject } from '../../../main/project/project-service'
+import { findProject } from '../../../main/project/project-service'
+import { createEngineeringProject as createProject } from '../../fixtures/engineering-project'
 import { createProductionBudget } from '../../../main/desktop/production-budget'
 import { leanBudget, withLeanRuntime } from '../../../main/desktop/lean-budget'
 import { parseLeanBrief } from '../../../main/guide/lean-brief'
@@ -160,5 +164,34 @@ it.each([{ values: [0, 1, 2, 5], completed: true }, { values: [0, 0, 0, 0], comp
     state: readSoftwareRunState(project.project_id), app: readFileSync(join(project.root_path, 'app.cjs'), 'utf8') })).toBe(completed)
   expect(calls).toBe(completed ? 8 : 6)
   if (completed) expect(readProjectAttempts(project.project_id).total['lean-repair']).toBe(3)
-  else expect(readSoftwareRunState(project.project_id)).toMatchObject({ status: 'blocked', failure: { repeats: 3 } })
+  else expect(readSoftwareRunState(project.project_id)).toMatchObject({ status: 'blocked', stop_code: 'no_progress', failure: { repeats: 3 } })
 }, 150000)
+
+it('stops unchanged reruns but allows an actual source revision or changed observation within the same budget', () => {
+  const project=createProject({request_id:'c',mode:'quick'},{workflowVersion:'software-v1'})
+  const base={projectId:project.project_id,sessionId:'s',runId:'r',failureFingerprint:'same-observed-assertion'}
+  expect(recordSoftwareRepair({...base,error:'report A at time 1',source:'revision1'}).repeats).toBe(1)
+  expect(recordSoftwareRepair({...base,error:'report B at time 2',source:'revision1'}).repeats).toBe(2)
+  expect(recordSoftwareRepair({...base,error:'report C at time 3',source:'revision1'})).toMatchObject({repeats:3,allowed:false})
+  expect(recordSoftwareRepair({...base,error:'report C at time 4',source:'revision2'})).toMatchObject({repeats:1,allowed:true,total:4})
+  expect(recordSoftwareRepair({...base,error:'report D',failureFingerprint:'actual-result-changed'})).toMatchObject({repeats:1,allowed:true})
+})
+
+
+it('recovers a real exited process with the same Pi project and budget without replaying completed side effects',async()=>{
+ const runtime=join(process.cwd(),'run-artifacts','closeout-process-fixture')
+ mkdirSync(runtime,{recursive:true});cpSync(join(process.cwd(),'main/templates'),join(runtime,'templates'),{recursive:true})
+ const worker=join(runtime,'worker.mjs')
+ await build({entryPoints:[join(process.cwd(),'tests/fixtures/closeout-process-worker.ts')],outfile:worker,bundle:true,platform:'node',format:'esm',external:['playwright','typescript','@earendil-works/pi-coding-agent','@earendil-works/pi-agent-core','@earendil-works/pi-ai'],plugins:[{name:'unused-electron-shell',setup(builder){builder.onResolve({filter:/^electron$/},()=>({path:'electron',namespace:'test-shell'}));builder.onLoad({filter:/.*/,namespace:'test-shell'},()=>({contents:'export const app={isPackaged:false};export const net={},protocol={},session={},shell={},dialog={},ipcMain={},clipboard={},nativeImage={},screen={},desktopCapturer={},nativeTheme={},webContents={};export class BrowserWindow{};export class Notification{};',loader:'js'}))}}]})
+ const env=Object.fromEntries(Object.entries(process.env).filter(([key,value])=>value!==undefined&&!/^(?:BLOMA_|ANTHROPIC_|OPENAI_|PROMA_|ELECTRON_)/.test(key))) as Record<string,string>
+ const run=(phase:string)=>new Promise<{code:number|null;stdout:string;stderr:string}>((resolve,reject)=>{let stdout='',stderr='';const child=spawn(process.execPath,[worker,phase],{cwd:process.cwd(),env:{...env,PROMA_HOME:home},windowsHide:true,stdio:['ignore','pipe','pipe']});child.stdout.on('data',data=>{stdout+=data});child.stderr.on('data',data=>{stderr+=data});child.on('error',reject);child.on('close',code=>resolve({code,stdout,stderr}))})
+ const first=await run('crash');expect(first.code,first.stderr).toBe(23)
+ const before=JSON.parse(readFileSync(join(home,'before-process-exit.json'),'utf8')),fixture=JSON.parse(readFileSync(join(home,'process-fixture.json'),'utf8'))
+ expect(before.runtimePid).toBe(fixture.pid);expect(before.requests).toBe(2)
+ const second=await run('resume');expect(second.code,second.stderr).toBe(0)
+ const after=JSON.parse(readFileSync(join(home,'after-process-resume.json'),'utf8'))
+ expect(after.pid).not.toBe(fixture.pid);expect(after.status).toBe('completed');expect(after.phase).toBe('delivered');expect(after.release).toBeTruthy()
+ expect(after.effect).toBe('once\n');expect(after.makerCalls).toBe(0)
+ expect(after.budget.file).toBe(before.file);expect(after.budget.requests).toBeGreaterThan(before.requests);expect(after.budget.output).toBeGreaterThanOrEqual(before.output)
+ writeFileSync(join(runtime,'evidence.json'),JSON.stringify({first_pid:fixture.pid,second_pid:after.pid,before:{requests:before.requests,output:before.output},after,scope:'real two-process Pi/CLI recovery; controlled provider; no paid calls'},null,2))
+},180000)

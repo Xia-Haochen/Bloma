@@ -1,3 +1,4 @@
+import { serializeRedactedJson } from '../../shared/redacted-json'
 import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, relative } from 'node:path'
@@ -8,7 +9,7 @@ import { SPEECH_MODEL_MANIFEST, speechModelRoot } from '../platform/speech/model
 import { downloadAsset, matchesAsset, type DownloadDeps } from '../platform/speech/model-downloader'
 import { runHostSpeechProbe } from '../desktop/speech-verification'
 import { executeSoftwareCommand } from './command-runtime'
-import { bindSpeechCapability, executionSpeechBinding, speechManifestVersion } from './capability-bindings'
+import { bindSpeechCapability, executionSpeechBinding, speechManifestVersion, speechPythonPath } from './capability-bindings'
 import { projectRuntimeRequest, satisfies } from './runtime-manager'
 import type { createSoftwareCollaborationPolicy } from './collaboration-policy'
 import { redactSoftwareOutput } from './process-manager'
@@ -47,7 +48,10 @@ function componentState(root:string){
   })
 }
 async function pythonProbe(projectId:string,root:string,signal:AbortSignal,deps:Dependencies){
-  const result=await(deps.execute??executeSoftwareCommand)({projectId,root,command:['python','-I','-B','-c',importProbe],signal,timeoutMs:30000})
+  assertSpeechEnvironment(root,signal)
+  const interpreter=speechPythonPath(root)
+  const command=[existsSync(interpreter)?interpreter:'python','-I','-B','-c',importProbe]
+  const result=await(deps.execute??executeSoftwareCommand)({projectId,root,command,signal,timeoutMs:30000})
   signal.throwIfAborted()
   if(result.code!==0)throw Error(`CAPABILITY_PYTHON_UNAVAILABLE: ${result.stderr.slice(-1000)}`)
   const value=JSON.parse(result.stdout.trim().split(/\r?\n/).at(-1)??'') as PythonProbe
@@ -100,7 +104,8 @@ export async function prepareSpeechCapability(projectId:string,root:string,signa
       if(result.code!==0)throw Error(`CAPABILITY_DEPENDENCIES_FAILED: ${redactSoftwareOutput(result.stderr).slice(-1600)}`)
       python=await pythonProbe(projectId,root,signal,guardedDeps)
     }
-    if(packages.some(name=>!python.packages[name]?.available))throw Error('CAPABILITY_IMPORTS_NOT_READY')
+    const unavailable=packages.filter(name=>!python.packages[name]?.available)
+    if(unavailable.length)throw Error('CAPABILITY_IMPORTS_NOT_READY: '+JSON.stringify(unavailable.map(name=>({package:name,error:python.packages[name]?.error??'未报告导入结果'}))))
     const modelRoot=executionSpeechBinding(projectId,root)?.model_root??speechModelRoot(),rel=relative(realpathSync(root),modelRoot)
     if(!isAbsolute(rel)&&rel!=='..'&&!rel.startsWith('../')&&!rel.startsWith('..\\'))throw Error('CAPABILITY_MODELS_MUST_BE_OUTSIDE_PROJECT')
     if(options.download_models){
@@ -128,7 +133,7 @@ export function buildCapabilityTools(projectId:string,policy:ReturnType<typeof c
     execute:async(input,ctx)=>{try{if(ctx.projectId!==projectId)throw Error('CAPABILITY_PROJECT_MISMATCH');if(Object.keys(input).some(key=>key!=='capability')||input.capability!==undefined&&!CAPABILITY_NAMES.includes(String(input.capability)))throw Error('CAPABILITY_ARGUMENTS_INVALID');
       const root=findProject(projectId).root_path
       const result=integrationCapability(input.capability)?await inspectIntegrationCapability(projectId,root,input.capability,ctx.signal):await(input.capability==='documents'?inspectDocumentCapability:inspectSoftwareCapabilities)(projectId,root,ctx.signal)
-      return{output:redactSoftwareOutput(JSON.stringify(result))}}catch(error){return{output:redactSoftwareOutput(String(error)),isError:true}}}}
+      return{output:serializeRedactedJson(result,redactSoftwareOutput)}}catch(error){return{output:redactSoftwareOutput(String(error)),isError:true}}}}
   const prepare:AgentLoopTool={name:'prepare_software_capability',description:'按schema选择并物化成熟组件：设置/数据/任务/HTTP工作流/文件/多模态/查询/工作台/分发/对照；旧ai/vision/speech/documents/ocr/http保持兼容。保护已有代码，公开路由可修改但不含明文Key；不调用模型或签发PASS。',
     input_schema:{type:'object',additionalProperties:false,required:['capability'],properties:{capability:{type:'string',enum:CAPABILITY_NAMES},install_dependencies:{type:'boolean'},download_models:{type:'boolean'},language:{type:'string',maxLength:40}}},
     execute:async(input,ctx)=>{
@@ -137,13 +142,13 @@ export function buildCapabilityTools(projectId:string,policy:ReturnType<typeof c
           if(input.install_dependencies!==undefined||input.download_models!==undefined)throw Error('INTEGRATION_NO_DOWNLOAD_OPTIONS')
           for(const path of INTEGRATION_COMPONENTS[input.capability])policy.assertFileWrite(path,ctx)
           const result=await prepareIntegrationCapability(projectId,findProject(projectId).root_path,input.capability,ctx.signal,input.language as string|undefined)
-          return{output:redactSoftwareOutput(JSON.stringify(result)),isError:result.status!=='prepared'}
+          return{output:serializeRedactedJson(result,redactSoftwareOutput),isError:result.status!=='prepared'}
         }
         if(input.capability==='documents'){
           if(input.download_models!==undefined)throw Error('DOCUMENT_DOWNLOAD_MODELS_UNSUPPORTED')
           for(const path of [DOCUMENT_COMPONENT,'package.json','package-lock.json'])policy.assertFileWrite(path,ctx)
           const result=await prepareDocumentCapability(projectId,findProject(projectId).root_path,ctx.signal,input.install_dependencies===true)
-          return{output:redactSoftwareOutput(JSON.stringify(result)),isError:result.status!=='prepared'}
+          return{output:serializeRedactedJson(result,redactSoftwareOutput),isError:result.status!=='prepared'}
         }
         // assertCommand above authorizes the integrator's fixed venv/pip setup.
         // Generic file/delegation tools must continue protecting all of .venv.

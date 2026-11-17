@@ -21,7 +21,8 @@ export function stageLeanScope(projectId: string, sessionId: string, requestId: 
   if (previous.user_confirmed_at && previous.lean_brief && next.lean_brief?.ui === 'required' && !next.lean_brief.preview) {
     try {
       const reference = readConfirmedUxBinding(projectId, previous)
-      if (reference?.html_path && project.ux_confirmation?.html_hash) {
+      const sameDesignIntent = JSON.stringify([previous.requirements_model, previous.lean_brief.design_assets, previous.lean_brief.design_theme]) === JSON.stringify([next.requirements_model, next.lean_brief.design_assets, next.lean_brief.design_theme])
+      if (reference?.html_path && project.ux_confirmation?.html_hash && sameDesignIntent) {
         next.lean_brief.preview = 'reuse'; next.lean_brief.reference_html_hash = project.ux_confirmation.html_hash
       } else if (previous.lean_brief.preview === 'skip') next.lean_brief.preview = 'skip'
     } catch { /* an invalid old preview cannot authorize a new one */ }
@@ -35,10 +36,14 @@ export function stageLeanScope(projectId: string, sessionId: string, requestId: 
       ...(options.adoptedSuggestions?.length ? { adopted_suggestions: options.adoptedSuggestions } : {}) } })
   const removed = previous.requirements.filter(old => !next.requirements.some(row => row.id === old.id))
   const changed = next.requirements.filter(row => previous.requirements.some(old => old.id === row.id
-    && (old.description !== row.description || previous.acceptance[old.id] !== next.acceptance[row.id])))
+    && (old.description !== row.description || previous.acceptance[old.id] !== next.acceptance[row.id]
+      || JSON.stringify(old.capabilities) !== JSON.stringify(row.capabilities)
+      || JSON.stringify(old.acceptance_scenarios) !== JSON.stringify(row.acceptance_scenarios))))
   const added = next.requirements.filter(row => !previous.requirements.some(old => old.id === row.id))
   const removedConstraints = [...(previous.constraints ?? []), ...previous.out_of_scope].filter(text => ![...(next.constraints ?? []), ...next.out_of_scope].includes(text))
+  const intentChanged = JSON.stringify(previous.requirements_model) !== JSON.stringify(next.requirements_model)
   if (previous.lean_brief) emit('message_delta', { text: [
+    ...(intentChanged ? ['调整：核心体验、规则或来源关联已变化，请核对本轮完整说明。'] : []),
     ...added.map(row => `新增：${row.description}`), ...changed.map(row => `调整：${row.description}`),
     ...removed.map(row => `移除：${row.description}`), ...removedConstraints.map(text => `取消限制：${text}`),
   ].join('\n') || '任务说明已更新，请核对。' })
@@ -55,7 +60,7 @@ export function publishLeanScope(brief: PrdBackplane, emit: Emit, suggestions: L
 export function leanScopeDecision(brief: PrdBackplane, suggestions: LeanScopeSuggestion[] = []): Record<string, unknown> {
   return { kind: 'lean_scope', title: '确认这次要做的内容', summary: renderLeanBrief(brief),
     scope: { goal: brief.positioning, features: brief.requirements.map(row => ({ id: row.id, description: row.description, expected: brief.acceptance[row.id] ?? '' })),
-      constraints: brief.constraints ?? [], out_of_scope: brief.out_of_scope,
+      design_assets: brief.lean_brief?.design_assets, intent: brief.requirements_model && { experience: brief.requirements_model.experience, rules: brief.requirements_model.rules }, constraints: brief.constraints ?? [], out_of_scope: brief.out_of_scope,
       ...(suggestions.length ? { suggestions } : {}),
       usage: brief.lean_brief?.delivery === 'browser' ? '在本机浏览器使用' : brief.lean_brief?.delivery === 'command' ? '通过命令行使用' : '在桌面窗口使用' },
     questions: [{ id: `lean_confirm:${prdScopeFingerprint(brief)}`, label: '按这份做', description: '确认目标和范围' },

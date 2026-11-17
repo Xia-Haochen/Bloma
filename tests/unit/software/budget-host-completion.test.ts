@@ -1,19 +1,32 @@
+import {readQualityLedger} from '../../../main/software/quality-ledger'
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { beforeEach, afterEach, it, expect, vi } from 'vitest'
-import { createProject, findProject } from '../../../main/project/project-service'
+import { findProject } from '../../../main/project/project-service'
+import { createEngineeringProject as createProject } from '../../fixtures/engineering-project'
 import { parseLeanBrief } from '../../../main/guide/lean-brief'
 import { readPrdBackplane, markPrdUserConfirmed } from '../../../main/project/prd-store'
 import { syncDocuments } from '../../../main/project/document-sync'
 import { enterDesktopLine } from '../../../main/desktop/desktop-route'
 import { activeSoftwareRelease } from '../../../main/software/release-store'
 import type { SDKQuery } from '../../../main/orchestration/stages/orchestration-contracts'
-import { MonetaryBudgetError } from '../../../main/platform/llm/monetary-budget'
+import { MonetaryBudgetError, readMonetaryBudget, reserveModelRequest } from '../../../main/platform/llm/monetary-budget'
+import { currentFundedExecutionWindow, withFundedExecutionWindow } from '../../../main/software/execution-limits'
+import { TRIAL_MINIMUM_OUTPUT_TOKENS, trialOutputCap } from '../../../scripts/trial-output-cap'
 import { debugWorkspace } from '../../../main/software/debug-workspace'
 import { softwareVerificationFingerprint } from '../../../main/desktop/verification-fingerprint'
 import { buildLeanCliTool } from '../../../main/desktop/lean-cli-check'
 import { createToolState } from '../../../main/agent/loop/agent-loop'
+import { readSoftwareRunState } from '../../../main/software/run-state'
+const advisory = vi.hoisted(()=>({enabled:false}))
+vi.mock('../../../main/software/engineering-partner',async original=>{
+  const actual=await original<typeof import('../../../main/software/engineering-partner')>()
+  return {...actual,createEngineeringPartner:(...args:Parameters<typeof actual.createEngineeringPartner>)=>{
+    const partner=actual.createEngineeringPartner(...args)
+    return {...partner,take:(ctx:Parameters<typeof partner.take>[0])=>advisory.enabled?'Optional documentation suggestion':partner.take(ctx),isObserving:()=>advisory.enabled||partner.isObserving()}
+  }}
+})
 
 let home: string, previous: string | undefined
 beforeEach(() => { previous = process.env.PROMA_HOME; home = mkdtempSync(join(tmpdir(), 'bloma-budget-host-')); process.env.PROMA_HOME = home })
@@ -52,7 +65,7 @@ it.each([{ output: 5, rules: true, cancel: false, passed: true }, { output: 999,
         // This fixture does not claim a real GUI run or business PASS.
         writeFileSync(join(debugWorkspace(project.project_id, 's'), 'checkpoint.json'), JSON.stringify({
           id: '00000000-0000-0000-0000-000000000001', projectId: project.project_id, sessionId: 's', version: 1,
-          state: 'closed', source: softwareVerificationFingerprint(project.root_path),
+          state: 'closed', source: softwareVerificationFingerprint(project.root_path), observations: [], steps: [],
         }))
         writeFileSync(join(project.root_path, 'app.cjs'), 'console.log(5) // later unobserved edit')
       }
@@ -71,5 +84,107 @@ it.each([{ output: 5, rules: true, cancel: false, passed: true }, { output: 999,
   expect(Boolean(await activeSoftwareRelease(project.project_id))).toBe(false)
   if (passed) expect(findProject(project.project_id).desktop_blocked?.note).toContain('QUALITY_REVIEW_REQUIRED')
   if (cancel) expect(existsSync(join(project.root_path, '00_VERIFY/launch-smoke.json'))).toBe(false)
+  if (!cancel) expect(readSoftwareRunState(project.project_id)).toMatchObject({
+    status: 'blocked', stop_code: monetary ? 'MONETARY_BUDGET_EXHAUSTED' : 'REQUEST_BUDGET_EXHAUSTED',
+  })
   if (monetary && !rules) expect(findProject(project.project_id).desktop_blocked?.note).toContain('上次宿主观察之后的修改')
 }, 60000)
+
+it.each(['advice','peer','funded-peer','parked-peer'])('hands a verified candidate to C despite optional advice without another maker request (%s)',async(mode)=>{
+ const realPeer=mode!=='advice', funded=mode==='funded-peer'||mode==='parked-peer'
+ const project=createProject({request_id:'create',mode:'quick'},{workflowVersion:'software-v1'})
+ const parsed=parseLeanBrief(JSON.stringify({action:'brief',goal:'Print 5',ui:'none',delivery:'command',requirements:[{description:'输出5',expected:'输出5'}]}),{projectId:project.project_id,sessionId:'s',source:'输出5',previous:readPrdBackplane(project.project_id),software:true})!
+ if(parsed.action!=='brief')throw Error('fixture')
+ syncDocuments({request_id:'sync',project_id:project.project_id,session_id:'s',checkpoint:'requirement_confirmed'},parsed.brief);markPrdUserConfirmed(project.project_id)
+ writeFileSync(join(project.root_path,'app.cjs'),'console.log(5)')
+ writeFileSync(join(project.root_path,'ARCHITECTURE.md'),'Single CLI prints five. No persistence or shared resources. Normal entry tested.')
+ writeFileSync(join(project.root_path,'LAUNCH.json'),JSON.stringify({schema_version:2,command:['node','app.cjs'],mode:'command'}))
+ await buildLeanCliTool(project.project_id).execute({expectations:{'F-001':'输出5'},cases:[{name:'five',covers:['F-001'],args:[],stdout:'5',exit_code:0}]},{projectId:project.project_id,sessionId:'s',requestId:'r',signal:AbortSignal.timeout(10000),state:createToolState()})
+ let maker=0,review=0,peer=0
+ const policy=join(home,'policy.json'),url='https://test.invalid/v1/messages'
+ const rate={host:'test.invalid',model:'M1',cap_rmb:10,context_tokens:1048576,input_rmb_per_million:2,output_rmb_per_million:8,cache_rmb_per_million:.04}
+ const env:Record<string,string>=funded?{ANTHROPIC_BASE_URL:url,ANTHROPIC_MODEL:'M1'}:{}
+ if(funded){
+  writeFileSync(policy,JSON.stringify({version:1,models:[rate]}))
+  vi.stubEnv('BLOMA_MONETARY_POLICY',policy)
+  vi.stubEnv('BLOMA_MONETARY_EPOCH_DIR',join(home,'epochs'))
+ }
+ const use=(id:string,name:string,input:Record<string,unknown>)=>({type:'tool_use' as const,id,name,input})
+ const query:SDKQuery=async function*(_prompt,options){
+  const usage={input_tokens:10,output_tokens:10}
+  if(funded){
+   const affordable=trialOutputCap(currentFundedExecutionWindow()!.remainingRmb,options.maxTokens!,rate)
+   const body=JSON.stringify({model:'M1',max_tokens:Math.min(affordable,384000)})
+   options.requestGuard?.({url,body})
+   const reservation=reserveModelRequest(url,body,policy)!
+   options.onTransportAttempt?.('started')
+   reservation.settle(usage,true)
+  }
+  const isMaker=options.sessionId==='s'
+  if(isMaker&&++maker>1)throw Error('OPTIONAL_ADVICE_STARVED_CLOSEOUT')
+  if(!isMaker&&!readQualityLedger(project.project_id).reviews.some(r=>r.child===options.sessionId)){peer++;yield{type:'assistant',message:{role:'assistant',content:[{type:'text',text:'Optional documentation suggestion; consider more examples.'}]}};yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}};return}
+  if(!isMaker)review++
+  yield{type:'assistant',message:{role:'assistant',content:isMaker?[use('verify','verify_app',{})]:[use('materials','read_quality_review',{}),use('source','read_file',{path:'app.cjs'}),use('submit','submit_quality_findings',{findings:[],engineering:{status:'supported',evidence:'Single CLI, no state or resources.',limitations:'CLI fixture only'}})]}}
+  yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
+ }
+ advisory.enabled=!realPeer
+ if(realPeer)vi.stubEnv('BLOMA_ENGINEERING_PARTNER','1')
+ try{
+  const run=()=>enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'r',content:'实现输出5',signal:AbortSignal.timeout(90000),maxTokens:funded?394748:4096},query,env, {publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
+  // The engineering child has a 16,384-token output cap. Its request plus
+  // one trial-sized review requires 4,341,760 micro-RMB at these rates.
+  const deadlineAt=Date.now()+90*60_000
+  const initialRmb=mode==='parked-peer'?4.341759:9.736795
+  if(funded)await withFundedExecutionWindow(()=>({remainingRmb:initialRmb-(existsSync(policy+'.state.json')?readMonetaryBudget(policy)[0].accounted_upper_rmb:0),
+   remainingRequests:4096,outputRmbPerMillion:8,deadlineAt,minimumOutputTokens:TRIAL_MINIMUM_OUTPUT_TOKENS}),run)
+  else await run()
+  expect(maker).toBe(1);expect(review).toBe(1);expect(peer).toBe(realPeer&&mode!=='parked-peer'?1:0)
+  if(funded)expect(readMonetaryBudget(policy)[0]).toMatchObject({cap_rmb:10,accounted_upper_rmb:(maker+review+peer)/10000,reported_peak_rmb:(maker+review+peer)/10000})
+  expect(findProject(project.project_id).desktop_phase,findProject(project.project_id).desktop_blocked?.note).toBe('delivered')
+  expect(await activeSoftwareRelease(project.project_id)).toBeTruthy()
+ }finally{advisory.enabled=false}
+},120000)
+
+
+it.each([1,3])('closes %s unbound suspicions through ordinary maker tools, one independent binding review, execution and final C',async(count)=>{
+ const project=createProject({request_id:'create',mode:'quick'},{workflowVersion:'software-v1'})
+ const expected='返回两个输入数之和'
+ const parsed=parseLeanBrief(JSON.stringify({action:'brief',goal:'求和',ui:'none',delivery:'command',requirements:[{description:'两个数求和',expected}]}),{projectId:project.project_id,sessionId:'s',source:'求和',previous:readPrdBackplane(project.project_id),software:true})!
+ if(parsed.action!=='brief')throw Error('fixture')
+ syncDocuments({request_id:'sync',project_id:project.project_id,session_id:'s',checkpoint:'requirement_confirmed'},parsed.brief);markPrdUserConfirmed(project.project_id)
+ writeFileSync(join(project.root_path,'app.cjs'),'console.log(5)')
+ writeFileSync(join(project.root_path,'ARCHITECTURE.md'),'CLI owns numeric parsing and sum output. No shared state or persistence.')
+ writeFileSync(join(project.root_path,'LAUNCH.json'),JSON.stringify({schema_version:2,command:['node','app.cjs'],mode:'command'}))
+ const cases=[{name:'sum',covers:['F-001'],args:['2','3'],stdout:'5',exit_code:0}]
+ await buildLeanCliTool(project.project_id).execute({expectations:{'F-001':expected},cases},{projectId:project.project_id,sessionId:'s',requestId:'r',signal:AbortSignal.timeout(10000),state:createToolState()})
+ let maker=0,reviews=0
+ const use=(id:string,name:string,input:Record<string,unknown>)=>({type:'tool_use' as const,id,name,input})
+ const query:SDKQuery=async function*(_prompt,options){
+  let content
+  if(options.sessionId==='s'){
+   maker++
+   if(maker===1||maker===3)content=[use('verify'+maker,'verify_app',{})]
+   else if(maker===2)content=[use('read-before-fix','read_file',{path:'app.cjs'}),use('fix','edit_file',{path:'app.cjs',old_string:'console.log(5)',new_string:'console.log(Number(process.argv[2])+Number(process.argv[3]))'}),use('cases','register_cli_check',{expectations:{'F-001':expected},cases:[...cases,{name:'other-inputs',covers:['F-001'],args:['3','4'],stdout:'7',exit_code:0}]})]
+   else {console.info('UNEXPECTED_MAKER_CONTEXT',JSON.stringify(options.messages?.slice(-3)).slice(-10000));console.info('CHAIN_LEDGER',JSON.stringify(readQualityLedger(project.project_id)).slice(-6000));throw Error('UNEXPECTED_MAKER_REQUEST')}
+  }else{
+   reviews++
+   const findings=readQualityLedger(project.project_id).findings
+   content=[use('materials'+reviews,'read_quality_review',{}),use('source'+reviews,'read_file',{path:'app.cjs'}),use('submit'+reviews,'submit_quality_findings',{findings:reviews===1?Array.from({length:count},(_,i)=>({requirement:'F-001',expected_source:expected,category:'data',severity:'high',location:'app.cjs report '+i,trigger:'输入3和4',evidence:'实现固定输出5',reproduction:'正常CLI入口传3和4，预期7',unknowns:'该输入未执行',kind:'suspected'})):[],...(reviews===2?{resolutions:findings.map(finding=>({finding_id:finding.id,case_name:'other-inputs',evidence:'逐条独立核对已登记other-inputs传3和4并断言7，保留原sum。'}))}:{}),engineering:{status:'supported',evidence:'CLI parsing and output have one owner.',limitations:'CLI only'}})]
+  }
+  yield{type:'assistant',message:{role:'assistant',content}}
+  yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
+ }
+ advisory.enabled=true
+ try{
+  await enterDesktopLine({projectId:project.project_id,sessionId:'s',requestId:'r',content:'实现求和',signal:AbortSignal.timeout(180000),maxTokens:4096},query,{}, {publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
+  const ledger=readQualityLedger(project.project_id)
+  expect(maker).toBe(3);expect(reviews).toBe(3)
+  expect(ledger.findings).toHaveLength(count)
+  expect(ledger.findings.every(f=>f.disposition==='not_reproduced'&&f.checks.length===1)).toBe(true)
+  expect(ledger.findings.every(f=>f.checks[0].grounded&&f.checks[0].outcome==='passed'&&f.checks[0].case_name==='other-inputs')).toBe(true)
+  expect(new Set(ledger.findings.map(f=>f.checks[0].candidate)).size).toBe(1)
+  expect(ledger.reviews.map(r=>r.purpose)).toEqual(['candidate','binding','candidate'])
+  expect(findProject(project.project_id).desktop_phase,findProject(project.project_id).desktop_blocked?.note).toBe('delivered')
+  expect(await activeSoftwareRelease(project.project_id)).toBeTruthy()
+ }finally{advisory.enabled=false}
+},210000)

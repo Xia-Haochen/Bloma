@@ -1,0 +1,78 @@
+{
+  "at": "2026-11-16T06:34:21.942Z",
+  "scope": "oracle mutation controls and real controlled HTTP service; excludes application UI, physical microphone and live-model semantics",
+  "results": [
+    {
+      "name": "equipment positive numeric reference",
+      "status": "passed"
+    },
+    {
+      "name": "equipment inventory corruption rejected",
+      "status": "passed"
+    },
+    {
+      "name": "equipment overdue misassociation rejected",
+      "status": "passed"
+    },
+    {
+      "name": "equipment restore corruption rejected",
+      "status": "passed"
+    },
+    {
+      "name": "documents positive fact reference",
+      "status": "passed"
+    },
+    {
+      "name": "documents lost duplicate-name file rejected",
+      "status": "passed"
+    },
+    {
+      "name": "documents wrong page rejected",
+      "status": "passed"
+    },
+    {
+      "name": "documents input mutation rejected",
+      "status": "passed"
+    },
+    {
+      "name": "documents unselected budget leakage rejected",
+      "status": "passed"
+    },
+    {
+      "name": "voice positive observation reference",
+      "status": "passed"
+    },
+    {
+      "name": "voice truncated audio rejected",
+      "status": "passed"
+    },
+    {
+      "name": "voice muted audio rejected",
+      "status": "passed"
+    },
+    {
+      "name": "voice forgotten context rejected",
+      "status": "passed"
+    },
+    {
+      "name": "controlled service actual HTTP success",
+      "status": "passed"
+    },
+    {
+      "name": "controlled service actual HTTP auth failure",
+      "status": "passed"
+    },
+    {
+      "name": "controlled service one-shot failure and recovery",
+      "status": "passed"
+    },
+    {
+      "name": "controlled service SSE completion",
+      "status": "passed"
+    },
+    {
+      "name": "service log omits credentials",
+      "status": "passed"
+    }
+  ]
+}

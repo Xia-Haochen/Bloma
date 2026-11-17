@@ -29,7 +29,9 @@ export const SketchViewport: React.FC<{ src?: string; html?: string; readOnly?: 
     const element = surface.current
     if (!element) return
     const measure = () => {
-      const width = element.clientWidth - 24, height = element.clientHeight - 24
+      const style = getComputedStyle(element)
+      const width = element.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0)
+      const height = element.clientHeight - (parseFloat(style.paddingTop) || 0) - (parseFloat(style.paddingBottom) || 0)
       if (width > 0 && height > 0) setSize({ width, height })
     }
     measure()

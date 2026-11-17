@@ -1,3 +1,6 @@
+import {applyApprovedTestCorrections,testCorrectionView} from './test-corrections';
+import { assertStageContractsRetained } from './project-stages';
+import {stageContractChanges} from './stage-contracts';
 import { existsSync, readFileSync } from 'node:fs';
 import { freezeNativeGuiTests, nativeTestContractChanges, NativeTestContractError } from './native-gui-tests';
 import { findProject, updateProject } from '../project/project-service';
@@ -19,9 +22,10 @@ export function registerNativeGuiTests(projectId: string, script: string, restar
     if (existsSync(guiSuitePath(projectId))) {
         const bytes=readFileSync(guiSuitePath(projectId)),previous = parseGuiSuite(JSON.parse(bytes.toString('utf8')));
         const repairable=Boolean(previous.native_tests)&&canRepairUnexecutedNativePlan(projectId,createHash('sha256').update(bytes).digest('hex'))
-        const changes = previous.native_tests ? nativeTestContractChanges(previous.native_tests, native_tests) : ['existing-action-suite'];
-        if (previous.scope_hash === scope && changes.length && !repairable) throw new NativeTestContractError(changes);
+        const changes = previous.native_tests ? stageContractChanges(projectId,project.root_path,previous.native_tests,native_tests) : ['existing-action-suite'];
+        if (previous.scope_hash === scope && changes.length && !repairable) throw new NativeTestContractError(changes,previous.native_tests);
     }
+    assertStageContractsRetained(projectId, native_tests);
     assertRetainedSoftwareBehavior(projectId, 'gui', suite);
     // Immutable identity pair records every accepted adapter revision. No model
     // can use the audit record to replace the frozen business contract.
@@ -34,4 +38,21 @@ export function registerNativeGuiTests(projectId: string, script: string, restar
     installGuiAcceptanceSuite(projectId, suite);
     updateProject(projectId, { gui_acceptance: { status: 'sealed', scope_hash: scope } });
     return suite;
+}
+
+/** Recovery also refreshes the existing formal binding, including retry after
+ * bytes were applied but registration was interrupted. It never invents a suite. */
+export function applyApprovedNativeCorrections(projectId:string,signal?:AbortSignal){
+  const count=applyApprovedTestCorrections(projectId,signal)
+  if(!existsSync(guiSuitePath(projectId)))return count>0
+  const native=parseGuiSuite(JSON.parse(readFileSync(guiSuitePath(projectId),'utf8'))).native_tests
+  if(!native)return count>0
+  const revisions=testCorrectionView(projectId).proposals.filter(p=>p.status==='approved'&&p.applied_at)
+  const latest=new Map(revisions.map(p=>[p.file,p.new_hash]))
+  const stale=revisions.some(p=>p.transaction&&p.contract_digest===native.digest&&p.replacement_digest!==native.digest)||native.files.some(file=>{
+    const path=native.layout==='project'?file.path:native.directory+'/'+file.path
+    return latest.has(path)&&file.sha256!==latest.get(path)&&revisions.some(p=>p.file===path&&p.old_hash===file.sha256)
+  })
+  if(stale){signal?.throwIfAborted();registerNativeGuiTests(projectId,native.layout==='project'?native.entry:native.directory+'/'+native.entry,native.restart)}
+  return count>0||stale
 }

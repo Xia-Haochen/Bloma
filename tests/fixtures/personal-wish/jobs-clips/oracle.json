@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "case_id": "jobs-clips",
+  "core_experience": "实际媒体队列的部分失败与显式恢复",
+  "unacceptable_substitute": "只保存时间点而不处理录像",
+  "source_quote": "我导入自己的练习录像，边看边按键标记失误，稍后按标记截出前后片段，排队处理。某段失败别耽误其他段，停止后别再生成新文件，重开让我决定哪些继续。",
+  "change_quote": "同一段录像改了名字，再次导入不要重复跑完已经完成的片段。",
+  "dimensions": [
+    "intent",
+    "behavior",
+    "provenance",
+    "change_recovery",
+    "ui",
+    "delivery"
+  ],
+  "required_evidence": [
+    "actual_interaction",
+    "source_and_scope_identity",
+    "restart_readback",
+    "final_project_state"
+  ],
+  "outcomes": [
+    "passed",
+    "failed",
+    "unverified",
+    "not_applicable"
+  ],
+  "status": "authored_not_executed",
+  "independent": false
+}

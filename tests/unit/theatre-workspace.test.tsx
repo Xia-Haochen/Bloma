@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react'
 import { createStore, Provider } from 'jotai'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatPanel } from '../../renderer/components/ChatPanel'
 import { WorkspaceShell } from '../../renderer/components/WorkspaceShell'
@@ -23,7 +23,7 @@ describe('软件剧场的完整性', () => {
     expect(screen.getByRole('heading', { name: '确认需求' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '按这份做' })); expect(select).toHaveBeenCalledTimes(1)
   })
-  it('the footer keeps the real sketch confirmation callback and disables it only while confirming', () => {
+  it('the action-first region keeps the sole real sketch confirmation callback and disables it while confirming', () => {
     const store = createStore()
     store.set(currentProjectAtom, { project_id: 'footer-project', name: '测试草图', mode: 'quick' } as Project)
     store.set(workflowStageAtom, 'sketch_ready')
@@ -31,7 +31,7 @@ describe('软件剧场的完整性', () => {
     const view = render(<Provider store={store}><WorkspaceShell previewUrl="bloma-file://footer-project/00_UX/ux-sketch.html" onConfirmSketch={confirm} /></Provider>)
     const button = document.querySelector('[data-ai-id="confirm-sketch-button"]') as HTMLButtonElement
     expect(document.querySelectorAll('[data-ai-id="confirm-sketch-button"]')).toHaveLength(1)
-    expect(button.closest('.studio-footer')).toBeTruthy()
+    expect(button.closest('.action-guidance')).toBeTruthy()
     fireEvent.click(button)
     expect(confirm).toHaveBeenCalledTimes(1)
     view.rerender(<Provider store={store}><WorkspaceShell previewUrl="bloma-file://footer-project/00_UX/ux-sketch.html" onConfirmSketch={confirm} confirming /></Provider>)
@@ -51,14 +51,14 @@ describe('软件剧场的完整性', () => {
     render(<Provider store={store}><ChatPanel presentation="theatre" /></Provider>)
     const input=screen.getByRole('textbox')
     fireEvent.change(input,{target:{value:'不能丢失的草稿'}})
-    expect(screen.getByText('最开始的需求')).toBeTruthy()
+    expect(screen.queryByText('最开始的需求')).toBeNull()
     expect(screen.getByRole('alert').textContent).toContain('尚未验证')
     expect(document.querySelector('[data-ai-id="compact-reply"]')).toBeNull()
     expect(document.body.textContent).toContain('未验证的窗口关闭行为仍需确认')
-    fireEvent.click(screen.getByRole('button',{name:/完整对话/}))
-    expect(screen.queryByText('最开始的需求')).toBeNull()
-    fireEvent.click(screen.getByRole('button',{name:/完整对话/}))
+    fireEvent.click(screen.getByRole('button',{name:'历史'}))
     expect(screen.getByText('最开始的需求')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button',{name:'返回当前'}))
+    expect(screen.queryByText('最开始的需求')).toBeNull()
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('不能丢失的草稿')
     expect(screen.getByRole('textbox')).toBe(input)
   })
@@ -69,4 +69,50 @@ describe('软件剧场的完整性', () => {
     expect(workspaceScene({...project,desktop_blocked:{reason:'user-stop',at:'now'}},'clarifying','desktop-implement',false,true).title).toBe('制作')
     expect(workspaceScene({...project,status:'completed'},'completed','delivered',false).title).toBe('你的软件')
   })
+})
+
+it('Escape closes only the topmost inspection surface and preserves the input', () => {
+  const store = createStore()
+  store.set(currentProjectAtom, { project_id: 'escape-p', name: '笔记', mode: 'quick' } as Project)
+  render(<Provider store={store}><WorkspaceShell /></Provider>)
+  const input = screen.getByRole('textbox', { name: '消息输入' })
+  fireEvent.change(input, { target: { value: '保留草稿' } })
+  const docs = screen.getByRole('button', { name: /^文档$/ })
+  docs.focus(); fireEvent.click(docs)
+  fireEvent.click(screen.getByRole('button', { name: /需求：/ }))
+  fireEvent.keyDown(document, { key: 'Escape' })
+  expect(screen.queryByRole('dialog')).toBeNull()
+  expect(screen.getByRole('complementary', { name: '项目文档' })).toBeTruthy()
+  fireEvent.keyDown(document, { key: 'Escape' })
+  expect(screen.queryByRole('complementary', { name: '项目资料面板' })).toBeNull()
+  expect(document.activeElement).toBe(docs)
+  expect((input as HTMLTextAreaElement).value).toBe('保留草稿')
+})
+
+it('opens the microphone test from the main acceptance action, including from a sketch view', async () => {
+  const store = createStore()
+  store.set(currentProjectAtom, { project_id: 'mic-project', name: '语音聊天', mode: 'quick' } as Project)
+  store.set(workflowStageAtom, 'testing')
+  const send = vi.fn()
+  const assistedAcceptance = vi.fn().mockResolvedValue({
+    ok: true, data: { candidate_id: 'a'.repeat(64), phase: 'available', detail: '需要实体麦克风实测。' },
+  })
+  window.electronAPI = { projectDeliverables: {
+    assistedAcceptance,
+    get: vi.fn().mockResolvedValue({ ok: true, data: { status_view: {
+      execution: { status: 'waiting_user', label: '等待实测' },
+      verification: { status: 'last_unverified', label: '待实测' },
+      goal: { status: 'not_delivered', label: '尚未交付' },
+      guidance: { headline: '完成麦克风实测', detail: '选择设备并录音。', action: 'assisted_acceptance', action_label: '继续验收' },
+    }, launch: { declared: false }, files: [] } }),
+  } } as unknown as typeof window.electronAPI
+  render(<Provider store={store}><WorkspaceShell previewUrl="bloma-file://mic-project/sketch.html" onSendMessage={send} /></Provider>)
+  const guidance = within(screen.getByRole('region', { name: '现在该做什么' }))
+  fireEvent.click(await guidance.findByRole('button', { name: '继续验收' }))
+  const heading = await screen.findByRole('heading', { name: '麦克风实测' })
+  await waitFor(() => expect(document.activeElement).toBe(heading))
+  expect(screen.getByRole('button', { name: '准备麦克风测试' })).toBeTruthy()
+  expect(screen.queryByRole('heading', { name: '工作记录' })).toBeNull()
+  expect(assistedAcceptance).toHaveBeenCalledWith(expect.objectContaining({ project_id: 'mic-project', action: 'query' }))
+  expect(send).not.toHaveBeenCalled()
 })

@@ -1,0 +1,4 @@
+{
+  "after": "first_usable_candidate",
+  "request": "撤回一张白板图片，所有依赖它的结论要明确失效，不要装作没变化。"
+}

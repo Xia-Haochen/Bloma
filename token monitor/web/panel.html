@@ -11,8 +11,20 @@
     </div>
     <form id="filters" class="panel filters">
       <label class="project">项目 <select id="project"><option value="">全部项目</option></select></label>
-      <label>开始时间 <input id="start" type="datetime-local"></label>
-      <label>结束时间 <input id="end" type="datetime-local"></label>
+      <div class="date-filter">
+        <label for="start">开始时间</label>
+        <span class="date-field">
+          <input id="start" type="datetime-local">
+          <span class="date-placeholder" aria-hidden="true">年/月/日 时:分</span>
+        </span>
+      </div>
+      <div class="date-filter">
+        <label for="end">结束时间</label>
+        <span class="date-field">
+          <input id="end" type="datetime-local">
+          <span class="date-placeholder" aria-hidden="true">年/月/日 时:分</span>
+        </span>
+      </div>
       <button class="button primary" type="submit">查询用量</button>
       <button class="button plain" id="clear-filters" type="button">清除筛选</button>
     </form>

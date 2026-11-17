@@ -1,7 +1,7 @@
 import type { PrdBackplane } from '../model/prd-backplane'
 import { requirementCapabilities, type RequirementCapability } from '../model/requirement-capabilities'
 import type { CoreVerificationResult, CoreVerificationStatus } from './core-verification'
-import { hasCurrentMicrophoneEvidence, runHostSpeechProbe, type SpeechVerificationSpec } from './speech-verification'
+import { hasReusableMicrophoneEvidence, runHostSpeechProbe, type SpeechVerificationSpec } from './speech-verification'
 import { runHostPrefixRenameProbe } from './file-verification'
 import { runHostLlmProbe, type LlmVerificationSpec } from './llm-verification'
 
@@ -9,6 +9,7 @@ export interface CapabilityContext {
   projectId: string; root: string; backplane: PrdBackplane; manifest: Record<string, unknown>; signal?: AbortSignal
 }
 export interface CapabilityOutcome {
+  pending_user_checks?: Array<{kind:'microphone';feature:string}>
   verifier_id?: string
   status: CoreVerificationStatus
   missing: string[]
@@ -28,17 +29,21 @@ const speechVerifier: CapabilityVerifier = { id: 'speech', async run(ctx) {
   const spec = ctx.manifest.speech as SpeechVerificationSpec | undefined
   const result = spec ? await runHostSpeechProbe({ projectId: ctx.projectId, root: ctx.root, speech: spec, signal: ctx.signal }) : undefined
   const status = result?.status ?? 'unverified', missing: string[] = []
+  const pending_user_checks: NonNullable<CapabilityOutcome['pending_user_checks']> = []
+  const microphone = spec && required.some(item => requirementCapabilities(item).has('microphone'))
+    ? await hasReusableMicrophoneEvidence(ctx.projectId,ctx.root,spec,ctx.signal) : false
   if (!spec) missing.push('缺少 ASR 入口登记 speech，须登记产品实际使用的模型构造和转写方法')
   const features = Object.fromEntries(required.map(item => {
     let state: CoreVerificationStatus = status
     if (status !== 'passed') missing.push(`${item.id}: 宿主真实音频探针未通过，文本模拟不可替代${result?.error ? `（${result.error}）` : ''}`)
-    if (spec && requirementCapabilities(item).has('microphone') && !hasCurrentMicrophoneEvidence(ctx.projectId, ctx.root, spec)) {
+    if (spec && requirementCapabilities(item).has('microphone') && !microphone) {
+      pending_user_checks.push({kind:'microphone',feature:item.id})
       missing.push(`${item.id}: 真实采集链路待授权实测`)
       state = combineVerification(state, 'unverified')
     }
     return [item.id, state]
   }))
-  return { status, missing, features, report: result ? { speech: result } : undefined }
+  return { status, missing, features, pending_user_checks, report: result ? { speech: result } : undefined }
 } }
 const fileVerifier: CapabilityVerifier = { id: 'prefix_rename', async run(ctx) {
   const required = items(ctx, 'prefix_rename')
@@ -52,11 +57,15 @@ const llmVerifier: CapabilityVerifier = { id: 'llm', async run(ctx) {
   const needed = required.length > 0 || !!ctx.backplane.shape && !['none', 'preview'].includes(ctx.backplane.shape.llm_role)
   if (!needed && !spec) return
   const ids = new Set(ctx.backplane.requirements.map(item => item.id))
-  if (spec && (!Array.isArray(spec.covers) || !spec.covers.length || spec.covers.some(id => !ids.has(id)) || required.some(item => !spec.covers.includes(item.id)))) {
+  // The transport probe is shared. The host already knows capability features
+  // from the confirmed requirements, so the maker need not duplicate that list.
+  if (spec?.covers !== undefined && (!Array.isArray(spec.covers) || spec.covers.some(id => !ids.has(id)))) {
     const declared = Array.isArray(spec.covers) ? spec.covers.filter(id => typeof id === 'string' && /^F-\d+$/.test(id)) : []
-    throw Error(`MODEL_COVERAGE_INVALID: 模型入口覆盖声明缺失、悬空或漏掉模型需求 ${JSON.stringify({ required: required.map(item => item.id), declared,
+    const affected = new Set([...required.map(item=>item.id),...declared.filter(id=>ids.has(id))])
+    const detail = `MODEL_COVERAGE_INVALID: 模型入口覆盖声明包含未知需求或格式无效 ${JSON.stringify({ required: required.map(item => item.id), declared,
       missing: required.filter(item => !declared.includes(item.id)).map(item => item.id), unknown: declared.filter(id => !ids.has(id)),
-      next: '在CORE_CHECK.json的llm.covers登记实际客户端覆盖的对应需求；入口必须由产品实际使用，不要更改需求或添加探针专用替身。' })}`)
+      next: 'llm.covers可省略，由宿主关联确认需求。若填写，仅使用当前需求编号；入口须由产品实际使用。' })}`
+    return {status:'unverified', missing:[detail],features:Object.fromEntries([...affected].map(id=>[id,'unverified' as const]))}
   }
   const result = spec ? await runHostLlmProbe(ctx.root, spec, undefined, ctx.signal, ctx.projectId) : undefined
   const status = result?.status ?? 'unverified'

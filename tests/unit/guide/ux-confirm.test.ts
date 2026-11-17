@@ -143,6 +143,7 @@ describe('runUxConfirmGate（发门）', () => {
     expect(types).toContain('user_decision_required')
     const card = events.find((e) => e.type === 'user_decision_required')
     expect(card?.payload.kind).toBe('ux_confirm')
+    expect(card?.payload.observation_required).toBe(true)
     expect((card?.payload.questions as Array<{ id: string }>).map((q) => q.id)).toContain(UX_CONFIRM_OPTION_CONFIRM)
     // 预览 URL 原样透传
     expect(events.find((e) => e.type === 'ux_sketch_ready')?.payload.preview_url).toContain('/00_UX/ux-sketch.html')
@@ -159,6 +160,7 @@ describe('runUxConfirmGate（发门）', () => {
     expect(events.some((e) => e.type === 'message_delta' && String(e.payload.text).includes('失败'))).toBe(true)
     const questions = events.find(e => e.type === 'user_decision_required')!.payload.questions as Array<{ id: string }>
     expect(questions.map(q => q.id)).toContain(UX_CONFIRM_OPTION_RETRY)
+    expect(events.find(e=>e.type==='user_decision_required')?.payload.observation_required).toBe(false)
     expect(questions.map(q => q.id)).not.toContain(UX_CONFIRM_OPTION_CONFIRM)
     expect(events.at(-1)?.payload.subtype).toBe('incomplete')
     await resumeUxConfirmConfirmed(cardInput(UX_CONFIRM_OPTION_CONFIRM))

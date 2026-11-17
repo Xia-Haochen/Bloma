@@ -1,3 +1,4 @@
+import {recordProjectActivity,readProjectActivity} from '../../../main/software/project-activity'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -53,4 +54,13 @@ it('keeps read/CAS protection while allowing software repair edits under the sha
     expect(edited.isError, edited.output).not.toBe(true); expect(edited.budgetExhausted).not.toBe(true)
   }
   expect(readFileSync(join(root, 'repair.txt'), 'utf8')).toBe('revision-5')
+})
+
+it('preserves structured tool output and activity receipts when strings contain cookies and escaped JSON',async()=>{
+ writeFileSync(join(project.root_path,'package.json'),JSON.stringify({scripts:{build:'echo Cookie: session=fixture-secret\nnode build.js'}}))
+ const output=(await buildRepositoryContextTool(project.project_id).execute({mode:'overview'},ctx())).output
+ expect(()=>JSON.parse(output)).not.toThrow();expect(JSON.parse(output).scripts.build).toContain('node build.js');expect(output).not.toContain('fixture-secret')
+ expect(recordProjectActivity(project.project_id,'diagnostic',{message:'Cookie: session=fixture-secret\nnext line',retained:{value:42}})).toBe(true)
+ const event=readProjectActivity(project.project_id).events.at(-1)!
+ expect(event.data).toEqual({message:'Cookie: [REDACTED]\nnext line',retained:{value:42}})
 })

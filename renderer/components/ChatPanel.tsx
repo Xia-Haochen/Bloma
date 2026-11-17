@@ -1,3 +1,6 @@
+import { readToolFeedback, type ToolFeedback } from '../../shared/tool-feedback'
+import { safeToolDisplay } from '../../shared/tool-display'
+import { productionNotice } from '../lib/production-notice'
 import { isModernWorkflowVersion } from '../../shared/workflow-version'
 import React from 'react'
 import { atom, useAtomValue } from 'jotai'
@@ -17,7 +20,6 @@ import { ThinkingIndicator, type ThinkingPhase } from './ThinkingIndicator'
 import { Markdown } from './Markdown'
 import { CompactReply } from './CompactReply'
 import { MessageSquare, IconAlertTriangle, IconSettings, Image, Copy, Conversation, Check, GitBranch } from './icons'
-import { StudioFumoAvatar } from './StudioCompanion'
 import { ReplyCharacter } from './ReplyCharacter'
 import { copyText } from '../lib/copy-text'
 import { isInternalMessage, assistantDisplayText } from '../../shared/message-presentation'
@@ -42,6 +44,7 @@ import { DESKTOP_PHASE_ACTION_LABELS } from '../lib/desktop-stages'
 import { mapDesktopPhaseToSteps } from './ProgressCard'
 
 export interface ChatPanelProps {
+  guidanceSlot?: React.ReactNode
   actionSlot?: React.ReactNode
   presentation?: 'full' | 'theatre'
   /** 向导 Agent 发出的卡片选项（由上层从 AgentEvent 中解析） */
@@ -110,6 +113,7 @@ const glassTile: React.CSSProperties = {
 
 export const ChatPanel: React.FC<ChatPanelProps> = ({
   presentation = 'full',
+  guidanceSlot,
   actionSlot,
   cardOptions,
   decisionTitle,
@@ -126,8 +130,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   onForkFromMessage,
 }) => {
   const activeSessionId = useAtomValue(activeAgentSessionIdAtom)
-  const [historyExpanded, setHistoryExpanded] = React.useState(true)
-  React.useEffect(() => setHistoryExpanded(true), [activeSessionId])
+  const [historyExpanded, setHistoryExpanded] = React.useState(presentation !== 'theatre')
+  React.useEffect(() => setHistoryExpanded(presentation !== 'theatre'), [activeSessionId, presentation])
   const [quiet, setQuiet] = React.useState(() => { try { return localStorage.getItem('bloma.workspace.character-quiet.v1') === '1' } catch { return false } })
   const compact = presentation === 'theatre' && !historyExpanded
   const sessionUsage = useAtomValue(sessionUsageFamily(activeSessionId ?? ''))
@@ -174,7 +178,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     let lastWelcome = -1
     publicMessages.forEach((message, index) => {
       if (message.role === 'user' && (message.content.some(block => block.type === 'text' && block.text?.trim() || block.type === 'image') || message.attachments?.length)) lastUser = index
-      if (message.role === 'assistant' && !message.content.some(block => block.type === 'tool_use')) lastAssistant = index
+      if (message.role === 'assistant' && message.content.some(block => block.type === 'text' && block.text?.trim())) lastAssistant = index
       if (message.role === 'system' && message.content.some(block => block.type === 'text' && block.text?.startsWith('[welcome-hint]'))) lastWelcome = index
     })
     // The dock shows the current result, never an abbreviated long reply.
@@ -186,6 +190,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   }, [messages, compact])
 
   const messagesEndRef = React.useRef<HTMLDivElement>(null)
+  const scrollRef = React.useRef<HTMLDivElement>(null)
+  const following = React.useRef(true)
+  const [unseen, setUnseen] = React.useState(false)
   const streamingContent = hasActiveStream && streamState ? streamState.content : ''
 
   // 思考呈现（2026-10-04 窄栏适配）：从事件流派生三态——waiting（发消息后首个事件
@@ -221,9 +228,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     return map
   }, [messages])
 
-  React.useEffect(() => {
-    if (compact) { if (messagesEndRef.current?.parentElement) messagesEndRef.current.parentElement.scrollTop = 0; return }
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  React.useEffect(() => { following.current = true; setUnseen(false) }, [activeSessionId, compact])
+  React.useLayoutEffect(() => {
+    const element = scrollRef.current
+    if (!element) return
+    if (following.current) { element.scrollTop = element.scrollHeight; setUnseen(false) }
+    else setUnseen(true)
   }, [messages, streamingContent, cardOptions, compact])
 
   // 本地流计时兜底：App 未传 waitStartTime 时以流启动时刻起算，保证 WaitingFeedback
@@ -250,7 +260,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   // B-11：桌面阶段话术优先（桌面线运行期间 workflowStage 停在 clarifying，web 条目不命中）；
   // 非桌面线沿web 阶段→回退外部传入的 waitActionLabel
   const busyActionLabel = isModernWorkflowVersion(project?.workflow_version)
-    ? desktopPhase === 'desktop-verify' ? '验证程序' : desktopPhase === 'delivered' ? '已交付' : desktopPhase ? '制作程序' : '准备任务'
+    ? desktopPhase === 'desktop-verify' ? '验证程序' : desktopPhase === 'delivered' ? '整理交付结果' : desktopPhase ? '制作程序' : STAGE_ACTION_LABELS[workflowStage] ?? '整理需求'
     : desktopPhase
     ? DESKTOP_PHASE_ACTION_LABELS[desktopPhase] ?? waitActionLabel
     : STAGE_ACTION_LABELS[workflowStage] ?? waitActionLabel
@@ -282,6 +292,44 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     [onForkFromMessage],
   )
 
+  const decisionCard = cardOptions && cardOptions.length > 0 && onCardOptionSelect && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+                {decisionTitle && (
+                  <p
+                    style={{
+                      margin: 0,
+                      fontSize: 'var(--font-size-xs)',
+                      lineHeight: 1.5,
+                      color: 'var(--color-text-muted)',
+                    }}
+                  >
+                    {decisionTitle}
+                  </p>
+                )}
+                {decisionBody && (
+                  <div
+                    data-ai-id="decision-card-body"
+                    style={{
+                      margin: 0,
+                      padding: '8px 12px',
+                      fontSize: 'var(--font-size-xs)',
+                      lineHeight: 1.6,
+                      color: 'var(--color-text-secondary, #5b6472)',
+                      background: 'var(--color-bg-subtle, #f6f8fb)',
+                      borderRadius: 'var(--radius-sm)',
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                      maxHeight: 180,
+                      overflowY: 'auto',
+                    }}
+                  >
+                    {decisionBody}
+                  </div>
+                )}
+                <CardOptions options={cardOptions} onSelect={onCardOptionSelect} disabled={busy} />
+              </div>
+            )
+
   return (
     <div data-ai-id="chat-panel" className={presentation === 'theatre' ? 'theatre-chat' : undefined} data-history-expanded={historyExpanded} data-quiet={quiet} style={presentation === 'theatre' ? undefined : glassTile}>
       {/* 磁贴头 */}
@@ -296,15 +344,18 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         }}
       >
         <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: presentation === 'theatre' ? 12 : 'var(--font-size-sm)', fontWeight: 500, color: 'var(--color-text)' }}>
-          {presentation === 'theatre' ? <StudioFumoAvatar /> : <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--theatre-accent, var(--color-quick))', display: 'inline-block' }} />}
-          {presentation === 'theatre' ? 'Bloma' : '对话'}
+          {presentation === 'theatre' ? null : <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--theatre-accent, var(--color-quick))', display: 'inline-block' }} />}
+          {presentation === 'theatre' ? '与 Bloma 协作' : '对话'}
         </span>
-        {presentation === 'theatre' && <button type="button" className="theatre-tool conversation-quiet" aria-label={quiet ? '显示人物' : '收起人物'} aria-pressed={quiet} onClick={() => setQuiet(value => { const next = !value; try { localStorage.setItem('bloma.workspace.character-quiet.v1', next ? '1' : '0') } catch { /* Per-visit preference still works. */ } return next })}>人物</button>}
-        {presentation === 'theatre' ? <button type="button" className="theatre-tool" data-ai-id="conversation-toggle" aria-expanded={historyExpanded} onClick={() => setHistoryExpanded(previous => !previous)}><Conversation size={14} />{historyExpanded ? '收起完整对话' : `完整对话${messages.length ? ` · ${messages.length}` : ''}`}</button> : <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>Enter 发送</span>}
+        {presentation === 'theatre' && <button type="button" className="theatre-tool conversation-quiet" aria-label={quiet ? '显示人物' : '收起人物'} aria-pressed={quiet} onClick={() => setQuiet(value => { const next = !value; try { localStorage.setItem('bloma.workspace.character-quiet.v1', next ? '1' : '0') } catch { /* Per-visit preference still works. */ } return next })}>{quiet ? '显示人物' : '收起人物'}</button>}
+        {presentation === 'theatre' ? <button type="button" className="theatre-tool" data-ai-id="conversation-toggle" aria-expanded={historyExpanded} onClick={() => setHistoryExpanded(previous => !previous)}><Conversation size={14} />{historyExpanded ? '返回当前' : '历史'}</button> : <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>Enter 发送</span>}
       </div>
 
+      {guidanceSlot}
+      {presentation === 'theatre' && decisionCard}
+
       {/* 消息列表 */}
-      <div className={presentation === 'theatre' ? 'theatre-messages' : undefined}
+      <div ref={scrollRef} data-ai-id="message-scroll" onScroll={event => { const element = event.currentTarget; following.current = element.scrollHeight - element.scrollTop - element.clientHeight < 56; if (following.current) setUnseen(false) }} className={presentation === 'theatre' ? 'theatre-messages' : undefined}
         style={{
           flex: 1,
           overflowY: 'auto',
@@ -395,7 +446,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 }}
               >
                 <span aria-hidden style={{ fontSize: 11 }}>↻</span>
-                {`网络不稳，正在自动重试（第 ${activeRetry.attempt} 次${activeRetry.maxRetries > 0 ? `／最多 ${activeRetry.maxRetries} 次` : ''}）…你的消息不会丢`}
+                {`请求暂未成功，正在自动重试（第 ${activeRetry.attempt} 次${activeRetry.maxRetries > 0 ? `／最多 ${activeRetry.maxRetries} 次` : ''}）。无需重复发送，重试结果会在这里显示。`}
               </div>
             )}
 
@@ -459,7 +510,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
               </div>
             )}
 
-            {globalError && (
+            {globalError && (guidanceSlot ? <details className="production-notice-details"><summary>查看上次执行提示</summary><Markdown text={globalError} /></details> : (
               <div
                 role="alert"
                 style={{
@@ -473,54 +524,19 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
               >
                 {globalError}
               </div>
-            )}
+            ))}
 
-            {cardOptions && cardOptions.length > 0 && onCardOptionSelect && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-                {decisionTitle && (
-                  <p
-                    style={{
-                      margin: 0,
-                      fontSize: 'var(--font-size-xs)',
-                      lineHeight: 1.5,
-                      color: 'var(--color-text-muted)',
-                    }}
-                  >
-                    {decisionTitle}
-                  </p>
-                )}
-                {decisionBody && (
-                  <div
-                    data-ai-id="decision-card-body"
-                    style={{
-                      margin: 0,
-                      padding: '8px 12px',
-                      fontSize: 'var(--font-size-xs)',
-                      lineHeight: 1.6,
-                      color: 'var(--color-text-secondary, #5b6472)',
-                      background: 'var(--color-bg-subtle, #f6f8fb)',
-                      borderRadius: 'var(--radius-sm)',
-                      whiteSpace: 'pre-wrap',
-                      wordBreak: 'break-word',
-                      maxHeight: 180,
-                      overflowY: 'auto',
-                    }}
-                  >
-                    {decisionBody}
-                  </div>
-                )}
-                <CardOptions options={cardOptions} onSelect={onCardOptionSelect} disabled={busy} />
-              </div>
-            )}
+            {presentation !== 'theatre' && decisionCard}
           </>
         )}
 
         {activeSessionId && <SteerStatusBar sessionId={activeSessionId} onStopGeneration={onStopGeneration} />}
         {activeSessionId && <MessageReceipts key={activeSessionId} sessionId={activeSessionId} />}
 
-        <div ref={messagesEndRef} style={compact ? { display: 'none' } : undefined} />
+        <div ref={messagesEndRef} />
       </div>
 
+      {unseen && <button type="button" className="conversation-new-messages theatre-tool" onClick={() => { following.current = true; if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; setUnseen(false) }}>有新消息，点击查看</button>}
       {actionSlot}
       <MessageComposer onSendMessage={onSendMessage} onMessageSent={() => setIdeaHint(false)} busy={busy} onStopGeneration={onStopGeneration} onOpenSettings={onOpenSettings}
         placeholder={compact ? '告诉我，还想改些什么…' : undefined}
@@ -562,6 +578,8 @@ const LiveProcessGroup: React.FC<{ events: AgentEvent[]; sessionId: string; isSt
       outputSummary: record.outputSummary,
       status: record.status,
       durationMs: record.durationMs,
+      feedback: record.feedback,
+      display: record.display,
     }))
     const delegationItems: ProcessItem[] = delegations.map((item) => ({
       kind: 'delegation',
@@ -584,6 +602,8 @@ const LiveProcessGroup: React.FC<{ events: AgentEvent[]; sessionId: string; isSt
             outputSummary={item.outputSummary}
             status={item.status}
             durationMs={item.durationMs}
+            feedback={item.feedback}
+            display={item.display}
           />
         ) : item.kind === 'delegation' ? (
           <DelegationRow item={item.item} />
@@ -612,6 +632,7 @@ function deriveMessageProcessItems(message: AgentMessage, toolNamesById: Record<
         key: `use-${block.id ?? index}`,
         tool: block.name ?? '',
         inputSummary: safeJsonPreview(block.input),
+        feedback: {schema_version:1,execution:'not_run',verification:'unverified',scope:'call_declared'} as ToolFeedback,
         status: 'ok',
         replay: true,
       })
@@ -621,7 +642,9 @@ function deriveMessageProcessItems(message: AgentMessage, toolNamesById: Record<
         kind: 'tool',
         key: `result-${block.tool_use_id ?? index}`,
         tool: toolNamesById[block.tool_use_id ?? ''] ?? 'tool_result',
-        inputSummary: typeof block.content === 'string' ? block.content : '',
+        outputSummary: typeof block.content === 'string' ? block.content : '',
+        feedback: typeof block.content === 'string' ? readToolFeedback(block.content) : undefined,
+        display: safeToolDisplay(block.tool_display),
         status: block.is_error ? 'error' : 'ok',
         replay: true,
       })
@@ -640,6 +663,8 @@ function renderProcessItem(item: ProcessItem): React.ReactNode {
         outputSummary={item.outputSummary}
         status={item.status}
         durationMs={item.durationMs}
+            feedback={item.feedback}
+            display={item.display}
         replay
       />
     )
@@ -695,7 +720,13 @@ const HistoryMessages: React.FC<{
       message.role === 'user' && message.content.some((block) => block.type === 'text' && !!block.text?.trim())
     const hasTool = message.content.some((block) => block.type === 'tool_use' || block.type === 'tool_result')
     if (!isUserInput && hasTool) {
-      buffer.push(message)
+      // Identified public prose stays prose after reload too. Only typed tool
+      // blocks go into the execution fold; legacy records retain their grouping.
+      if (message.role === 'assistant' && message.public_message_id && message.content.some(block => block.type === 'text' && block.text?.trim())) {
+        flush()
+        nodes.push(<MessageBubble key={`public-${message.public_message_id}`} message={{ ...message, content: message.content.filter(block => block.type === 'text') }} mode={mode} compact={compact} onOpenSettings={onOpenSettings} />)
+        buffer.push({ ...message, content: message.content.filter(block => block.type !== 'text') })
+      } else buffer.push(message)
       return
     }
     flush()
@@ -928,6 +959,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ characterCue, characterKi
               outputSummary={item.outputSummary}
               status={item.status}
               durationMs={item.durationMs}
+            feedback={item.feedback}
+            display={item.display}
               replay
             />
           ) : item.kind === 'delegation' ? (
@@ -1040,11 +1073,15 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ characterCue, characterKi
     )
   }
 
+  // Recognized platform stop templates only; preserve the complete original and copy text.
+  const notice = !isUser && !isStreaming ? productionNotice(rawText) : undefined
+  const displayText = notice ?? text
   return (
     <div
       data-ai-id="message-bubble"
       data-role={message.role}
       data-character={Boolean(characterCue && !isUser)}
+      data-long={text.length > 180}
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -1073,9 +1110,10 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ characterCue, characterKi
           wordBreak: 'break-word',
         }}
       >
-        {characterCue && !isUser && <ReplyCharacter cue={characterCue} kind={characterKind} />}
+        {characterCue && !isUser && <div className="conversation-character-scene"><div className="conversation-character-lead"><small>Bloma 的回复</small></div><ReplyCharacter cue={characterCue} kind={characterKind} /></div>}
         {/* assistant 旁白/完成总结渲染 Markdown（模型输出天然带 md）；user 输入保持纯文本语义 */}
-        {isUser || !text ? text || (isStreaming ? '…' : '') : compact ? <CompactReply text={text} /> : <Markdown text={text} />}
+        {isUser || !text ? text || (isStreaming ? '…' : '') : compact ? <CompactReply text={displayText} /> : <Markdown text={displayText} />}
+        {notice && <details className="production-notice-details"><summary>查看停止原因与检查详情</summary><pre className="production-notice-record">{rawText}</pre></details>}
         {textAttachments?.length ? <MessageAttachments attachments={textAttachments} /> : null}
         {imageBlocks.length > 0 && (
           <span
@@ -1103,7 +1141,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ characterCue, characterKi
               if (copyLock.current) return
               copyLock.current = true; setCopying(true); setCopied(false); setActionError('')
               try {
-                await copyText(text)
+                await copyText(notice ? rawText : text)
                 setCopied(true)
                 if (copyTimer.current) clearTimeout(copyTimer.current)
                 copyTimer.current = setTimeout(() => setCopied(false), 1800)

@@ -132,6 +132,10 @@ export interface AgentLoopToolCallRecord {
   pending?: boolean
 }
 
+/** Public execution evidence only; no system prompt or reasoning blocks. */
+export type ToolObservation = {turn:number;id:string;name:string;input:Record<string,unknown>} &
+  ({phase:'started'}|{phase:'completed';output:string;isError:boolean;halted?:boolean;duration_ms?:number;input_bytes?:number;output_text_bytes?:number})
+
 
 /** W1-E1（咨询 D3，2026-09-09）：竹节压缩观测信息——纯埋点零行为变更。
  *  编程编排层接 trackAnalytics('agent_loop_compact')；skipped=true 表示阈值满足但因
@@ -180,6 +184,11 @@ export interface AgentLoopInput {
   runtimeScope?: string
   /** Host prerequisite check after a no-tool final response; feedback keeps the loop open. */
   beforeComplete?: (ctx: ToolContext) => Promise<string | undefined>
+  /** Ephemeral host facts, refreshed for each request; never appended to history. */
+  liveContext?: () => unknown
+  /** Host-owned closeout after actual tool results, without buying a model turn
+   * merely to ask it to announce completion. Undefined keeps normal execution. */
+  afterTools?: (ctx: ToolContext, calls: AgentLoopToolCallRecord[]) => Promise<{ complete?: boolean; feedback?: string; verification?: ToolFeedback } | undefined>
   /** Bounded current host facts after compaction; does not replay tools. */
   recoveryContext?: () => string
   /** Host decision pending: end this turn before another tool or request. */
@@ -235,6 +244,13 @@ export interface AgentLoopInput {
   /** 每轮回调（PR3 埋点 agent_loop_turn：工具清单 + usage 若渠道返回；
    *  P3 loop-log 同一回调实时 append 过程记录，零新接线） */
   onTurn?: (info: AgentLoopTurnInfo) => void
+  /** Public assistant text only; kept separate from numeric turn telemetry. */
+  onAssistantMessage?: (message:{turn:number;text:string})=>void
+  /** Monitor channels may publish successful public text before lengthy tools. */
+  publicMessageTiming?: 'response'|'turn'
+  /** An advisory observer may end quietly; silence never means verification. */
+  allowSilentCompletion?: boolean
+  onToolObservation?: (observation:ToolObservation)=>void
   /** W1-E1 压缩观测回调（埋点 agent_loop_compact：压缩发生或首次跳过；不影响行为） */
   onCompaction?: (info: AgentLoopCompactionInfo) => void
   /** Host observation only; does not grant tools or alter execution policy. */
@@ -461,7 +477,7 @@ export async function executeToolCall(
     const used = budgetUsed[use.name] ?? 0
     if (used >= budget) {
       return { output: `「${use.name}」的本轮调用预算已用尽（上限 ${budget} 次）。本轮不要再调用，保存未完成项。`, budgetExhausted: true,
-        feedback: { schema_version: 1, execution: 'not_run', verification: 'unverified', source: 'host', category: 'budget', recovery: 'resume',
+        feedback: { schema_version: 1, execution: 'not_run', verification: 'unverified', source: 'host', category: 'budget', budget_admission:'limit_reached', recovery: 'resume',
           budget: { resource: 'tool_calls', scope: 'invocation', used, limit: budget, remaining: 0, resets_on: 'new_invocation' } } }
     }
     budgetUsed[use.name] = used + 1

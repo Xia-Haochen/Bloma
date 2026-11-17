@@ -1,0 +1,65 @@
+{
+  "version": "0.1",
+  "status": "draft",
+  "limits": {"wall_seconds": 5400, "cost_rmb": 10},
+  "dimensions": {"business": 60, "recovery": 20, "persistence": 10, "usability": 10},
+  "tasks": [
+    {
+      "id": "voice-conversation",
+      "split": "development",
+      "delivery": "desktop",
+      "prompt": "做一个可以和 AI 角色进行语音聊天的桌面软件。用户用语音说话，软件显示识别结果，AI 根据本轮及之前的对话回复，同时显示文字并完整朗读。可以配置自己的模型服务，保存对话，退出重开后继续聊天。空录音、模型服务暂时失败时要有明确提示，恢复后能够继续使用。数据保存在本机。",
+      "resources": "提供三段不同标准录音、对应人工转写、固定麦克风操作脚本、本地受控服务和同一个真实模型服务。凭据由操作者注入。",
+      "journeys": ["三轮语音聊天并追问首轮信息", "服务失败后恢复并重试当前轮", "保存配置和记录后关闭重开继续"],
+      "checks": [
+        {"id":"B1","dimension":"business","points":20,"mandatory":true,"expected":"三段标准录音分别产生正确用户文本，包含各段公开事实；实体录音也经同一产品输入路径产生文字。"},
+        {"id":"B2","dimension":"business","points":20,"mandatory":true,"expected":"受控服务观察到本轮输入及此前用户和AI内容；真实模型在第三轮正确使用首轮公开事实，回复与当前问题相关。"},
+        {"id":"B3","dimension":"business","points":20,"mandatory":true,"expected":"三轮回复各自完整朗读到结束，当前可听内容与对应显示文字一致；后续回复不会截断正在播放的前一轮。"},
+        {"id":"R1","dimension":"recovery","points":10,"mandatory":true,"expected":"空录音与取消录音均有明确状态，不产生伪造转写或额外模型请求，随后正常录音成功。"},
+        {"id":"R2","dimension":"recovery","points":10,"mandatory":true,"expected":"受控服务一次超时或鉴权失败后提示准确，修复配置后原界面可继续发送，历史对话完整。"},
+        {"id":"P1","dimension":"persistence","points":5,"mandatory":true,"expected":"关闭全部产品进程并重开后，角色及模型配置可用，无需重新填写配置即可继续请求。"},
+        {"id":"P2","dimension":"persistence","points":5,"mandatory":true,"expected":"三轮历史文本在重开后完整读回，继续一轮时上下文仍包含此前指定事实。"},
+        {"id":"U1","dimension":"usability","points":5,"mandatory":true,"expected":"按交付说明从正常入口启动，主要录音、停止、设置和历史控件可见可操作，无需手改源码或运行开发命令。"},
+        {"id":"U2","dimension":"usability","points":5,"mandatory":true,"expected":"用户能区分录音、识别、等待回复、播放、完成和失败；文字可阅读且双方发言身份明确。"}
+      ]
+    },
+    {
+      "id": "equipment-lending",
+      "split": "candidate_holdout",
+      "delivery": "desktop",
+      "prompt": "做一个实验室器材借还管理桌面软件。管理器材编号、总数量、成员及借还记录，支持一人借多种器材和分批归还，能查询成员未还清单、器材可借量和逾期记录。导入和导出CSV，数据保存在本机。库存不足、重复器材编号和错误导入需要明确处理，退出重开后数据完整。",
+      "resources": "提供公开CSV列定义、三种器材、两位成员、指定借出日期及测试时钟。数量与姓名可在独立种子间变化。",
+      "journeys": ["两位成员交叉借用三种器材并部分归还", "库存不足及错误CSV恢复", "导出、重启、再次借还并核对统计"],
+      "checks": [
+        {"id":"B1","dimension":"business","points":20,"mandatory":true,"expected":"器材和成员可新增编辑，重复器材编号被识别；编辑一个对象不会更改另一对象的数据。"},
+        {"id":"B2","dimension":"business","points":20,"mandatory":true,"expected":"按预定数据完成交叉借用、分批归还，逐器材满足可借量=总量-未还量，逐成员记录与明细一致。"},
+        {"id":"B3","dimension":"business","points":20,"mandatory":true,"expected":"成员未还、器材库存、逾期筛选和CSV导出均与借还明细一致，跨对象关联使用正确编号。"},
+        {"id":"R1","dimension":"recovery","points":10,"mandatory":true,"expected":"借出超过库存、归还超过未还量及负数量被拒绝，失败后库存与账目无部分更新，随后合法操作成功。"},
+        {"id":"R2","dimension":"recovery","points":10,"mandatory":true,"expected":"导入含无效行或重复编号的CSV时显示具体问题，按用户选定的取消操作保留原账本，修正后可成功导入。"},
+        {"id":"P1","dimension":"persistence","points":5,"mandatory":true,"expected":"关闭全部进程并重开后，器材、成员、借还明细及统计值一致。"},
+        {"id":"P2","dimension":"persistence","points":5,"mandatory":true,"expected":"新空实例导入已导出CSV后恢复同等业务数据，再执行一次借还仍满足库存不变量。"},
+        {"id":"U1","dimension":"usability","points":5,"mandatory":true,"expected":"正常入口可启动，用户可从界面完成导入、查询、借出、归还和导出，无需修改源码。"},
+        {"id":"U2","dimension":"usability","points":5,"mandatory":true,"expected":"表单显示单位和目标器材/成员，筛选条件、错误和操作结果可见，列表可滚动查看全部记录。"}
+      ]
+    },
+    {
+      "id": "document-batch-workflow",
+      "split": "candidate_holdout",
+      "delivery": "desktop",
+      "prompt": "做一个本地文档批处理桌面软件。导入多份中文TXT、Markdown和带文本层的PDF，按关键词搜索，查看匹配片段及来源页码或行号。把选中文档交给可配置的AI服务生成逐文档摘要和带来源索引的汇总报告，可导出Markdown与CSV。任务排队执行，可取消和失败重试，退出重开后能看到任务及结果。原始文件保持完整。",
+      "resources": "提供公开编码及格式边界、含重复标题的六份文档、损坏PDF、固定关键词、受控服务、同一真实模型服务和人工核对事实表。",
+      "journeys": ["导入并搜索跨文件重复词与来源", "批量摘要时取消及部分服务失败后重试", "关闭重开任务记录并导出核对"],
+      "checks": [
+        {"id":"B1","dimension":"business","points":20,"mandatory":true,"expected":"支持公开的三种文档格式，提取中文内容，重名文件仍保有各自身份，逐文件内容与参考文本一致。"},
+        {"id":"B2","dimension":"business","points":20,"mandatory":true,"expected":"固定关键词检索返回正确文件、匹配片段及页码或行号，可打开相应来源，过滤与清空过滤结果准确。"},
+        {"id":"B3","dimension":"business","points":20,"mandatory":true,"expected":"受控服务收到所选文档内容；真实模型摘要保留指定关键事实，汇总报告中的来源索引可逐条对应，未选文档不会混入。"},
+        {"id":"R1","dimension":"recovery","points":10,"mandatory":true,"expected":"损坏PDF与不支持编码被准确标明，其他有效文档可继续处理；取消指定排队任务后不会产生伪完成结果。"},
+        {"id":"R2","dimension":"recovery","points":10,"mandatory":true,"expected":"单次模型失败只影响对应任务，可重试并成功；已完成任务不被重复覆盖，原始输入文件哈希一致。"},
+        {"id":"P1","dimension":"persistence","points":5,"mandatory":true,"expected":"关闭全部进程重开后，文档索引、配置、任务状态与已完成结果正确读回。"},
+        {"id":"P2","dimension":"persistence","points":5,"mandatory":true,"expected":"导出的Markdown和CSV包含正确选定结果与来源，中文可正确读取，失败任务有明确状态且不伪造摘要。"},
+        {"id":"U1","dimension":"usability","points":5,"mandatory":true,"expected":"正常入口可完成文件选择、搜索、提交批次、取消、重试、导出，耗时操作期间界面仍可响应。"},
+        {"id":"U2","dimension":"usability","points":5,"mandatory":true,"expected":"每个任务可辨认输入文件、排队/运行/完成/失败状态及错误原因，用户能从结果定位来源。"}
+      ]
+    }
+  ]
+}

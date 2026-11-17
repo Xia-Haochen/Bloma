@@ -15,7 +15,8 @@
  * 期间持锁无意义）——只在真正的写盘临界区互斥，冲突面恰好是「两个写者同时落盘」。
  */
 
-import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import type { ToolContext } from '../loop/agent-loop'
 
@@ -91,14 +92,21 @@ export function writeLeaseConflictMessage(rel: string, holder: string): string {
 // =========================================================================
 
 
-/** 文件版本戳 = mtimeMs+size 十六进制（同一 loop 内足够区分「读后已被改」）。 */
+/** New reads/writes bind actual content bytes, not mtime/size. */
+export function contentRevision(content: string | Buffer): string {
+  return createHash('sha256').update(content).digest('hex')
+}
 export function fileRevisionOf(absPath: string): string {
+  try { return contentRevision(readFileSync(absPath)) } catch { return 'unknown' }
+}
+/** Old persisted sessions may still supply stat revisions. Compatibility is
+ * explicit and is NOT a content guarantee; new batch edits require a hash. */
+export function fileRevisionMatches(absPath: string, expected: string): boolean {
+  if (/^[0-9a-f]{64}$/.test(expected)) return existsSync(absPath) && fileRevisionOf(absPath) === expected
   try {
     const stat = statSync(absPath)
-    return `${stat.mtimeMs.toString(16)}-${stat.size.toString(16)}`
-  } catch {
-    return 'unknown'
-  }
+    return expected === `${stat.mtimeMs.toString(16)}-${stat.size.toString(16)}`
+  } catch { return false }
 }
 
 /** 会话内文件版本记录（惰性初始化；缺省 undefined = 功能未启用前的旧 state 兼容）。 */
@@ -121,30 +129,31 @@ export function commitFileWrite(input: {
   finalContent: string
   ctx: ToolContext
   expectedRevision?: string
+  /** Optional UI snapshot, bounded to 1MiB; callback failure cannot undo a write. */
+  onCommitted?: (previous: Buffer | null | undefined, current: Buffer) => void
 }): CommitWriteResult {
   const abs = join(input.root, input.rel)
   const committedRevision = input.expectedRevision ?? fileRevisionsOf(input.ctx).get(input.rel)
-  if (committedRevision && existsSync(abs)) {
-    const currentRev = fileRevisionOf(abs)
-    if (currentRev !== committedRevision) {
-      return {
-        ok: false,
-        code: 'STALE_READ',
-        output: `STALE_READ：${input.rel} 在你读取/上次写入后已被修改（基准版本 ${committedRevision}，当前 ${currentRev}）。请重新 read_file 后再修改，禁止凭旧内容覆盖。`,
-      }
-    }
-  }
   const leaseHolder = input.ctx.toolCallId ?? input.ctx.sessionId
   const lease = acquireWriteLease(input.projectId, input.rel, leaseHolder)
   if (!lease.ok) {
     return { ok: false, code: 'WRITE_LEASE_CONFLICT', output: writeLeaseConflictMessage(input.rel, lease.holder) }
   }
   try {
+    // Recheck after async validation and inside the existing process-local lease.
+    // An externally deleted file is stale too; never silently recreate it.
+    if (committedRevision && !fileRevisionMatches(abs, committedRevision)) {
+      return { ok: false, code: 'STALE_READ', output: `STALE_READ：${input.rel} 在读取后被修改或删除。请重新 read_file 后再修改。` }
+    }
+    let previous: Buffer | null | undefined
+    if (input.onCommitted) { try { previous = existsSync(abs) ? statSync(abs).size <= 1048576 ? readFileSync(abs) : undefined : null } catch { /* UI gap only. */ } }
     mkdirSync(join(abs, '..'), { recursive: true })
     writeFileSync(abs, input.finalContent, 'utf8')
+    try { input.onCommitted?.(previous, Buffer.from(input.finalContent, 'utf8')) } catch { /* A display failure is not a failed write. */ }
   } finally {
     releaseWriteLease(input.projectId, input.rel, leaseHolder)
   }
-  fileRevisionsOf(input.ctx).set(input.rel, fileRevisionOf(abs))
+  // Record our submitted bytes, not a later external rewrite we did not read.
+  fileRevisionsOf(input.ctx).set(input.rel, contentRevision(input.finalContent))
   return { ok: true }
 }

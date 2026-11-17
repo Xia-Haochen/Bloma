@@ -63,3 +63,16 @@ Python 离线边界/恢复测试 10 例通过；TS 组件物化、宿主证据�
 已知报告总量 68,943,225 tokens，其中缓存读取 64,086,144、非缓存输入 4,066,158、输出 790,923；5 请求缺用量、1 未闭合，总账 incomplete，不是账单金额。两项人工中断及多版本试跑保留，不计算改前后生成成功率/降本百分比。最后单测 241 文件/2240 项、集成 2 文件/8 项、类型检查及开发构建通过。
 
 完整范围、原始失败、测试适配器修正、局部修复和剩余工作见 `robustness-case-results-20261011.md`；底层审计 `run-artifacts/robustness-six-case-audit.json`。未追加额度不足时的付费生成；原语音产物和主实例配置保持原样。
+
+## 从旧计划保留的批次证据索引
+
+下表仅记录2026-10-11当时范围，不能作为当前版本验收。自动交付0/6、长期语音缺产物、两项中断和用量不完整等限制，以[案例结果](robustness-case-results-20261011.md)为准。固定WAV、历史人工接受与当前麦克风/安装验收分别记录。
+
+| 批次 | 当前状态 | 完成证据 |
+| --- | --- | --- |
+| 0 基线/矩阵 | 已验证（基线与接口反例） | `robustness-execution-20261011.md`；`run-artifacts/robustness-baseline.json` |
+| 1 判定/证据 | 已实现并验证收口/失效规则；语音宿主探针已接入 | `robustness-execution-20261011.md`；`run-artifacts/robustness-batch1-tests.log` |
+| 2 回忆治理 | 已实现并验证索引迁移/来源/作用域 | `robustness-execution-20261011.md`；`run-artifacts/robustness-recall-migration.json` |
+| 3 语音/环境 | 已实现；固定音频/隔离反例/生命周期已验；真实组件采集人工接受 | `robustness-execution-20261011.md`；`run-artifacts/robustness-speech-probe.json` |
+| 4 成本/规则 | 已实现并验证请求对账/自主修复/规则来源；真实案例成本待批 5 | `robustness-execution-20261011.md`；`run-artifacts/robustness-batch4-tests.log` |
+| 5 固定验收 | 部分完成：六次生成、五份产物业务检查及文件反例闭环；两项用户中断，自动交付未完成 | `robustness-case-results-20261011.md`；`run-artifacts/robustness-six-case-audit.json` |

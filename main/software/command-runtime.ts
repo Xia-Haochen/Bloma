@@ -1,12 +1,12 @@
-import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, realpathSync } from 'node:fs'
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { existsSync, mkdirSync, realpathSync, statSync } from 'node:fs'
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { getPromaHome } from '../../storage/config-paths'
 import { createRequire } from 'node:module'
 import { buildDriverEnv, execFileDriverSpawn, resolveDriverVenvCommand } from '../desktop/process-driver'
 import { managedRuntime, managedRuntimeDirectories } from './runtime-bindings'
-import { capabilityEnvironment } from './capability-bindings'
+import { capabilityEnvironment, windowsRuntimePath } from './capability-bindings'
 import { electronEntry, isLocalElectronAlias } from './electron-entry'
+import { ownedDirectory } from './owned-directory'
 
 /** Project execution policy, NOT an OS sandbox. Arguments are passed directly;
  * Windows package-manager shims are resolved to their Node entry, never cmd /c. */
@@ -21,54 +21,73 @@ export function validateSoftwareCommand(value: unknown): string[] {
   if (!Array.isArray(value) || !value.length || value.length > 128 || value.some(x => typeof x !== 'string' || x.includes('\0'))
     || value.join('').length > 64000 || !value[0].trim()) throw new Error('COMMAND_INVALID_ARGUMENTS')
   const command = value as string[], name = basename(command[0]).replace(/\.(exe|cmd|bat)$/i, '').toLowerCase()
+  const globalFlag=(arg:string)=>['--global','--global=true','-g'].includes(arg)
+  let operationIndex=1
+  while(globalFlag(command[operationIndex]??''))operationIndex++
+  const globalRead=['ls','list','root','prefix'].includes(command[operationIndex]?.toLowerCase())
   if (/[|&<>\r\n]/.test(command[0])) throw new Error('COMMAND_EXECUTABLE_REQUIRED')
   if (['sudo', 'runas', 'format', 'diskpart', 'reg', 'regedit', 'shutdown', 'reboot', 'bcdedit', 'msiexec', 'schtasks'].includes(name)
     || name === 'git' && ['push', 'clean'].includes(command[1]?.toLowerCase())
-    || ['npm', 'pnpm', 'yarn'].includes(name) && (command.some(x => ['--global', '-g'].includes(x)) || ['publish', 'login', 'logout', 'config', 'unpublish'].includes(command[1]?.toLowerCase()))
+    || ['npm', 'pnpm', 'yarn'].includes(name) && (command.some(globalFlag)&&!globalRead || ['publish', 'login', 'logout', 'config', 'unpublish'].includes(command[1]?.toLowerCase()))
     || ['cmd', 'powershell', 'pwsh', 'sh', 'bash'].includes(name) && /(?:Remove-Item|Remove-Computer|Set-ExecutionPolicy|Invoke-WebRequest.+\|\s*(?:iex|Invoke-Expression)|\brm\s+-rf|\bdel\s+\/[sq])/i.test(command.join(' '))) {
     throw new Error('COMMAND_REQUIRES_SEPARATE_AUTHORIZATION: 系统修改、外发发布或破坏性清理不属于普通项目构建')
   }
   return [...command]
 }
 
+/** Resolve the same PATH/PATHEXT candidates without spawning where.exe for
+ * every verification/command. No cache: PATH changes and replaced files are
+ * observed on every call. Implicit current-directory execution is not allowed. */
 function pathExecutable(name: string): string | undefined {
-  if (isAbsolute(name)) return existsSync(name) ? name : undefined
-  try {
-    if (process.platform === 'win32') return execFileSync('where.exe', [name], { encoding: 'utf8', windowsHide: true, timeout: 3000 })
-      .split(/\r?\n/).find(file => file.trim() && existsSync(file.trim()))?.trim()
-    for (const directory of (process.env.PATH ?? '').split(':')) {
-      const file = join(directory, name); if (existsSync(file)) return file
-    }
-  } catch { /* a missing tool is reported before execution */ }
+  const file = (path: string) => { try { return statSync(path).isFile() } catch { return false } }
+  if (isAbsolute(name)) return file(name) ? name : undefined
+  if (name.includes('/') || name.includes(String.fromCharCode(92))) return undefined
+  const windows = process.platform === 'win32'
+  const environment = (key: string) => Object.entries(process.env).find(([name]) => name.toLowerCase() === key.toLowerCase())?.[1] ?? ''
+  const extensions = windows && !extname(name)
+    ? (environment('PATHEXT') || '.COM;.EXE;.BAT;.CMD').split(';').filter(value => /^\.[a-z0-9]+$/i.test(value)) : ['']
+  for (let directory of environment('PATH').split(windows ? ';' : ':')) {
+    directory = directory.replace(/^"|"$/g, '')
+    if (!directory || !isAbsolute(directory)) continue
+    for (const extension of extensions) { const candidate = join(directory, name + extension); if (file(candidate)) return candidate }
+  }
   return undefined
 }
 
 export function softwareEnvironment(projectId: string, dataDir?: string, root?:string): Record<string, string> {
   if (!/^[A-Za-z0-9_-]+$/.test(projectId)) throw new Error('ENVIRONMENT_PROJECT_ID_INVALID')
-  const toolsHome = join(getPromaHome(), 'software-environments', projectId)
-  const home = dataDir ? join(dirname(dataDir), 'environment-home') : toolsHome
-  for (const directory of [home, join(home, 'appdata'), join(home, 'localappdata'), dataDir ?? join(home, 'test-data')]) mkdirSync(directory, { recursive: true })
+  const toolsHome = ownedDirectory(getPromaHome(), ['software-environments', projectId])
+  const isolatedData = dataDir ? ownedDirectory(dataDir) : ownedDirectory(toolsHome, ['test-data'])
+  const home = dataDir ? ownedDirectory(dirname(isolatedData), ['environment-home']) : toolsHome
+  const appdata = ownedDirectory(home, ['appdata']), localappdata = ownedDirectory(home, ['localappdata'])
+  // Siblings of environment-home: data-update preserves real configuration,
+  // not disposable cache/temp trees, when copying an application's generation.
+  const scratch = dataDir ? dirname(isolatedData) : toolsHome
+  const temporary = ownedDirectory(scratch, ['execution-tmp']), cache = ownedDirectory(scratch, ['execution-cache'])
+  const npmCache = ownedDirectory(cache, ['npm']), pipCache = ownedDirectory(cache, ['pip']), uvCache = ownedDirectory(cache, ['uv'])
+  const electronCache = ownedDirectory(getPromaHome(), ['software-runtimes', 'electron-cache'])
   const clean = buildDriverEnv({ env_whitelist: [] } as never, process.env), directories = managedRuntimeDirectories(projectId)
   return { ...clean, ...(directories.length ? { PATH: [...directories, clean.PATH ?? clean.Path ?? ''].join(process.platform === 'win32' ? ';' : ':') } : {}),
     BLOMA_RUNTIME_PROJECT: projectId, BLOMA_SPEECH_OFFLINE:'1', ...capabilityEnvironment(projectId,root),
-    HOME: home, USERPROFILE: home, APPDATA: join(home, 'appdata'), LOCALAPPDATA: join(home, 'localappdata'),
-    APP_DATA_DIR: dataDir ?? join(home, 'test-data'), BROWSER: 'none', CI: '1',
-    npm_config_cache: join(toolsHome, 'npm-cache'), npm_config_audit: 'false', npm_config_fund: 'false',
+    HOME: home, USERPROFILE: windowsRuntimePath(home), APPDATA: appdata, LOCALAPPDATA: localappdata,
+    TEMP: temporary, TMP: temporary, XDG_CACHE_HOME: cache, PIP_CACHE_DIR: pipCache, UV_CACHE_DIR: uvCache,
+    APP_DATA_DIR: isolatedData, BROWSER: 'none', CI: '1',
+    npm_config_cache: npmCache, npm_config_audit: 'false', npm_config_fund: 'false',
     // Electron's installer validates cached archive checksums. Cache downloads,
     // never share mutable node_modules or substitute another runtime version.
-    electron_config_cache: join(getPromaHome(), 'software-runtimes', 'electron-cache'),
+    electron_config_cache: electronCache,
     PIP_DISABLE_PIP_VERSION_CHECK: '1', PIP_NO_INPUT: '1', PYTHONDONTWRITEBYTECODE: '1' }
 }
 
 export function resolveSoftwareCommand(root: string, value: unknown, environment: Record<string, string>): { command: string[]; env: Record<string, string> } {
   let command = validateSoftwareCommand(value)
-  if (isLocalElectronAlias(command)) {
-    const entry = electronEntry(root, command)
+  if (isLocalElectronAlias(command) || /^electron(?:\.exe|\.cmd)?$/i.test(command[0])) {
+    const entry = electronEntry(root, command, environment.BLOMA_RUNTIME_PROJECT)
     command = [entry.executablePath, ...entry.args]
   }
   const name = basename(command[0]).replace(/\.(exe|cmd|bat)$/i, '').toLowerCase()
   const env = { ...environment }
-  if (isLocalElectronAlias(value as string[])) delete env.ELECTRON_RUN_AS_NODE
+  if (isLocalElectronAlias(value as string[]) || /^electron(?:\.exe|\.cmd)?$/i.test((value as string[])[0])) delete env.ELECTRON_RUN_AS_NODE
   const runtimeProject = environment.BLOMA_RUNTIME_PROJECT
   const node = runtimeProject ? managedRuntime(runtimeProject, 'node')?.executable : undefined
   if (['python', 'python3'].includes(name)) {
@@ -81,14 +100,6 @@ export function resolveSoftwareCommand(root: string, value: unknown, environment
     if (!executable) throw new Error('COMMAND_NODE_UNAVAILABLE')
     command[0] = executable
     if (process.versions.electron && executable === process.execPath) env.ELECTRON_RUN_AS_NODE = '1'
-  } else if (name === 'electron' && !command[0].includes('/') && !command[0].includes('\\')) {
-    const executableName=process.platform==='win32'?'electron.exe':process.platform==='darwin'?'Electron.app/Contents/MacOS/Electron':'electron'
-    const candidates=[join(root,'node_modules/electron/dist',executableName)]
-    try { candidates.push(join(dirname(createRequire(import.meta.url).resolve('electron/package.json')),'dist',executableName)) } catch {}
-    const executable=candidates.find(existsSync)
-    if(!executable)throw Error('COMMAND_ELECTRON_UNAVAILABLE: 项目或Bloma安装中缺少可执行Electron运行时')
-    command[0]=realpathSync(executable)
-    delete env.ELECTRON_RUN_AS_NODE
   } else if (['npm', 'npx'].includes(name)) {
     let script: string | undefined
     try { script = join(dirname(createRequire(import.meta.url).resolve('npm/package.json')), 'bin', name === 'npm' ? 'npm-cli.js' : 'npx-cli.js') } catch {}
@@ -119,7 +130,7 @@ export function resolveSoftwareCommand(root: string, value: unknown, environment
  * declaration. The same app uses isolated test profiles and durable user data. */
 export function bindSoftwareProfile(command:string[],environment:Record<string,string>):string[]{
   if(!/^electron(?:\.exe)?$/i.test(basename(command[0]))||!environment.APP_DATA_DIR)return command
-  const profile=join(environment.APP_DATA_DIR,'electron-profile');mkdirSync(profile,{recursive:true})
+  const profile=ownedDirectory(environment.APP_DATA_DIR,['electron-profile'])
   const clean = command.filter((arg, index) => arg !== '--user-data-dir' && !arg.startsWith('--user-data-dir=') && command[index - 1] !== '--user-data-dir')
   return[...clean,`--user-data-dir=${profile}`]
 }
@@ -130,6 +141,7 @@ export async function executeSoftwareCommand(input: { root: string; projectId: s
   const resolved = resolveSoftwareCommand(input.root, input.command, softwareEnvironment(input.projectId, input.dataDir,input.root))
   resolved.command=bindSoftwareProfile(resolved.command,resolved.env)
   if (input.browserBinding) {
+    resolved.env.BLOMA_PRODUCT_ROOT = input.root
     const evidence = input.browserBinding.evidenceDir
     if (!isAbsolute(evidence)) throw Error('EVIDENCE_DIRECTORY_REQUIRED')
     mkdirSync(evidence, { recursive: true })

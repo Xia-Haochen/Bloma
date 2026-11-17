@@ -83,7 +83,7 @@ describe('actual verification input identity', () => {
     expect(coreVerificationCacheKey('p', root)).not.toBe(before)
   })
   it('does not cache hardware-backed speech evidence', () => {
-    vi.mocked(readPrdBackplane).mockReturnValue({ requirements: [{ id: 'F-001', description: '麦克风语音识别' }] } as never)
+    vi.mocked(readPrdBackplane).mockReturnValue({ requirements: [{ id: 'F-001', description: '麦克风语音识别', capabilities: ['microphone'] }] } as never)
     expect(coreVerificationCacheKey('p', root)).toBeUndefined()
   })
   it('really executes one Python verification for two unchanged delivery checks, then reruns changed source', async () => {

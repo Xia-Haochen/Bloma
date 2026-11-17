@@ -1,3 +1,4 @@
+import { serializeRedactedJson } from '../../shared/redacted-json'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -12,7 +13,7 @@ import { recordEvaluationEvent } from './harness-evaluation'
 export type SoftwareRunStatus = 'running' | 'verifying' | 'repairing' | 'blocked' | 'waiting_user' | 'waiting_environment' | 'cancelled' | 'interrupted' | 'verified'
 export interface SoftwareRunState { version: 1; projectId: string; operationId?: string; sessionId: string; runId: string; status: SoftwareRunStatus; at: string;
   last_failure?: { run_id: string; at: string; error: string }
-  source?: string; candidateId?: string; error?: string; check?: { path: string; sha256: string };
+  source?: string; candidateId?: string; error?: string; stop_code?: string; check?: { path: string; sha256: string };
   budget: { file?: string; request_ledger?: string; requests?: number; output?: number; error?: string }; failure?: { signature: string; runId: string; repeats: number; total: number } }
 function pathFor(id: string) {
   if (!/^[A-Za-z0-9_-]+$/.test(id)) throw Error('RUN_STATE_PROJECT_INVALID')
@@ -25,29 +26,32 @@ export function readSoftwareRunState(projectId: string): SoftwareRunState | unde
     || value.failure && (!Number.isSafeInteger(value.failure.repeats) || value.failure.repeats < 0 || !Number.isSafeInteger(value.failure.total) || value.failure.total < 0)) throw Error('RUN_STATE_UNREADABLE')
   return value
 }
-export function saveSoftwareRunState(input: { projectId: string; sessionId: string; runId: string; status: SoftwareRunStatus; source?: string; candidateId?: string; error?: string; check?: SoftwareRunState['check'] }) {
+export function saveSoftwareRunState(input: { projectId: string; sessionId: string; runId: string; status: SoftwareRunStatus; source?: string; candidateId?: string; error?: string; stop_code?: string; check?: SoftwareRunState['check'] }) {
   const project = findProject(input.projectId), before = readSoftwareRunState(input.projectId)
   let budget: SoftwareRunState['budget']
   try { const state = leanBudget(input.projectId, 'desktop-implement').snapshot(); budget = { file: state.file, request_ledger: projectUsageLedgerPath(input.projectId), requests: state.requests, output: state.output } }
   catch (error) { budget = { error: redactSoftwareOutput(String(error)).slice(0, 500) } }
   const sameOperation = before?.operationId === project.lean_operation_id
-  const now = new Date().toISOString(), error = input.error ? redactSoftwareOutput(input.error).slice(0, 2400) : undefined
+  // Retain the redacted source record. Readers bound their projection and expose
+  // omissions; truncating here would make the promised detail irretrievable.
+  const now = new Date().toISOString(), error = input.error ? redactSoftwareOutput(input.error) : undefined
   const state: SoftwareRunState = { version: 1, projectId: input.projectId, sessionId: input.sessionId, runId: input.runId, status: input.status,
     source: input.source ?? (sameOperation ? before?.source : undefined), check: input.check ?? (sameOperation ? before?.check : undefined), operationId: project.lean_operation_id, at: now, budget,
     candidateId: input.candidateId ?? (sameOperation ? before?.candidateId : undefined), failure: sameOperation ? before?.failure : undefined,
+    stop_code: input.stop_code,
     last_failure: error ? { run_id: input.runId, at: now, error } : sameOperation ? before?.last_failure ?? (before?.error ? { run_id: before.runId, at: before.at, error: redactSoftwareOutput(before.error) } : undefined) : undefined,
     error: ['running','verifying','verified'].includes(input.status) ? undefined : error ?? (sameOperation && before?.runId === input.runId ? before.error : undefined) }
   writeTextFileAtomic(pathFor(input.projectId), JSON.stringify(state))
-  recordEvaluationEvent(input.projectId,'run_state',{status:state.status,run_id:state.runId,error:state.error,candidate_id:state.candidateId})
+  recordEvaluationEvent(input.projectId,'run_state',{status:state.status,run_id:state.runId,error:state.error,stop_code:state.stop_code,candidate_id:state.candidateId})
   return state
 }
 /** Repeated identical host observations without observable improvement stop a
  * single run; changed results get another attempt within the SAME budget. */
-export function recordSoftwareRepair(input: { projectId: string; sessionId: string; runId: string; source?: string; candidateId?: string; error: string; observations?: unknown; category?:string }) {
+export function recordSoftwareRepair(input: { projectId: string; sessionId: string; runId: string; source?: string; candidateId?: string; error: string; observations?: unknown; category?:string; failureFingerprint?: string }) {
   const previous = readSoftwareRunState(input.projectId), operation = findProject(input.projectId).lean_operation_id
-  const normalized = redactSoftwareOutput(JSON.stringify({ error: input.error, observations: input.observations ?? null }))
+  const normalized = serializeRedactedJson({ error: input.error, observations: input.observations ?? null },redactSoftwareOutput)
     .split(input.candidateId ?? '[no-candidate]').join('[candidate]')
-  const signature = createHash('sha256').update(normalized).digest('hex')
+  const signature = createHash('sha256').update(JSON.stringify({source:input.source??null,observation:input.failureFingerprint??normalized})).digest('hex')
   const prior = previous && previous.operationId === operation ? previous.failure : undefined
   const repeats = prior?.runId === input.runId && prior.signature === signature ? prior.repeats + 1 : 1
   const state = saveSoftwareRunState({ ...input, status: 'repairing' })

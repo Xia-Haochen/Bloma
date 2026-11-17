@@ -1,0 +1,4 @@
+inputs/documents/*.pdf -text -diff
+inputs/voice/*.wav -text -diff
+inputs/documents/不支持编码.txt -text -diff
+reference-evidence/** -text -whitespace

@@ -1,4 +1,5 @@
 import type { Project, WorkflowStage } from '../../shared/types'
+import { productionNotice } from './production-notice'
 
 export type ProgressState = 'pending' | 'active' | 'done' | 'attention'
 export type ProgressKey = 'requirements' | 'design' | 'build' | 'verify' | 'deliver'
@@ -51,20 +52,21 @@ export function deriveWorkspaceProgress(input: {
     let state: ProgressState = unknown ? 'pending' : complete || index < current ? 'done' : index === current ? 'active' : 'pending'
     let detail: string = definition.detail
     if(index===4&&project?.longterm_summary){
-      detail=project.longterm_summary.status==='awaiting_confirmation'?'本阶段已通过宿主检查，等待你核对当前版本。':`本阶段状态已保留，待办 ${project.longterm_summary.pending_items} 项不自动开工。`
+      detail=project.longterm_summary.status==='awaiting_confirmation'?'本阶段已通过程序检查，请试用当前版本后确认。':`本阶段状态已保留，待办 ${project.longterm_summary.pending_items} 项不自动开工。`
     }
     if (unknown) detail = `阶段 ${phase} 尚未识别，请在工作记录中核对。`
     else if (index < current) detail = '已进入后续阶段，可在项目资料中回看。'
     else if (index === current) {
       if (blocked || error) {
         state = 'attention'
+        const reason = blocked?.note || error || ''
         detail = blocked?.reason === 'user-stop' ? '本轮已按你的操作停止，当前修改尚需验证。'
-          : blocked?.note || error || '制作需要处理，请查看原因后继续。'
+          : (productionNotice(reason) ?? reason) || '制作需要处理，请查看原因后继续。'
       } else if (decision || stage === 'sketch_ready') detail = '等待你确认，可查看内容或提出调整。'
       else if (!busy) detail = '当前停在这一步，可查看已有内容。'
     }
     if(index===4&&project?.longterm_summary&&!blocked&&!error){
-      detail=project.longterm_summary.status==='awaiting_confirmation'?'本阶段已通过宿主检查，等待你核对当前版本。':`本阶段状态已保留，待办 ${project.longterm_summary.pending_items} 项不自动开工。`
+      detail=project.longterm_summary.status==='awaiting_confirmation'?'本阶段已通过程序检查，请试用当前版本后确认。':`本阶段状态已保留，待办 ${project.longterm_summary.pending_items} 项不自动开工。`
       if(project.longterm_summary.status==='awaiting_confirmation')state='attention'
     }
     // Imported/skip-sketch paths must not turn an absent design into a green approval.

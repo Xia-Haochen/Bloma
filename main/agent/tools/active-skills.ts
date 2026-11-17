@@ -2,9 +2,11 @@ import type { AgentLoopTool } from '../loop/agent-loop'
 import {loadSkillCatalog,readCatalogSkill,prepareSkillTask,skillDigest as digest,type ScopedSkill} from '../../platform/mcp/skill-catalog'
 
 /** Pi owns skill parsing; host-scoped reads serve both activation routes. */
-export async function buildActiveSkills(projectRoot:string,disabled=false,includeBundled=false){
+export async function buildActiveSkills(projectRoot:string,disabled=false,includeBundled=false,defaults:string[]=[]){
   const entries=disabled?new Map<string,ScopedSkill>():await loadSkillCatalog(projectRoot,includeBundled)
-  const prepareTask=(task:string)=>prepareSkillTask(task,entries)
+  const activeDefaults=disabled?[]:defaults
+  if(activeDefaults.some(name=>!entries.has(name)))throw Error('SOFTWARE_WORKFLOW_SKILL_UNAVAILABLE')
+  const prepareTask=(task:string)=>prepareSkillTask(task,entries,activeDefaults)
   const {formatSkillsForPrompt}=await import('@earendil-works/pi-coding-agent')
   const all=[...entries.values()].filter(entry=>!entry.skill.disableModelInvocation),available=all.map(e=>e.skill.name)
   if(!all.length)return{prompt:'',tools:[] as AgentLoopTool[],available,catalogHash:digest(disabled?'disabled':'empty'),prepareTask}

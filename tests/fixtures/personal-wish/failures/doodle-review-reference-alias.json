@@ -1,0 +1,102 @@
+{
+  "findings": [
+    {
+      "requirement": "F-004",
+      "expected_source": "修改规则后历史规则版本仍保留；打开旧画时可选择某个旧规则版本或当前新规则进行回放。",
+      "category": "回放规则选择被副作用改写（BR-006 / EXP-001 边界）",
+      "severity": "low",
+      "kind": "disputed",
+      "location": "public/app.js:471-479（markDraftDirty 设置 state.selectedRuleId='draft'）；public/app.js:148-153（currentPlaybackRule）；public/app.js:533-557（ruleNote 文案）",
+      "trigger": "用户在已保存旧画上先在“回放规则”里显式选择历史版本 vN，然后进入“映射规则”面板只改一项映射（选择器任意 change），再回到绘制面板点回放。",
+      "evidence": "markDraftDirty() 无条件执行 state.selectedRuleId = 'draft'，即回放版本被编辑动作改为未保存草稿，而不是用户先前显式选择的 vN；startPlayback 用 currentPlaybackRule() 取到 id==='draft' 的 draftRule()，声音按草稿生成。UI 文案确实会改成“本次回放使用 未保存草稿（基于 vN）”，因此并非完全静默，但与“回放时选择旧规则或新规则只影响声音生成/明确使用所选规则版本”存在解释冲突：用户没有在“回放规则”里改选项，播放规则却被改了。F-003 预期原文又要求“修改后当前规则立即用于新播放”，两条预期在此场景下互相拉扯，故标 disputed 交由宿主裁定。",
+      "reproduction": "1) 打开已保存旧画；2) 在“回放规则”中选 v1（rule-note 显示 v1）；3) 切到“映射规则”，把“慢线条的节奏”改为全音符；4) 切回“绘制与回放”，radio 已是“草稿·未保存”，点回放，lastPerformance.ruleId==='draft'、ruleVersion===null，而非用户所选的 v1。",
+      "unknowns": "产品是否接受“编辑即切换回放版本”为 F-003 的合法含义；是否应在编辑草稿时保持用户已显式选定的历史版本作为回放版本。",
+      "requirement_id": "F-004"
+    },
+    {
+      "requirement": "F-006",
+      "expected_source": "保存画作后重新打开，仍能看到原涂鸦，并能选择旧规则版本或新规则回放。",
+      "category": "异步/身份状态：打开画作的响应被保存请求作废且无提示",
+      "severity": "low",
+      "kind": "suspected",
+      "location": "public/app.js:793（saveArtwork 里 token = { seq: ++state.artworkSeq, ... }）；public/app.js:840-845（openArtwork 用同一计数器并静默丢弃过期响应）",
+      "trigger": "在画作 GET 尚未返回的窗口期内点了一次“保存画作/另存为新画作”（本地 HTTP，通常只有几毫秒，但磁盘繁忙或大数据量画作时可放大）。",
+      "evidence": "artworkSeq 同时被保存与打开两条路径自增，但只有 openArtwork 校验 token !== state.artworkSeq 时直接 return；saveArtwork 自增后并不等待/合并打开请求。于是用户点选画作 B 后紧接着点保存，B 的响应带旧 token 被丢弃，界面继续停在画作 A，且没有任何“打开已取消/失败”的提示，saveState 只显示 A 的“已保存”。用户会以为已切到 B，随后在 A 上继续绘制并保存，可能覆盖 A。",
+      "reproduction": "1) 保存多幅画作；2) 在画作库点 B，随即（同一帧内）点 #save-btn；3) 观察 #crumb-name/画布仍为 A，且无错误提示；4) 再绘制并保存，写入的是 A。",
+      "unknowns": "真实浏览器中该竞态窗口宽度未实测（未运行应用），仅从代码路径判断；未确认用户是否可稳定复现。",
+      "requirement_id": "F-006"
+    },
+    {
+      "requirement": "F-006",
+      "expected_source": "保存画作后重新打开，仍能看到原涂鸦，并能选择旧规则版本或新规则回放。",
+      "category": "未保存改动保护缺失（数据丢失）",
+      "severity": "medium",
+      "kind": "suspected",
+      "location": "public/app.js:249（画作卡片 click 直接 openArtwork(art.id)）；public/app.js:840-863（openArtwork 无 dirty 检查）；public/app.js:865-871（newArtwork 同样无检查）；state.artwork.dirty 仅在 507/527 显示",
+      "trigger": "用户在一幅画上继续绘制（或撤销/清空）后未点保存，直接点画作库里另一幅画，或点“＋ 新建画布”。",
+      "evidence": "state.artwork.dirty 与 artworkRev 被完整维护并在 meta 区显示“有未保存修改”，但 openArtwork/newArtwork 在替换 state.artwork 前从不检查 dirty，也没有二次确认；撤销栈只有 state.artwork.strokes 本身，切换后无法恢复。对比规则草稿路径（renderRuleList 中 state.editorDirty 需要二次点击确认，app.js:291-306），涂鸦数据反而没有同等级保护。",
+      "reproduction": "1) 打开已保存画作 A；2) 在画布上再画两笔（#art-meta 显示“有未保存修改”）；3) 点画作库里的画作 B；4) 画布立即变为 B，A 的新笔触无提示丢失；即使回到 A 也不再出现。",
+      "unknowns": "确认需求未明确要求“切换画作前提示未保存”，因此按无确认依据的增强/缺陷风险提交；是否算违背“不得自动改写旧画”需宿主判断（此处丢失的是未保存内容，非已保存内容）。",
+      "requirement_id": "F-006"
+    },
+    {
+      "requirement": "F-004",
+      "expected_source": "修改规则后历史规则版本仍保留；打开旧画时可选择某个旧规则版本或当前新规则进行回放。",
+      "category": "持久化读入时静默改写原涂鸦数据（颜色/点位/速度）",
+      "severity": "low",
+      "kind": "suspected",
+      "location": "server.js:75-108（normalizeArtwork：line 80 颜色白名单回落 PALETTE[0]，line 84-93 丢弃非法点并给缺失 v 补 0）；public/app.js:796-801（保存时把这些值原样写回）",
+      "trigger": "数据文件中某条线条段颜色不在 PALETTE 内（例如旧版本数据、手工编辑或外部写入），或存在 x/y 非有限值的点，或点缺少 v。",
+      "evidence": "载入时 normalizeArtwork 把未知颜色替换为 #6d8268、丢弃坐标非有限的点、把缺失速度记为 0（speedBin(0)==='slow'），既不报错也不进入 loadIssues；随后用户点“保存画作”时 app 的 payload 正是这份已被改写的 strokes（app.js:796-801），PUT 会把它落盘，原涂鸦的颜色/形状/速度映射输入被永久改写。这与“回放/换规则不得改写原涂鸦”和 BR-001“必须保留位置、时间、速度和颜色”在异常数据下冲突。",
+      "reproduction": "1) 在 studio-data.json 中把某条 stroke.color 改为 '#123456' 或删掉某点 v；2) 重启并打开该画作——界面显示为苔绿（#6d8268）、缺失速度的点按“慢线条”处理，无任何提示；3) 点保存后，磁盘上的原颜色/原数据被覆盖。",
+      "unknowns": "该路径只在数据不在白名单内时触发，正常 UI 绘制不会产生；是否需要把这类改写记为 loadIssues 并阻止写盘由宿主判断。",
+      "requirement_id": "F-004"
+    },
+    {
+      "requirement": "F-001",
+      "expected_source": "用鼠标在画布上绘制时，系统逐段记录位置、时间、速度和颜色，形成可回放的涂鸦画作。",
+      "category": "时间属性已存储但未参与回放（节奏由档位与音符时值合成）",
+      "severity": "low",
+      "kind": "disputed",
+      "location": "public/audio-engine.js:61-99（buildEvents 仅用 p.v 与 stroke.color，完全没有读取 p.t，cursor 由 NOTE_DURATIONS 累加）；public/app.js:604,638（记录绝对 t）",
+      "trigger": "同一幅画（同样的线条形状/颜色）用不同手感绘制：连续快速运笔与中途停顿、抬笔间隔很长后再画下一条，或整体画得更慢但速度仍落在同一档。",
+      "evidence": "逐点时间 t 被完整记录并持久化（server.js:89 保留），但回放事件的时间轴 cursor 是按所选音符时值累加出来的，跨笔画间隔、抬笔停留、整体绘制时长都不参与，事件从 0 连续排布。所以“时间”只是速度的中间量，并未作为 BR-001 所称“后续回放与映射的输入”；两幅节奏明显不同的画可回放出完全相同的结果（当速度落在同一档时）。",
+      "reproduction": "1) 以相同形状与速度（同一档）先后画两幅画，一幅抬笔后立即画下一笔、一幅停顿 3 秒再画；2) 用同一规则回放：buildEvents 生成的事件时间、总时长完全一致（cursor 仅由 note 时长决定）。",
+      "unknowns": "确认需求只显式要求“速度影响节奏”，未要求保留真实时间轴；这是否属于可接受的简化（分层量化）存在争议。",
+      "requirement_id": "F-001"
+    },
+    {
+      "requirement": "unscoped",
+      "expected_source": "无确认依据（代码健壮性/一致性建议）",
+      "category": "保存后的名称漂移（界面显示名与已存名不一致）",
+      "severity": "low",
+      "kind": "suggestion",
+      "location": "public/app.js:787（payload.name 经 trim().slice(0,60) 规整）与 public/app.js:820（if (state.artwork.name === payload.name) 才同步服务端名称）",
+      "trigger": "画作名称首尾带空格（例如用户输入“ 验收画作 ”）后点保存。",
+      "evidence": "state.artwork.name 在 input 事件里直接取原始输入值（app.js:979-986，未 trim），与 payload.name（已 trim）不相等，于是第 820 行的同步条件不成立：state.artwork.name 与输入框保留带空格的名字，而服务端/画作库保存的是去空格后的名字，saveState 仍显示“已保存”。界面显示名与持久化名长期不一致，重开后名称会“变样”。",
+      "reproduction": "1) 在画作名称里输入前后各一个空格的名字；2) 保存；3) 对比顶部 #crumb-name/输入框（带空格）与画作库条目/重开后的名称（无空格）。",
+      "unknowns": "属显示一致性的小问题，不影响回放；确认需求未涵盖名称规整。",
+      "requirement_id": "unscoped"
+    }
+  ],
+  "intent_observations": [
+    {
+      "commitment_id": "EXP-001",
+      "status": "supported",
+      "evidence": "回放前 updateRuleNote 明确写出“本次回放使用 vN/未保存草稿（基于 vN）+ 映射明细”（public/app.js:533-557）；“回放规则”radio 显示已选版本；selectedRuleUnavailable 时 startPlayback 直接 return 并给出“所选规则版本不可用，不会自动改用当前规则”提示（app.js:148-159、714-717）；POST /api/rules 只追加新版本（server.js:337-342），回放不写任何画作或规则数据。",
+      "limitations": "启动默认选中最新规则（app.js:1073），未记住上次回放版本；编辑映射草稿会自动把回放规则切到草稿（app.js:471-479），已在 F-004 疑点中单列，属“显式标注但由编辑副作用切换”的边界。"
+    },
+    {
+      "commitment_id": "EXP-002",
+      "status": "supported",
+      "evidence": "服务端只 data.rules.push(makeRule(maxVersion+1,...))，无任何更新/删除历史版本的路径（server.js:316-343）；保存后客户端 editorBaseId 指向新版本、历史版本仍留在 state.rules 并可由侧栏与 radio 选择（app.js:255-310、891-906）；normalizeRule 载入时保留各自 noteSpeed/timbres/thresholds（server.js:50-73）。",
+      "limitations": "载入阶段遇到重复版本会丢弃后一条并进入只读保护（server.js:118-128），属数据损坏场景；未实测跨重启后的版本历史，仅静态核对。"
+    },
+    {
+      "commitment_id": "EXP-003",
+      "status": "supported",
+      "evidence": "切换“回放规则”radio 仅设置 state.selectedRuleId 并 stopPlayback，不触发任何写请求（app.js:334-340）；playEvents/renderOffline 只读取 strokes 与 rule 生成事件（audio-engine.js:61-99、165-204）；画作写入只发生在显式 saveArtwork（PUT/POST），规则写入只发生在 saveRules。",
+      "limitations": "未运行应用验证磁盘数据在切换规则后逐字节未变；依据代码路径判断。"
+    }
+  ]
+}

@@ -118,7 +118,7 @@ export function mapStageToRunSteps(stage: string): RunStep[] | null {
  */
 export function mapDesktopPhaseToSteps(phase: string, mode: 'quick' | 'longterm' | null | undefined, workflow?: string): RunStep[] | null {
   if (isModernWorkflowVersion(workflow)) {
-    const steps = [{ id: 'prepare', label: '准备' }, { id: 'build', label: '制作' }, { id: 'verify', label: '验证' }, { id: 'deliver', label: '已交付' }]
+    const steps = [{ id: 'prepare', label: '准备' }, { id: 'build', label: '制作' }, { id: 'verify', label: '验证' }, { id: 'deliver', label: '交付' }]
     return withStatus(steps, ({ 'desktop-implement': 2, 'desktop-verify': 3, delivered: 4 } as Record<string, number>)[phase] ?? 1, phase === 'delivered')
   }
   const template = mode === 'quick' ? DESKTOP_QUICK_STEPS : DESKTOP_LONGTERM_STEPS
@@ -281,8 +281,8 @@ export const ProgressCard: React.FC<ProgressCardProps> = ({ stageLabel, steps, l
       // 验收结论以交付说明（delivery 卡）为准
       `${progress.allDone ? '本轮制作已结束' : `第 ${progress.current} / ${progress.total} 步`} · 已结束 ${progress.done} 步`
     : lines.length > 0 || doneSteps > 0
-      ? `${stageLabel} · 已完成 ${doneSteps} 步`
-      : '正在准备 / 理解你的需求…'
+      ? `${stageLabel} · 已结束 ${doneSteps} 项操作`
+      : '正在准备，具体进展会显示在这里。'
 
   return (
     <div
@@ -428,7 +428,7 @@ export const ProgressCard: React.FC<ProgressCardProps> = ({ stageLabel, steps, l
         </div>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+      <div className="progress-card-actions" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--space-3)' }}>
         <button
           type="button"
           onClick={onClose}

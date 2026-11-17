@@ -1,4 +1,7 @@
+import { managedRuntime, validateManagedRuntime, type ManagedRuntime } from './runtime-bindings'
+import { findProject, updateProject } from '../project/project-service'
 import { createHash, randomUUID } from 'node:crypto'
+import {testCorrectionGate} from './test-corrections'
 import * as nodeFs from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -37,6 +40,7 @@ export class ReleaseIntegrityError extends Error {
 export interface SoftwareRelease { version: 1; id: string; projectId: string; sourceRoot: string; root: string;
   speech_resources?:SpeechResourceSnapshot
   source: RuntimeInventory; runtime: RuntimeInventory; launch: LaunchDeclaration; dependencies: Record<string, string>;
+  electron_runtime?: ManagedRuntime
   external_files?: Array<{ path: string; sha256: string }>
   verified?: { version: string; scope: string; at: string; collaboration_id?: string } }
 const IGNORED = new Set(['.git', '00_HISTORY', '.cache', '__pycache__', '.pytest_cache', 'data-backups'])
@@ -55,12 +59,17 @@ export async function fileDigest(file: string, signal?: AbortSignal): Promise<st
 }
 /** Runtime evidence includes binaries/assets/dependencies, with streaming hashes.
  * Only explicitly host-created dependency links may be traversed. */
-export async function runtimeInventory(root: string, signal?: AbortSignal, links: Record<string, string> = {}, hostLayout = true): Promise<RuntimeInventory> {
+export async function runtimeInventory(root: string, signal?: AbortSignal, links: Record<string, string> = {}, hostLayout = true, options: { includeIgnored?: boolean } = {}): Promise<RuntimeInventory> {
   const files: Entry[] = []; let bytes = 0
+  // Bounded IO overlap, NOT a stat cache. Every byte is freshly hashed, and
+  // result slots retain the original sorted depth-first inventory order.
+  const pending = new Set<Promise<void>>()
+  let failure: unknown, failed = false
+  const fail = (error: unknown) => { if (!failed) { failed = true; failure = error } }
   const visit = async (directory: string, prefix = '', mutable = false) => {
     for (const entry of (await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
-      signal?.throwIfAborted()
-      if (IGNORED.has(entry.name)) continue
+      signal?.throwIfAborted(); if (failed) throw failure
+      if (!options.includeIgnored && IGNORED.has(entry.name)) continue
       const path = `${prefix}${entry.name}`, full = join(directory, entry.name), info = await lstat(full)
       if (info.isSymbolicLink()) {
         if (!links[path] || await realpath(full) !== await realpath(links[path])) throw Error(`RELEASE_LINK_UNSUPPORTED: ${path} (root: ${root})`)
@@ -70,14 +79,24 @@ export async function runtimeInventory(root: string, signal?: AbortSignal, links
       if (!info.isFile()) throw Error(`RELEASE_FILE_UNSUPPORTED: ${path}`)
       if (mutable && !CODE.test(entry.name)) continue
       if (files.length >= 250000 || (bytes += info.size) > 8 * 1024 ** 3) throw Error('RELEASE_INVENTORY_LIMIT')
-      const sha256 = await fileDigest(full, signal), after = await stat(full)
-      if (after.size !== info.size || after.mtimeMs !== info.mtimeMs) throw Error('RELEASE_INPUT_CHANGED_DURING_READ')
-      files.push({ path, size: info.size, sha256 })
+      const slot = files.length; files.push({ path, size: info.size, sha256: '' })
+      let task: Promise<void>
+      task = (async () => {
+        const sha256 = await fileDigest(full, signal), after = await lstat(full)
+        if (!after.isFile() || after.dev !== info.dev || after.ino !== info.ino || after.size !== info.size
+          || after.mtimeMs !== info.mtimeMs || after.ctimeMs !== info.ctimeMs) throw Error('RELEASE_INPUT_CHANGED_DURING_READ')
+        files[slot].sha256 = sha256
+      })().catch(fail).finally(() => pending.delete(task))
+      pending.add(task)
+      if (pending.size >= 4) await Promise.race(pending)
     }
   }
-  await visit(await realpath(root))
+  try { await visit(await realpath(root)) } catch (error) { fail(error) }
+  await Promise.all(pending)
+  signal?.throwIfAborted(); if (failed) throw failure
   return { digest: hash(JSON.stringify(files)), bytes, files }
 }
+
 async function copyEntries(source: string, destination: string, entries: Entry[], signal?: AbortSignal, trim = '') {
   await mkdir(destination, { recursive: true })
   for (const entry of entries) {
@@ -85,6 +104,19 @@ async function copyEntries(source: string, destination: string, entries: Entry[]
     await mkdir(dirname(target), { recursive: true }); await copyFile(join(source, entry.path), target, constants.COPYFILE_FICLONE)
     if (await fileDigest(target, signal) !== entry.sha256) throw Error('RELEASE_COPY_INPUT_CHANGED')
   }
+}
+/** Host-only physical transfer; keep LAUNCH.json bytes unchanged. Execution
+ * relocation is a separate, explicitly pinned overlay, never new acceptance. */
+export async function copySoftwareCandidateRuntime(release: SoftwareRelease, destination: string, signal?: AbortSignal, preflight?: (inventory: RuntimeInventory) => void): Promise<RuntimeInventory> {
+  await validateSoftwareRelease(release.projectId, release, signal)
+  const inventory = await runtimeInventory(release.root, signal, release.dependencies)
+  if (inventory.digest !== release.runtime.digest) throw Error('RELEASE_COPY_INPUT_CHANGED')
+  preflight?.(inventory)
+  await copyEntries(release.root, destination, inventory.files, signal)
+  const copied = await runtimeInventory(destination, signal, {}, false, { includeIgnored: true })
+  if (copied.digest !== inventory.digest) throw Error('RELEASE_COPY_INPUT_CHANGED')
+  await validateSoftwareRelease(release.projectId, release, signal)
+  return copied
 }
 function relocatedLaunch(launch: LaunchDeclaration, source: string, destination: string): LaunchDeclaration {
   return { ...launch, command: launch.command.map(argument => {
@@ -134,6 +166,8 @@ export async function prepareSoftwareRelease(projectId: string, sourceRoot: stri
   if(speech)await writeFile(join(root,CAPABILITY_CAPSULE),JSON.stringify({version:1,speech}))
   const resolved = resolveSoftwareCommand(root, relocated.command, softwareEnvironment(projectId,undefined,root))
   const launch = { ...relocated, command: resolved.command }
+  const boundElectron = managedRuntime(projectId, 'electron')
+  const electron_runtime = boundElectron && resolved.command[0] === boundElectron.executable ? boundElectron : undefined
   const external_files: NonNullable<SoftwareRelease['external_files']> = []
   for (const file of [...new Set(launch.command.filter(isAbsolute))]) {
     const rel = relative(root, file)
@@ -144,7 +178,7 @@ export async function prepareSoftwareRelease(projectId: string, sourceRoot: stri
   await writeFile(join(root, 'LAUNCH.json'), JSON.stringify(launch, null, 2))
   if ((await runtimeInventory(sourceRoot, signal)).digest !== source.digest) throw Error('RELEASE_SOURCE_CHANGED_DURING_COPY')
   const runtime = await runtimeInventory(root, signal, dependencies)
-  const release: SoftwareRelease = { version: 1, id, projectId, sourceRoot, root, source, runtime, launch, dependencies, external_files,...(speech_resources?{speech_resources}:{}) }
+  const release: SoftwareRelease = { version: 1, id, projectId, sourceRoot, root, source, runtime, launch, dependencies, external_files, ...(electron_runtime ? { electron_runtime } : {}),...(speech_resources?{speech_resources}:{}) }
   writeTextFileAtomic(join(directory, 'release.json'), JSON.stringify(release))
   return release
 }
@@ -159,6 +193,10 @@ export async function validateSoftwareRelease(projectId: string, release: Softwa
   const runtime = await runtimeInventory(release.root, signal, release.dependencies)
   if(release.speech_resources)await validateSpeechResources(release.speech_resources,signal)
   if (runtime.digest !== release.runtime.digest) throw new ReleaseIntegrityError('RELEASE_BYTES_CHANGED', release.runtime, runtime)
+  if (release.electron_runtime) {
+    validateManagedRuntime(release.electron_runtime)
+    if (release.launch.command[0] !== release.electron_runtime.executable) throw Error('RELEASE_ELECTRON_BINDING_CHANGED')
+  }
   for (const file of release.external_files ?? []) if (await fileDigest(file.path, signal) !== file.sha256) throw Error('RELEASE_EXTERNAL_RUNTIME_CHANGED')
 }
 export async function verifyReleaseSource(release: SoftwareRelease, signal?: AbortSignal) {
@@ -168,22 +206,27 @@ export async function verifyReleaseSource(release: SoftwareRelease, signal?: Abo
 }
 /** Only the host after actual candidate checks may call this, never model tools. */
 export async function sealSoftwareRelease(release: SoftwareRelease, evidence: NonNullable<SoftwareRelease['verified']>, signal?: AbortSignal, stillCurrent?: () => boolean) {
+  const correction=testCorrectionGate(release.projectId);if(correction)throw Error(correction)
   await verifyReleaseSource(release, signal)
   signal?.throwIfAborted()
   if (stillCurrent && !stillCurrent()) throw Error('RELEASE_VERIFICATION_SCOPE_CHANGED')
   release.verified = evidence
   writeTextFileAtomic(join(dirname(release.root), 'release.json'), JSON.stringify(release))
 }
-export async function promoteSoftwareRelease(release: SoftwareRelease, evidence: NonNullable<SoftwareRelease['verified']>, signal?: AbortSignal, stillCurrent?: () => boolean) {
+export async function promoteSoftwareRelease(release: SoftwareRelease, evidence: NonNullable<SoftwareRelease['verified']>, signal?: AbortSignal, stillCurrent?: () => boolean, complete = false) {
   await sealSoftwareRelease(release,evidence,signal)
   signal?.throwIfAborted()
   if(stillCurrent&&!stillCurrent())throw Error('RELEASE_VERIFICATION_SCOPE_CHANGED')
-  writeTextFileAtomic(join(base(release.projectId), 'active.json'), JSON.stringify({ id: release.id }))
+  signal?.throwIfAborted()
+  updateProject(release.projectId, { software_release_id: release.id, ...(complete ? {desktop_phase:'delivered' as const,status:'completed' as const,current_stage:'completed' as const,desktop_blocked:undefined,blocked_action:undefined} : {}) })
 }
 export async function activeSoftwareRelease(projectId: string, signal?: AbortSignal, verifyBytes = true): Promise<SoftwareRelease | undefined> {
-  let id: string
+  let id = findProject(projectId).software_release_id
+  if (id !== undefined) return loadSoftwareRelease(projectId, id, signal, verifyBytes)
+  // Read-only migration for historical releases; new publications have one authority.
   try { ({ id } = JSON.parse(await readFile(join(base(projectId), 'active.json'), 'utf8'))) }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error }
+  if(typeof id!=='string')throw Error('RELEASE_ACTIVE_ID_INVALID')
   return loadSoftwareRelease(projectId, id, signal, verifyBytes)
 }
 export async function loadSoftwareRelease(projectId: string, id: string, signal?: AbortSignal, verifyBytes = true): Promise<SoftwareRelease> {

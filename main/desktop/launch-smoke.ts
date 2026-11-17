@@ -55,6 +55,20 @@ export type LaunchDeclarationParse =
   | { ok: true; launch: LaunchDeclaration }
   | { ok: false; error: string }
 
+/** This is adapter compatibility, not evidence that an application runs. */
+export const NATIVE_GUI_UI = ['browser','electron'] as const
+export function supportsNativeGuiAcceptance(launch: LaunchDeclaration) {
+  return launch.schema_version===2 && NATIVE_GUI_UI.some(ui=>ui===launch.ui)
+}
+export function declaredEntryFacts(root:string) {
+  const declared=readLaunchDeclaration(root)
+  if(!declared)return{declared:false}
+  if(!declared.ok)return{declared:true,valid:false,error:declared.error}
+  return{declared:true,valid:true,ui:declared.launch.ui,mode:declared.launch.mode,
+    native_js_acceptance_supported:supportsNativeGuiAcceptance(declared.launch),
+    note:'仅说明已实现验收适配器的兼容性，不证明运行时可用或产品通过。其他验证方式按对应契约核对。'}
+}
+
 /** 解析 LAUNCH.json（纯函数）：schema_version=1 / command 非空字符串数组 / window_title 可选。 */
 export function parseLaunchDeclaration(raw: string): LaunchDeclarationParse {
   let parsed: unknown
@@ -143,6 +157,8 @@ export interface LaunchProbeCriteria {
   detail?: string
   /** 探针不可用降级标记：true = 未执行联合判定（仅存活验证） */
   degraded?: boolean
+  observed_title?: string
+  title_hint_matched?: boolean
 }
 
 /** 探针运行入参（超时预算由宿主统一编排）。 */
@@ -409,19 +425,30 @@ def main() -> int:
     # 1) Only this launch's process tree; titles must never select a user's
     # unrelated running window. Windows venv launchers may own a child Python.
     main_hwnd = 0
-    deadline = time.monotonic() + ready_ms / 1000.0
+    began = time.monotonic()
+    deadline = began + ready_ms / 1000.0
     while time.monotonic() < deadline and not main_hwnd:
         owned = owned_pids()
-        for hwnd in enum_hwnds():
-            if user32.IsWindow(hwnd) and win_pid(hwnd) in owned and visible_nonzero(hwnd) and (not title or title in win_text(hwnd)):
+        candidates = [hwnd for hwnd in enum_hwnds()
+                      if user32.IsWindow(hwnd) and win_pid(hwnd) in owned and visible_nonzero(hwnd)
+                      and win_text(hwnd) and win_class(hwnd) != '#32770']
+        for hwnd in candidates:
+            if not title or title in win_text(hwnd):
                 main_hwnd = hwnd
                 break
+        # The title is a hint, not a frozen business assertion: apps routinely
+        # replace it with a document or role name. Never fall back outside this
+        # owned process tree, or choose among multiple unmatched visible windows.
+        if not main_hwnd and len(candidates) == 1 and time.monotonic() - began >= 1:
+            main_hwnd = candidates[0]
         if not main_hwnd:
             time.sleep(0.25)
     if not main_hwnd:
         return bail(window_found=False, responsive=False, stable=False, closed_gracefully=False,
                     crash_dialog=[], screenshot=False, fail_code='no_window',
                     detail='%dms 内未找到属于进程 %d 的可见主窗口' % (ready_ms, pid))
+    result['observed_title'] = win_text(main_hwnd)
+    result['title_hint_matched'] = not title or title in result['observed_title']
 
     # 2) 消息循环响应探测（挂起窗口 SendMessageTimeout 超时——冻结循环在此现形）
     res = ctypes.c_size_t(0)
@@ -572,6 +599,8 @@ export function parseProbeJson(stdout: string): LaunchProbeCriteria | null {
           screenshot: obj.screenshot === true,
           ...(typeof obj.fail_code === 'string' ? { fail_code: obj.fail_code } : {}),
           ...(typeof obj.detail === 'string' ? { detail: obj.detail } : {}),
+          ...(typeof obj.observed_title === 'string' ? { observed_title: obj.observed_title } : {}),
+          ...(typeof obj.title_hint_matched === 'boolean' ? { title_hint_matched: obj.title_hint_matched } : {}),
         }
       }
     } catch {

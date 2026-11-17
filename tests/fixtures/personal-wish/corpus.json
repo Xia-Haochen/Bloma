@@ -1,0 +1,151 @@
+{
+  "version": 1,
+  "generation_calls": 0,
+  "heldout_status": "not_independent_requires_external_selection",
+  "cases": [
+    {
+      "id": "interaction-letters",
+      "family": "interaction",
+      "request_sha256": "69d7178c892055b3d6002ebec39005bf76f4f25031de94e8f4d2ffdd39c7b54c",
+      "exposed_to_implementer": true,
+      "role": "development_or_transfer_candidate",
+      "assets_status": "synthetic_inputs_prepared",
+      "assets": [
+        "personal-records.json"
+      ]
+    },
+    {
+      "id": "interaction-doodle",
+      "family": "interaction",
+      "request_sha256": "c040c99ef5307ea7d60e79e09d768de03656b384caf11af3e0fd4f8b1649118e",
+      "exposed_to_implementer": true,
+      "role": "development_or_transfer_candidate",
+      "assets_status": "synthetic_inputs_prepared",
+      "assets": [
+        "personal-records.json"
+      ]
+    },
+    {
+      "id": "exceptions-wardrobe",
+      "family": "exceptions",
+      "request_sha256": "5c3f035dc3a1ecdf3235658ec5168d83ea5a5d420467a8c2ed7c8cf953800677",
+      "exposed_to_implementer": true,
+      "role": "development_or_transfer_candidate",
+      "assets_status": "synthetic_inputs_prepared",
+      "assets": [
+        "personal-records.json"
+      ]
+    },
+    {
+      "id": "exceptions-coffee",
+      "family": "exceptions",
+      "request_sha256": "4ac5e3cfd2dff46dfdc3df83e766dc0422d89e7f870d97fb0b25b87a6df5d9d6",
+      "exposed_to_implementer": true,
+      "role": "development_or_transfer_candidate",
+      "assets_status": "synthetic_inputs_prepared",
+      "assets": [
+        "personal-records.json"
+      ]
+    },
+    {
+      "id": "sources-meeting",
+      "family": "sources",
+      "request_sha256": "652e2af02dd068f828a89d750dfc4f31be55ae0f61ee628b7cc94e263fefe1d7",
+      "exposed_to_implementer": true,
+      "role": "development_or_transfer_candidate",
+      "assets_status": "synthetic_inputs_prepared",
+      "assets": [
+        "meeting.txt",
+        "whiteboard.png",
+        "game-notes.txt",
+        "game.png"
+      ]
+    },
+    {
+      "id": "sources-games",
+      "family": "sources",
+      "request_sha256": "fb9e7f49ef2d9781aeed17aa782a6e353d17026507894d5ee679bae7f8b8a44b",
+      "exposed_to_implementer": true,
+      "role": "development_or_transfer_candidate",
+      "assets_status": "synthetic_inputs_prepared",
+      "assets": [
+        "meeting.txt",
+        "whiteboard.png",
+        "game-notes.txt",
+        "game.png"
+      ]
+    },
+    {
+      "id": "history-plants",
+      "family": "history",
+      "request_sha256": "8794990d5bb3b0aec946437b1633cf12f3161b5d69196667cf56af1c07363f85",
+      "exposed_to_implementer": true,
+      "role": "development_or_transfer_candidate",
+      "assets_status": "synthetic_inputs_prepared",
+      "assets": [
+        "personal-records.json"
+      ]
+    },
+    {
+      "id": "history-story",
+      "family": "history",
+      "request_sha256": "2f7f11436e144eecf1d5bb9c47681dc6fc9bbaa6c656ce46940ad81a4f27b1aa",
+      "exposed_to_implementer": true,
+      "role": "development_or_transfer_candidate",
+      "assets_status": "synthetic_inputs_prepared",
+      "assets": [
+        "personal-records.json"
+      ]
+    },
+    {
+      "id": "jobs-sound",
+      "family": "jobs",
+      "request_sha256": "5dc27c6044f9416e0a1645bbbcfafff2bcac59b9dccebf147690c7a547ffac13",
+      "exposed_to_implementer": true,
+      "role": "development_or_transfer_candidate",
+      "assets_status": "synthetic_inputs_prepared",
+      "assets": [
+        "tone-a.wav",
+        "tone-b.wav",
+        "practice.webm"
+      ]
+    },
+    {
+      "id": "jobs-clips",
+      "family": "jobs",
+      "request_sha256": "35dbeba127f88877b72677ff30d307fe4845b71eb1ba9c6b2ca74a5f204699e6",
+      "exposed_to_implementer": true,
+      "role": "development_or_transfer_candidate",
+      "assets_status": "synthetic_inputs_prepared",
+      "assets": [
+        "tone-a.wav",
+        "tone-b.wav",
+        "practice.webm"
+      ]
+    },
+    {
+      "id": "organization-dreams",
+      "family": "organization",
+      "request_sha256": "714a347828e050d1f111f77844d23597e852458e2616adfb3d0013854fece1c1",
+      "exposed_to_implementer": true,
+      "role": "development_or_transfer_candidate",
+      "assets_status": "synthetic_inputs_prepared",
+      "assets": [
+        "personal-records.json",
+        "cover.png"
+      ]
+    },
+    {
+      "id": "organization-exhibit",
+      "family": "organization",
+      "request_sha256": "ac96422b342e77652123e81d019e1a20010b2dd3ebbced38cbb87ae1d0578755",
+      "exposed_to_implementer": true,
+      "role": "development_or_transfer_candidate",
+      "assets_status": "synthetic_inputs_prepared",
+      "assets": [
+        "personal-records.json",
+        "cover.png"
+      ]
+    }
+  ]
+}

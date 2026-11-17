@@ -1,3 +1,4 @@
+import { safeToolDisplay } from '../../../shared/tool-display'
 import { createHash, randomUUID } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -57,8 +58,9 @@ export function recoverInterruptedTools(manager: SessionManager): void {
   for (const [id, { name, assistantEntryId }] of pending) {
     const receipt = [...receipts].reverse().find(entry => entry.type === 'custom'
       && (entry.data as { id?: string })?.id === id && (entry.data as { assistantEntryId?: string })?.assistantEntryId === assistantEntryId)
-    const data = receipt?.type === 'custom' ? receipt.data as { content?: string; isError?: boolean; name?: string } : undefined
+    const data = receipt?.type === 'custom' ? receipt.data as { content?: string; isError?: boolean; name?: string; display?: unknown } : undefined
     manager.appendMessage({ role: 'toolResult', toolCallId: id, toolName: name, timestamp: Date.now(),
+      details: JSON.parse(JSON.stringify({display:data?.name === name ? safeToolDisplay(data.display) : undefined})),
       content: [{ type: 'text', text: data?.name === name && typeof data.content === 'string' ? data.content
         : '上次运行在此工具调用期间中断，执行结果未知。请先检查文件与实际状态；宿主没有重放该调用。' }],
       isError: data?.name === name && typeof data.content === 'string' ? data.isError === true : true })

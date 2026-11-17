@@ -1,3 +1,4 @@
+import { runWithProjectRootOverride } from '../../../shared/project-root-override'
 import { randomUUID } from 'node:crypto'
 import { acquireChildRunContext, formatWorktreeNote, invokeChildLoopWithContext, summarizeChildResult, buildChildSystemPrompt, buildDelegationPrompt } from './child-run-context';
 
@@ -6,7 +7,7 @@ export { setChildRunContextProvider } from './child-run-context'
 /** 提示词纯函数 re-export（R7 拆出后保持既有 import 路径）。 */
 export { buildChildSystemPrompt, buildDelegationPrompt } from './child-run-context'
 import { appendDelegationSettle, loadChildSessionSnapshot, replayTurnsFrom } from './delegation-persistence'
-import { buildCompletedDelegation, registerChildWithHost } from './completed-delegation'
+import { buildCompletedDelegation, buildIndependentResearchDelegation, registerChildWithHost } from './completed-delegation'
 import { buildTaskHandoff, renderTaskHandoff, type TaskHandoff } from './task-handoff'
 import { refreshHandoffEvidence, assertDelegationRecovery } from './delegation-evidence'
 export { DelegationBudgetError } from './delegation-evidence'
@@ -66,6 +67,8 @@ import type { DelegationRunRole as DelegationRole } from '../../../shared/delega
 export type DelegationStatus = 'running' | 'completed' | 'failed' | 'cancelled'
 
 export interface DelegateAgentArgs {
+  independentWorkspace?: boolean
+  experiment?: { criterion: string; inputs?: string[] }
   writePaths?: string[]
   readOnly?: boolean
   task: string
@@ -86,6 +89,7 @@ export interface StartDelegationResult {
 }
 
 export interface DelegationSummary {
+  workspace_facts?: unknown
   task_handoff?: TaskHandoff
   delegation_id: string
   role: DelegationRole
@@ -108,8 +112,11 @@ export interface AskSignal {
 }
 
 export interface DelegationRecord {
-  assignment?: { writePaths?: string[]; readOnly?: boolean }
-  workspaceLease?: { release: () => void; completionNote?: () => string }
+  /** Optional host label; detailed follow-up inputs remain in the transcript. */
+  title?: string
+  assignment?: { writePaths?: string[]; readOnly?: boolean; experiment?: DelegateAgentArgs['experiment']; independentWorkspace?: boolean }
+  workspaceLease?: { release: () => void; completionNote?: () => string; facts?:()=>unknown }
+  workspaceFacts?:()=>unknown
   taskHandoff?: TaskHandoff
   delegationId: string
   parentSessionId: string
@@ -209,7 +216,8 @@ export function startDelegation(parent: ToolContext, args: DelegateAgentArgs): S
   }
 
   const delegationId = randomUUID()
-  const goal = truncateText(task, DELEGATION_GOAL_CHAR_LIMIT)
+  const title=typeof args.title==='string'&&args.title.trim()?truncateText(args.title.trim(),80):undefined
+  const goal = truncateText(title??task, DELEGATION_GOAL_CHAR_LIMIT)
   const { completion, resolveCompletion } = createDelegationCompletion()
   const childSessionId = randomUUID()
 
@@ -220,6 +228,7 @@ export function startDelegation(parent: ToolContext, args: DelegateAgentArgs): S
     projectId: parent.projectId,
     role,
     goal,
+    ...(title?{title}:{}),
     status: 'running',
     startedAt: Date.now(),
     abort: new AbortController(),
@@ -228,8 +237,9 @@ export function startDelegation(parent: ToolContext, args: DelegateAgentArgs): S
     askSignal: createAskSignal(),
     channelOverride: resolveDelegationChannelOverride(args) ?? undefined,
   }
-  record.assignment = { writePaths: args.writePaths, readOnly: args.readOnly }
+  record.assignment = { writePaths: args.writePaths, readOnly: args.readOnly, experiment: args.experiment, independentWorkspace: args.independentWorkspace }
   record.workspaceLease = parentCtx.prepareDelegation?.({ parent, args, childSessionId, delegationId })
+  record.workspaceFacts=record.workspaceLease?.facts
   delegations.set(delegationId, record)
   ensureDelegationWatchStarted()
   // delegation-persistence 阶段 1（2026-08-28）：子会话索引写归属 meta——重启后
@@ -249,7 +259,7 @@ export function startDelegation(parent: ToolContext, args: DelegateAgentArgs): S
 
   const prompt = buildDelegationPrompt({ role, task, expectedOutput: args.expectedOutput })
 
-  launchChildLoop({ parent, parentCtx, record, prompt, role })
+  launchChildLoop({ parent, parentCtx, record, prompt, rawTask:task, role })
 
   return { delegation_id: delegationId, child_session_id: childSessionId, role, goal, status: record.status }
 }
@@ -315,19 +325,28 @@ async function runChildLoop(opts: {
   role: DelegationRole
   /** continue 续跑重放的历史轮次（阶段 3）；startDelegation 全新会话不传 */
   replayTurns?: ConversationTurn[]
+  rawTask?: string
 }): Promise<AgentLoopResult> {
   const { parent, parentCtx, record, prompt, role } = opts
+  const childContext=parentCtx.childLoopContext?.(record.childSessionId,opts.rawTask??prompt)
   const runAbort = record.abort
   const childRequestId = randomUUID()
   const maxTurns = resolveDelegationTurns(parentCtx, role)
+  let completedTurns=0
+  const liveContext=parentCtx.liveContext||childContext?.liveContext?()=>{
+    const facts=parentCtx.liveContext?.()
+    return{...(facts&&typeof facts==='object'&&!Array.isArray(facts)?facts:{context:facts}),
+      ...(childContext?.liveContext?{assigned_observations:childContext.liveContext()}:{}),
+      delegation:{turn_limit:maxTurns,remaining_turns:Math.max(0,maxTurns-completedTurns)}}
+  }:undefined
   // P1-06 收尾：子运行上下文（worktree 隔离）；provider 未注册/开关 off → 零变化
   const runContext = acquireChildRunContext({ projectId: parent.projectId, delegationId: record.delegationId, childSessionId: record.childSessionId, role })
   const isolationNote = runContext?.rootOverride
     ? '\n\n【隔离工作模式】你在独立分支的工作树上实现（改动不直接进项目主目录）；本会话不提供预览/测试/安全验证工具——验证由父会话在合并后统一执行，请专注于实现与逻辑自检。'
     : ''
   const invoke = (): Promise<AgentLoopResult> => runAgentLoop({
-    system: `${buildChildSystemPrompt(parentCtx.childSystemBuilder?.(role, record.childSessionId) ?? parentCtx.system, role)}${isolationNote}`,
-    task: parentCtx.delegationTurnLimits?.[role] ? prompt + '\n\n【执行预算】本轮上限 ' + maxTurns + ' 轮，每轮为一次模型请求。沿用历史中的已读事实，避免重复通读；保留最后约 1/4 轮数用于真实验证与交付收口。未完成时明确列出未落盘/未验证项，不得声称工作已完成。' : prompt,
+    system: `${childContext?.system??buildChildSystemPrompt(parentCtx.childSystemBuilder?.(role, record.childSessionId) ?? parentCtx.system, role)}${isolationNote}`,
+    task: childContext?.task??(parentCtx.delegationTurnLimits?.[role] ? prompt + '\n\n【执行预算】本轮上限 ' + maxTurns + ' 轮，每轮为一次模型请求。沿用历史中的已读事实，避免重复通读；保留最后约 1/4 轮数用于真实验证与交付收口。未完成时明确列出未落盘/未验证项，不得声称工作已完成。' : prompt),
     historyTurns: opts.replayTurns,
     materials: parentCtx.childMaterialsBuilder ? parentCtx.childMaterialsBuilder(record.childSessionId) : parentCtx.materials,
     tools: [...(parentCtx.childToolsBuilder ?? childToolsBuilder)(parent.projectId, role, parentCtx.editFormat, record.childSessionId), ...(parentCtx.childExtraTools ?? [])],
@@ -340,12 +359,17 @@ async function runChildLoop(opts: {
     accountingTurnId: parentCtx.accountingTurnId,
     projectId: parent.projectId,
     requestId: childRequestId,
-    maxTokens: record.channelOverride?.maxTokens ?? parentCtx.maxTokens,
+    maxTokens: Math.min(record.channelOverride?.maxTokens ?? parentCtx.maxTokens,parentCtx.childMaxTokens?.(record.childSessionId) ?? Number.MAX_SAFE_INTEGER),
     maxTurns,
     ...(role === 'implement' && parentCtx.executionScope ? { workMode: 'implementation' as const } : {}),
     executionScope: parentCtx.executionScope,
 
-    runtimeScope: parentCtx.runtimeScope,
+    liveContext,
+    afterTools: parentCtx.childAfterTools?.(record.childSessionId),
+    beforeComplete: childContext?.beforeComplete,
+    publicMessageTiming: childContext?.publicMessageTiming,
+    allowSilentCompletion: childContext?.allowSilentCompletion,
+    runtimeScope: parentCtx.childRuntimeScope?.(record.childSessionId) ?? parentCtx.runtimeScope,
     onRuntimeObservation: parentCtx.onRuntimeObservation,
     permissionMode: parentCtx.permissionMode,
     delegationDepth: parent.state.delegation_depth + 1,
@@ -356,14 +380,18 @@ async function runChildLoop(opts: {
     publish: (type, payload) => {
       if (CHILD_LOOP_ALLOWED_EVENT_TYPES.has(type)) parentCtx.publish(type, payload)
     },
-    onTurn: parentCtx.onChildTurn
-      ? (info) => parentCtx.onChildTurn!(info, { sessionId: record.childSessionId, requestId: childRequestId, role })
-      : undefined,
+    onTurn:info=>{completedTurns=info.turn;parentCtx.onChildTurn?.(info,{sessionId:record.childSessionId,requestId:childRequestId,role})},
+    onAssistantMessage:parentCtx.onChildMessage?message=>{
+      const limit=parentCtx.delegationSummaryLimit??3000
+      parentCtx.onChildMessage!({...message,text:message.text.slice(0,limit),truncated:message.text.length>limit},
+        {sessionId:record.childSessionId,requestId:childRequestId,role})
+    }:undefined,
     onCompaction: parentCtx.onChildCompaction
       ? (info) => parentCtx.onChildCompaction!(info, { sessionId: record.childSessionId, requestId: childRequestId, role })
       : undefined,
   })
-  const { result, meta } = await invokeChildLoopWithContext(runContext, invoke)
+  const independentRoot=parentCtx.childWorkspace?.(record.childSessionId)
+  const { result, meta } = await invokeChildLoopWithContext(runContext, independentRoot?()=>runWithProjectRootOverride(independentRoot,invoke):invoke)
   if (meta && record.abort === runAbort) record.worktreeMeta = { ...(record.worktreeMeta ?? {}), ...meta }
   return result
 }
@@ -391,6 +419,12 @@ function launchChildLoop(opts: Parameters<typeof runChildLoop>[0]): void {
     result => { if (opts.record.abort === ownedAbort) settleChildLoop(opts.record, result) },
     error => { if (opts.record.abort === ownedAbort) settleChildLoopError(opts.record, error) },
   ).finally(() => {
+    // Logical stop releases waiters immediately. Seal cancellation again only
+    // after this invocation's late tool receipts have drained, never a newer run.
+    if(opts.record.abort===ownedAbort&&opts.record.status==='cancelled'){
+      try{appendDelegationSettle(opts.record.childSessionId,'cancelled',{error:opts.record.error})}
+      catch(error){console.warn('[delegation-persistence] cancelled teardown 落盘失败:',error)}
+    }
     pending.delete(invocation); if (!pending.size) childInvocations.delete(opts.record.parentSessionId)
     if(latestChildInvocation.get(opts.record)===invocation)latestChildInvocation.delete(opts.record)
   })
@@ -417,7 +451,10 @@ export async function settleParentDelegationRuns(parentSessionId: string, timeou
 
 export function getDelegationSummary(record: DelegationRecord): DelegationSummary {
   refreshDelegationHandoff(record)
+  let workspaceFacts:unknown
+  if(record.workspaceFacts)try{workspaceFacts=record.workspaceFacts()}catch(error){workspaceFacts={available:false,error:String(error)}}
   return {
+    ...(record.workspaceFacts?{workspace_facts:workspaceFacts}:{}),
     ...(record.taskHandoff ? { task_handoff: record.taskHandoff } : {}),
     delegation_id: record.delegationId,
     role: record.role,
@@ -439,6 +476,12 @@ function refreshDelegationHandoff(record: DelegationRecord): void {
   record.taskHandoff = refreshHandoffEvidence(record, tools)
 }
 
+/** Host recovery checks liveness without exposing another session's records. */
+export function isProjectDelegationRunning(projectId:string,delegationId:string){
+  const record=delegations.get(delegationId)
+  return record?.projectId===projectId&&record.status==='running'
+}
+
 export function findDelegation(parentSessionId: string, delegationId: string): DelegationRecord | undefined {
   const record = delegations.get(delegationId)
   if (!record || record.parentSessionId !== parentSessionId) return undefined
@@ -452,6 +495,18 @@ export function restoreCompletedDelegation(parent: Pick<ToolContext, 'projectId'
   const record = buildCompletedDelegation(parent, delegationId, createDelegationCompletion(), createAskSignal())
   delegations.set(delegationId, record)
   return record
+}
+
+/** Only host-selected monitor records use this path; no model restoration tool. */
+export function restoreIndependentResearchDelegation(parent:Pick<ToolContext,'projectId'|'sessionId'>,delegationId:string):DelegationRecord{
+  const existing=findDelegation(parent.sessionId,delegationId)
+  if(existing){
+    if(existing.projectId!==parent.projectId||existing.role!=='research'||!existing.assignment?.independentWorkspace)throw Error('ENGINEERING_MONITOR_OWNER_MISMATCH')
+    if(existing.status==='running')throw Error('ENGINEERING_MONITOR_ALREADY_RUNNING')
+    return existing
+  }
+  const record=buildIndependentResearchDelegation(parent,delegationId,createDelegationCompletion(),createAskSignal())
+  delegations.set(delegationId,record);return record
 }
 
 function forEachRunningDelegation(fn: (record: DelegationRecord) => void): void {
@@ -663,6 +718,7 @@ export function continueDelegation(parent: ToolContext, delegationId: string, ta
   const previousHandoff = record.taskHandoff
   record.workspaceLease = parentCtx.prepareDelegation?.({ parent, args: { task: trimmedTask, role: record.role, ...record.assignment },
     childSessionId: record.childSessionId, delegationId: record.delegationId })
+  record.workspaceFacts=record.workspaceLease?.facts
   record.taskHandoff = undefined
   record.status = 'running'
   record.loopStatus = undefined
@@ -676,7 +732,7 @@ export function continueDelegation(parent: ToolContext, delegationId: string, ta
   record.resolveCompletion = resolveCompletion
   record.askSignal = createAskSignal()
   // 续跑即新任务（审计 P2-6）：goal/startedAt 跟随本次 task，事件与渲染端不再显示旧 goal。
-  record.goal = truncateText(trimmedTask, DELEGATION_GOAL_CHAR_LIMIT)
+  record.goal = truncateText(record.title??trimmedTask, DELEGATION_GOAL_CHAR_LIMIT)
   record.startedAt = Date.now()
 
   let prompt = buildDelegationPrompt({ role: record.role, task: trimmedTask })
@@ -693,7 +749,7 @@ export function continueDelegation(parent: ToolContext, delegationId: string, ta
   } catch (error) {
     console.warn('[delegation-persistence] 续跑历史读回失败，退化为无历史续跑:', error)
   }
-  launchChildLoop({ parent, parentCtx, record, prompt, role: record.role, replayTurns })
+  launchChildLoop({ parent, parentCtx, record, prompt, rawTask:trimmedTask, role: record.role, replayTurns })
   publishDelegationEvent(parent.sessionId, 'delegation_started', record)
   return {
     delegation_id: record.delegationId,

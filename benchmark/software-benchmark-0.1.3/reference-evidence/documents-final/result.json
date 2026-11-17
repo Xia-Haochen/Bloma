@@ -1,0 +1,29 @@
+{
+  "mode": "documents",
+  "started_at": "2026-11-16T06:28:15.383Z",
+  "checks": [
+    {
+      "name": "B1_B2_all_formats_duplicate_names_exact_text_source_navigation",
+      "status": "passed"
+    },
+    {
+      "name": "R1_corrupt_files_isolated_queue_cancel_no_request_UI_responsive",
+      "status": "passed"
+    },
+    {
+      "name": "B3_controlled_payload_selection_summary_and_aggregate_R2_retry_preserves_results",
+      "status": "passed"
+    },
+    {
+      "name": "P1_P2_restart_configuration_resume_exports_input_unchanged",
+      "status": "passed"
+    },
+    {
+      "name": "negative_product_wrong_source_location_rejected",
+      "status": "passed"
+    }
+  ],
+  "scope": "Actual Electron UI, local controlled service, process restart and exported artifacts. Live-provider semantics, physical microphone and human listening are separate.",
+  "status": "passed",
+  "finished_at": "2026-11-16T06:28:35.035Z"
+}

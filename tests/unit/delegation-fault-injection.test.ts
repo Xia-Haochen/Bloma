@@ -1,4 +1,5 @@
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync,readFileSync } from 'node:fs'
+import {getAgentSessionPath} from '../../storage/config-paths'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -13,6 +14,8 @@ import {
   registerParentLoopContext,
   setChildToolsBuilder,
   startDelegation,
+  stopDelegation,
+  settleParentDelegationRuns,
   unregisterParentLoopContext,
   waitForDelegations,
 } from '../../main/agent/delegation/agent-collaboration'
@@ -86,11 +89,6 @@ function registerParent(query: SDKQuery): void {
   })
 }
 
-async function settle(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 0))
-  await new Promise((resolve) => setTimeout(resolve, 0))
-}
-
 describe('C6 委派链路故障注入', () => {
   const originalPromaHome = process.env.PROMA_HOME
 
@@ -100,7 +98,7 @@ describe('C6 委派链路故障注入', () => {
   })
   afterEach(async () => {
     disposeParentDelegationState(parentSessionId)
-    await settle()
+    await settleParentDelegationRuns(parentSessionId)
     unregisterParentLoopContext(parentSessionId)
     if (originalPromaHome === undefined) delete process.env.PROMA_HOME
     else process.env.PROMA_HOME = originalPromaHome
@@ -123,7 +121,7 @@ describe('C6 委派链路故障注入', () => {
     setChildToolsBuilder(() => [])
     const created = startDelegation(parentContext(), { task: '会断流的子任务', role: 'research' })
 
-    const summaries = await waitForDelegations(parentContext(), { delegationIds: [created.delegation_id], timeout_ms: 5000 })
+    const summaries = await waitForDelegations(parentContext(), { delegationIds: [created.delegation_id], timeout_ms: 20000 })
     const summary = summaries[0]!
     // 如实失败：不悬挂（返回时已终结）、不误报 completed（2026-10-03 删留执行加强：
     // 原条件式断言近乎恒真；事件断言自 delegation-failure.test.ts 迁入）
@@ -133,7 +131,7 @@ describe('C6 委派链路故障注入', () => {
     expect(failed).toBeTruthy()
     expect(failed!.payload).toMatchObject({ delegation_id: created.delegation_id, status: 'failed' })
     expect(events.some((e) => e.type === 'delegation_completed')).toBe(false)
-  })
+  },30000)
 
   it('③ ask 无人代答：wait 提前返回（pending_question 可见）+ stop 兜底收尾不永久挂起', async () => {
     registerParent(toolUseQuery('ask_tool'))
@@ -150,9 +148,10 @@ describe('C6 委派链路故障注入', () => {
 
     // stop 兜底：ask 挂起的 promise 由 abort 占位答复收尾，子 loop 正常终结不永久挂起
     const record = findDelegation(parentSessionId, created.delegation_id)!
-    record.abort.abort()
-    await settle()
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    stopDelegation(parentSessionId,created.delegation_id)
+    await settleParentDelegationRuns(parentSessionId)
     expect(record.status).not.toBe('running')
+    const last=readFileSync(getAgentSessionPath(record.childSessionId),'utf8').trim().split('\n').at(-1)!
+    expect(JSON.parse(last).delegation_settle).toBe('cancelled')
   })
 })

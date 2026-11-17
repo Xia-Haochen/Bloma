@@ -1,43 +1,18 @@
 # 向导 Agent 多智能体协同开发平台
 
-> 2026-11-01：[最终全量回归与平台主流程验收](docs/05_PROJECT_PLAN/full-platform-regression-20261101.md)。332文件2294项全量通过，18组原生界面流程通过；修复完成门、澄清落盘与连接状态，全部模型调用使用本机受控服务。
+Windows Electron 软件生成平台，使用 Pi 执行持续制作与委派。
 
-> 2026-11-01：[平台旧流程与重复实现清理](docs/05_PROJECT_PLAN/platform-cleanup-20261101.md)。制作与委派统一使用Pi原生执行器；清理旧压缩/调度/工具协议恢复，保留宿主权限、预算与交付门。
+当前接手入口（2026-11-09）：[交付收敛实施计划与会话交接](docs/05_PROJECT_PLAN/session-handoff-delivery-convergence-20261109.md)、[计划与实施索引](docs/05_PROJECT_PLAN/README.md)。前批离线机制已验证，新15元校园真实试验仍未交付；当前任务是收尾接管、新疑点复验闭环及资源治理，计划尚未实施。付费因完整输入预留不足而暂停，旧账与unknown保留；先做离线工程，不自动恢复付费。新项目使用 `software-v1`。
 
-> Windows Electron 软件生成平台，使用 Pi 执行持续制作与委派。
-> 当前工程状态和验证范围见下方实施记录；原始设计资料作为历史索引保留。
+- [软件工程基线](docs/03_ARCHITECTURE/software-engineering-baseline.md)：负责人 Agent 工程工作循环、产品 Git 管理、恢复检查点及有依据的工程审阅；历史产品问题和实际验证边界在同一入口保留。
 
-> 2026-11-01：[模型窗口、主动技能与点选修改](docs/05_PROJECT_PLAN/context-skills-correction-20261101.md)。已知模型按Pi目录使用1M等实际容量，代理可显式覆盖；Agent按需选择技能；草图、浏览器/Electron产物及固定试用版本支持点选反馈，提交保留版本与重试身份。
+- [免费验收与检查入口清算](docs/05_PROJECT_PLAN/offline-clearance-20261105.md)：静音验收器、统一离线检查及本次真实基线复查；真实静音增量和正式交付仍未完成。
+- [验收会话交接](docs/05_PROJECT_PLAN/session-handoff-acceptance-20261105.md)：当前涂鸦项目、费用暂停、收尾顺序与完成标准。
+- [验收职责收敛](docs/05_PROJECT_PLAN/verification-architecture-refactor-20261105.md)：统一证据解释与Agent反馈，保留宿主交付守卫。
+- [质量协作交接](docs/05_PROJECT_PLAN/session-handoff-quality-20261030.md)：Q1–Q4已接线；读取顶部更新，旧正文仅为历史快照。
+- [模板交接](docs/05_PROJECT_PLAN/session-handoff-templates-20261029.md)、[UI交接](docs/05_PROJECT_PLAN/session-handoff-ui-20261101.md)：对应专题的实现与验证边界。
 
-> 2026-11-01：[Pi 1.4.0 升级与原生接口接入](docs/05_PROJECT_PLAN/pi-runtime-upgrade-20261101.md)。三个Pi包统一锁定，完成宿主完成门、原生消息/工具声明和图片授权桥适配；评测身份与此前修复见[实施审计](docs/05_PROJECT_PLAN/frontier-evaluation-pi-audit-20261101.md)。本机工程验证与真实模型收益分别记录。
-
-> 当前入口（2026-10-28）：新项目统一使用 software-v1，经过短任务单、必要的外观确认、连续 Pi 制作和宿主实际验证。长期型按里程碑核对与发布，待办另行确认。未标记历史项目和 lean-v1 只保留历史/产物访问，继续修改须显式复制；冻结实验只读报告。见 [后续清理记录](docs/05_PROJECT_PLAN/workflow-cleanup-20261028.md)。
-
-> 2026-10-29：[第一轮能力扩展](docs/05_PROJECT_PLAN/capability-expansion-20261029.md)接入产品自有PDF／DOCX文本解析、字面检索与精确引用核对，提供业务关系反例和已有工程导入差异；修复发布依赖的Node查找布局。工程验证通过，真实模型生成收益及AI效果另验。
-
-> 后续优先[多模态与HTTP／Webhook集成](docs/05_PROJECT_PLAN/multimodal-http-first-20261029.md)：首批提供Windows本机图片OCR、产品JSON API客户端及签名通知收件辅助。真实引擎与本地受控服务组合验证通过，真实第三方账号、视觉模型效果及公网部署另验。
-
-> [模型视觉链路完善](docs/05_PROJECT_PLAN/vision-workflow-20261029.md)：保留已有图片附件与模型传输，补齐当前调试截图的按会话读取；提供产品自有视觉API客户端与换图探针。图片已附上、模型已核对、本机协议通过和真实视觉效果分别表达。
-
-> [通用AI服务与效率支持](docs/05_PROJECT_PLAN/ai-service-efficiency-20261029.md)：文本/图片共用AIService，公开路由模板与运行时产品Key分开，支持OpenAI聊天兼容和Anthropic消息协议；提供组件组合目录、故障现场汇总与静态关联测试候选。正式交付门不跳过，速度收益另做实测。
-
-> 当前协作工程优先级：[通过多Agent提高实际生成质量](docs/05_PROJECT_PLAN/multi-agent-generation-quality-plan-20261030.md)。先接只读找错、候选绑定、缺陷复现/修复/复测闭环，再补视觉审阅；研究设计不作为前置。
-
-> 当前研究与协作方向：[立项对照修订及多Agent规划](docs/05_PROJECT_PLAN/multi-agent-research-plan-20261029.md)。现役配置只留需求沟通、界面制作，旧裁判/内审入口已删；[面板改造记录](docs/05_PROJECT_PLAN/flow-routing-ui-20261029.md)。向导、制作与专业子任务均作为可消融机制，不以Agent数量或零Bug承诺作为研究目标。
-
-> 后续模板实施总入口：[产品模板与生成效率完整计划表](docs/05_PROJECT_PLAN/product-template-roadmap-20261029.md)。覆盖8类产品模板、组件契约、诊断/选测支撑、依赖批次、里程碑和固定场景验收；优先多模态与HTTP/Webhook。B0–B8本机模板、连接器设置、组合工作台、独立资源分发与B9对照工具已实施；真实服务、干净系统及真实效率对照仍待条件。当前源码审计修复与重建包见[模板审计记录](docs/05_PROJECT_PLAN/template-audit-20261029.md)；原交付范围见[剩余批次交付记录](docs/05_PROJECT_PLAN/template-rollout-result-20261029.md)。
-
-> 质量工程接手（2026-10-30）：[多Agent生成质量会话交接](docs/05_PROJECT_PLAN/session-handoff-quality-20261030.md)顶部已更新Q1–Q4接线与后续修复；正文旧快照不代表当前未实施。真实模型质量收益仍待验证。[模板与AI服务交接](docs/05_PROJECT_PLAN/session-handoff-templates-20261029.md)保留为此前工程背景。
-
-> 2026-10-27：[Harness 改进计划](docs/05_PROJECT_PLAN/harness-improvement-plan-20261027.md)按验收设施、独立试用和多模型验收分批推进。需求确认时恢复可选的 AI 灵感建议，默认不选；采纳后更新任务单再确认，不额外增加需求整理的模型调用。
-
-> 历史Harness接手（2026-10-27）：[Harness 改进交接](docs/05_PROJECT_PLAN/harness-improvement-handoff-20261027.md)，保留当时已完成版本、验证边界和剩余批次记录；当前入口以上述会话交接与模板总计划为准。
-
-> 历史接线（2026-10-20）：平台生成Windows Python/WebView2桌面应用，[制作流程v2](docs/05_PROJECT_PLAN/production-workflow-v2-20261020.md)保留当时设计；代码清理、硬编码修复和本机旧项目清理结果见[清理实施记录](docs/05_PROJECT_PLAN/hardcoding-cleanup-execution-20261020.md)。
-
-> 2026-10-22后续完善：[全流程实施记录](docs/05_PROJECT_PLAN/workflow-improvement-20261022.md)包含持久MVP确认、宿主原生GUI验收CLI、验证凭据复用及交付规则收敛的实现与验证边界。
-
-> 2026-10-23接续：[确认恢复与独立验收实测](docs/05_PROJECT_PLAN/confirmation-acceptance-20261022.md)记录PRD/UX持久恢复、独立GUI规则准备、存储故障验证和真实模型试跑。自动准备目前须显式开启，真实任务结果与测试fixture结果分别记录。
+历史回归和真实模型收益分别记录；本地CI入口通过不代表远端分支保护、安装验收或真实任务已经交付。
 
 ---
 
@@ -193,6 +168,17 @@ npm run docs:check
 ```
 
 测试写入文件时必须使用临时 `PROMA_HOME`，完整规则见 `docs/06_TESTS/testing-standards.md`。
+
+### 5.4 Windows 一键启动
+
+双击根目录 `start-bloma.cmd` 即可；它与 `npm start` / `npm run start:auto` 使用同一生产构建检查入口。
+
+- 首次、缓存缺失或依赖变化时构建；没有改动则校验源码、实际打包依赖与产物的内容指纹后直接启动。
+- 按 renderer、main、语音worker、preload、模板分别更新，普通前端改动不会重新构建主进程，反之亦然。模板删除会同步到产物。
+- `npm run build` 仍强制完整生产构建；`npm run build:main` 和 `npm run build:renderer` 保留原有范围并写入对应证明。
+- `start-bloma.cmd --force-build` 强制重建；`--build-only` 只预检/构建，不打开App；`--no-install` 不自动安装缺失依赖。
+- `--skip-build` **只允许经验证的新鲜产物**，不再绕过过期或失败构建。失败后应解决错误并重新启动，不要直接运行旧 `dist-main`。
+- 指纹和分阶段耗时保存在忽略目录 `.bloma-build/`，不是产品质量/费用台账。`window_ready_ms` 仅表示首屏绘制，不表示项目恢复、模型或产品已准备好。
 
 ## 6. 原始文档修订记录
 

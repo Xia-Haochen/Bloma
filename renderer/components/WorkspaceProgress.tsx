@@ -24,12 +24,12 @@ export const WorkspaceProgress: React.FC<{
   const panel = React.useRef<HTMLDivElement>(null)
   const buttons = React.useRef<Array<HTMLButtonElement | null>>([])
   const timer = React.useRef<ReturnType<typeof setTimeout>>()
-  const pinned = React.useRef(false)
+  const pinned = React.useRef<number | null>(null)
   const restoringFocus = React.useRef(false)
   const id = React.useId()
-  const close = React.useCallback(() => { clearTimeout(timer.current); pinned.current = false; setOpen(null); setExpanded(false) }, [])
-  const show = (index: number) => { clearTimeout(timer.current); setOpen(index) }
-  const leave = () => { if (!pinned.current) timer.current = setTimeout(close, 160) }
+  const close = React.useCallback(() => { clearTimeout(timer.current); pinned.current = null; setOpen(null); setExpanded(false) }, [])
+  const show = (index: number) => { clearTimeout(timer.current); if (pinned.current === null) setOpen(index) }
+  const leave = () => { if (pinned.current === null) timer.current = setTimeout(close, 160) }
   React.useEffect(() => () => clearTimeout(timer.current), [])
   React.useEffect(() => {
     if (open === null) return
@@ -38,13 +38,14 @@ export const WorkspaceProgress: React.FC<{
       if (!nav.current?.contains(target) && !panel.current?.contains(target)) close()
     }
     const escape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
+      if (event.key !== 'Escape' || event.isComposing || document.querySelector('[aria-modal="true"]')) return
+      event.preventDefault(); event.stopImmediatePropagation()
       const button = buttons.current[open]
       close(); restoringFocus.current = true; button?.focus(); restoringFocus.current = false
     }
     document.addEventListener('pointerdown', outside)
-    document.addEventListener('keydown', escape)
-    return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape) }
+    document.addEventListener('keydown', escape, true)
+    return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape, true) }
   }, [open, close])
   React.useLayoutEffect(() => {
     if (open === null) return
@@ -65,13 +66,13 @@ export const WorkspaceProgress: React.FC<{
   return <>
     <nav className="workspace-progress" aria-label="软件制作进度" ref={nav}>
       {steps.map((item, index) => <button key={item.key} type="button" ref={element => { buttons.current[index] = element }} data-ai-id={`progress-${item.key}`} data-state={item.state} data-moving={item.moving} aria-label={`${item.label}：${labels[item.state]}`} aria-current={item.state === 'active' || item.state === 'attention' ? 'step' : undefined} aria-expanded={open === index} aria-controls={open === index ? id : undefined}
-        onPointerEnter={() => show(index)} onPointerLeave={leave} onFocus={() => { if (!restoringFocus.current) show(index) }} onBlur={event => { if (!panel.current?.contains(event.relatedTarget as Node)) leave() }} onClick={() => { if (pinned.current && open === index) close(); else { pinned.current = true; show(index) } }}>
+        onPointerEnter={() => show(index)} onPointerLeave={leave} onFocus={() => { if (!restoringFocus.current) show(index) }} onBlur={event => { if (!panel.current?.contains(event.relatedTarget as Node)) leave() }} onClick={() => { if (pinned.current === index) close(); else { clearTimeout(timer.current); pinned.current = index; setOpen(index); setExpanded(false) } }}>
         <span className="workspace-progress-label">{item.label}<small>{item.state === 'done' ? '✓' : item.state === 'attention' ? '!' : ''}</small></span><span className="workspace-progress-line" />
       </button>)}
     </nav>
     {step && createPortal(<div id={id} className="workspace-progress-popover" data-expanded={expanded} role="dialog" aria-label={`${step.label}阶段详情`} ref={panel} style={{ left: position.left, top: position.top }} onPointerEnter={() => clearTimeout(timer.current)} onPointerLeave={leave} onBlur={event => { if (!panel.current?.contains(event.relatedTarget as Node) && !nav.current?.contains(event.relatedTarget as Node)) leave() }}>
-      <header><strong>{step.label}</strong><span data-state={step.state}>{labels[step.state]}</span><button type="button" onClick={() => setComic(value => !value)}>{comic ? '进展' : '小漫画'}</button><button type="button" aria-label="关闭阶段详情" onClick={close}><X size={14} /></button></header>
-      {comic && <button type="button" className="workspace-comic" aria-label={expanded ? '缩小阶段漫画' : '放大阶段漫画'} onClick={() => { pinned.current = true; setExpanded(value => !value) }}><img src={comics[step.key]} alt={`${step.label}阶段三格小漫画`} /></button>}
+      <header><strong>{step.label}</strong><span data-state={step.state}>{labels[step.state]}</span><button type="button" onClick={() => setComic(value => !value)}>{comic ? '进展' : '小漫画'}</button><button type="button" aria-label="关闭阶段详情" onClick={() => { close(); restoringFocus.current = true; if (open !== null) buttons.current[open]?.focus(); restoringFocus.current = false }}><X size={14} /></button></header>
+      {comic && <button type="button" className="workspace-comic" aria-label={expanded ? '缩小阶段漫画' : '放大阶段漫画'} onClick={() => { pinned.current = open; setExpanded(value => !value) }}><img src={comics[step.key]} alt={`${step.label}阶段三格小漫画`} /></button>}
       <p>{step.state === 'active' && liveDetail ? liveDetail : step.detail}</p>
       <button type="button" className="workspace-progress-records" onClick={() => { close(); onRecords() }}><FileText size={13} />工作记录</button>
     </div>, document.body)}

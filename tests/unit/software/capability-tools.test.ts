@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
@@ -37,7 +37,11 @@ it('prepares and reuses pinned resources/components without downloads, marks pre
   expect(result.status).toBe('prepared');expect(result.product_verification).toBe('unverified');expect(result.microphone).toBe('not_tested')
   expect(fetch).not.toHaveBeenCalled();expect(SPEECH_COMPONENTS.every(name=>existsSync(join(project.root_path,name)))).toBe(true)
   expect(probe.mock.calls[0][0]).not.toHaveProperty('microphone')
-  const env=capabilityEnvironment(project.project_id,project.root_path);expect(env.BLOMA_SPEECH_MODEL_DIR).toBe(speechModelRoot());expect(env.BLOMA_SPEECH_PYTHON).toContain('.venv')
+  const env=capabilityEnvironment(project.project_id,project.root_path)
+  expect(env.BLOMA_SPEECH_MODEL_DIR).toBe(speechModelRoot())
+  const declared=join(project.root_path,'.venv',process.platform==='win32'?'Scripts/python.exe':'bin/python')
+  expect(realpathSync.native(env.BLOMA_SPEECH_PYTHON)).toBe(realpathSync.native(declared))
+  expect(execute).toHaveBeenCalledWith(expect.objectContaining({command:expect.arrayContaining([env.BLOMA_SPEECH_PYTHON,'-I','-B'])}))
   const before=readFileSync(join(project.root_path,'speech_runtime.py'))
   await prepareSpeechCapability(project.project_id,project.root_path,signal(),{install_dependencies:false},{execute,probe,download:{fetchImpl:fetch}})
   expect(readFileSync(join(project.root_path,'speech_runtime.py'))).toEqual(before);expect(fetch).not.toHaveBeenCalled()
@@ -84,8 +88,8 @@ it('freezes release resource identity and environment independently of a later p
   const before=JSON.stringify(speechCapabilityBinding(project.project_id));expect(()=>bindSpeechCapability(project.project_id,{...first,manifest_sha256:'f'.repeat(64)})).toThrow('BINDING_CHANGED')
   expect(JSON.stringify(speechCapabilityBinding(project.project_id))).toBe(before)
 })
-it('binds explicit capability metadata, keeps textual speech obligations despite an empty model tag, and rejects unknown capabilities',()=>{
+it('keeps an explicit empty capability declaration and rejects unknown adapters',()=>{
   const parse=(capabilities:unknown)=>parseLeanBrief(JSON.stringify({action:'brief',goal:'文件转写',ui:'required',requirements:[{description:'音频文件转文字',expected:'显示实际识别的文字',capabilities}]}),{projectId:project.project_id,sessionId:'s',source:'文件转写',previous:readPrdBackplane(project.project_id),software:true})
-  const result=parse([]);expect(result?.action).toBe('brief');if(result?.action==='brief')expect(result.brief.requirements[0].capabilities).toEqual(['speech'])
+  const result=parse([]);expect(result?.action).toBe('brief');if(result?.action==='brief')expect(result.brief.requirements[0].capabilities).toEqual([])
   expect(parse(['unsupported-engine'])).toBeUndefined()
 })

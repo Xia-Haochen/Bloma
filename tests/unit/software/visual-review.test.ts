@@ -1,3 +1,5 @@
+import { organizedPrd } from '../../support/organized-prd'
+import { projectRequirementsModel } from '../../../main/model/requirements-model'
 import { createServer, type ServerResponse } from 'node:http'
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -36,8 +38,13 @@ const model = createServer(async (request, response) => {
   const use = (name: string, input: Record<string, unknown>) => ({ type: 'tool_use', name, input, id: `v-${wireBodies.length}-${name}` })
   if (!hasImage) send(response, [use('read_quality_review', {}), use('view_quality_image', {})])
   else if (!alreadySubmitted) send(response, [use('submit_quality_findings', {
-    visual_observations: [{ image_sha256: visual.visual!.image_hash, region: '总数右侧', observed: reportFinding ? '数字3旁仍显示00件，存在静态零残留' : '总数数字旁只显示件，无静态零残留' }],
-    findings: reportFinding ? [{ requirement: 'F-001', expected_source: expected, category: 'visual', severity: 'high', location: '#total右侧单位', trigger: '点击增加', evidence: '图片中数值旁显示静态00件', reproduction: '点击增加并核对整个total文本', unknowns: '', kind: 'suspected' }] : []
+    visual_observations: [
+      { area: 'layout', region: '页面', observed: '标题、数量和按钮均可见，当前窗口内未见挤压' },
+      { area: 'interaction', region: '增加按钮', observed: '按钮可见；本截图未证明点击结果，需冻结业务测试' },
+      { area: 'scope', region: '页面', observed: '仅当前数量页初始状态；未覆盖其他窗口尺寸' },
+      { area: 'content', region: '总数右侧', observed: reportFinding ? '数字3旁仍显示00件，存在静态零残留' : '总数数字旁只显示件，无静态零残留' }
+    ].map(row => ({ ...row, image_sha256: visual.visual!.image_hash })),
+    findings: reportFinding ? [{ case_name:'total',requirement: 'F-001', expected_source: expected, category: 'visual', severity: 'medium', location: '#total右侧单位', trigger: '点击增加', evidence: '图片中数值旁显示静态00件', reproduction: '点击增加并核对整个total文本', unknowns: '', kind: 'suspected' }] : []
   })])
   else send(response, [{ type: 'text', text: '具体可见观察与疑点已提交，未声称业务通过。' }])
 })
@@ -87,14 +94,14 @@ function register(override?: SDKQuery) {
     if (JSON.stringify(options.messages?.filter(m => m.role === 'system')).includes('独立视觉/交互审阅V')) { yield* (override ?? anthropicMessagesQueryViaProviders)(prompt, options); return }
     const first = !seen.has(options.sessionId); seen.add(options.sessionId)
     yield { type: 'assistant', message: { role: 'assistant', content: first ? [
-      { type: 'tool_use', id: 'read', name: 'read_quality_review', input: {} }, { type: 'tool_use', id: 'source', name: 'read_file', input: { path: 'index.html' } }, { type: 'tool_use', id: 'submit', name: 'submit_quality_findings', input: { findings: [] } }
+      { type: 'tool_use', id: 'read', name: 'read_quality_review', input: {} }, { type: 'tool_use', id: 'source', name: 'read_file', input: { path: 'index.html' } }, { type: 'tool_use', id: 'submit', name: 'submit_quality_findings', input: { findings: [], engineering: {status:'supported',evidence:'Controlled C fixture reads the current implementation.',limitations:'Not a real-model quality claim.'} } }
     ] : [{ type: 'text', text: '受控C已提交，未评定视觉效果。' }] } }
     yield { type: 'result', subtype: 'success', usage: { input_tokens: 10, output_tokens: 10 } }
   }
   const env = { PATH: process.env.PATH!, ANTHROPIC_AUTH_TOKEN: 'local-fixture-never-provider', ANTHROPIC_MODEL: 'fixture-vision', ANTHROPIC_BASE_URL: `http://127.0.0.1:${(model.address() as { port: number }).port}` }
   registerParentLoopContext(parent, { query: quality.wrapQuery(route), env,
     maxTokens: 4096, maxTurns: 5, delegationMaxTurns: 5, permissionMode: 'allow-all', temperature: .1, system: 'A_SUCCESS_STORY', editFormat: 'diff',
-    maxConcurrentDelegations: 2, allowChannelOverrides: false, prepareDelegation: quality.prepare, childSystemBuilder: (_role, child) => quality.system(child)!, childMaterialsBuilder: () => undefined,
+    maxConcurrentDelegations: 2, allowChannelOverrides: false, prepareDelegation: quality.prepare, childAfterTools:quality.childAfterTools, childSystemBuilder: (_role, child) => quality.system(child)!, childMaterialsBuilder: () => undefined,
     childToolsBuilder: (id, role, _format, child) => quality.reviewTools(buildSoftwareAgentTools(id, role, policy), child), publish: () => {} })
   return { route, env }
 }
@@ -111,6 +118,9 @@ it('sends actual candidate PNG through Pi/native HTTP, records V findings in the
   expect(wireBodies.map(body => visualHash(body))).toContain(visual.visual_delivery?.request_hash)
   expect(wireBodies.some(body => body.includes('"type":"image"'))).toBe(true)
   const imageBody = wireBodies.find(body => body.includes('"type":"image"'))!
+  const visualSubmit=JSON.parse(imageBody).tools.find((tool:{name:string})=>tool.name==='submit_quality_findings').input_schema
+  expect(visualSubmit.properties).not.toHaveProperty('intent_observations')
+  expect(visualSubmit.required).toContain('visual_observations')
   expect(assertVisualRequest(imageBody, visual.visual!.image_hash)).toMatch(/^[a-f0-9]{64}$/)
   const finding = ledger.findings[0]; expect(finding.review_kind).toBe('visual'); expect(finding.disposition).toBe('suspected')
   const artifacts = join(process.cwd(), 'run-artifacts', 'q2-visual'); mkdirSync(artifacts, { recursive: true })
@@ -120,7 +130,7 @@ it('sends actual candidate PNG through Pi/native HTTP, records V findings in the
   expect(readQualityLedger(project.project_id).findings[0].disposition).toBe('confirmed')
   expect(await quality.gate()).toContain('FINDINGS_OPEN')
   writeFileSync(join(project.root_path, 'index.html'), html(false))
-  expect(await quality.gate()).toContain('REVIEW_REQUIRED')
+  expect(await quality.gate()).toContain('FINDINGS_OPEN')
   await check.execute({ finding_id: finding.id, case_name: 'total' }, ctx())
   expect(readQualityLedger(project.project_id).findings[0].checks.map(c => c.outcome)).toEqual(['failed', 'passed'])
   expect(readQualityLedger(project.project_id).findings[0].disposition).toBe('closed')
@@ -164,33 +174,33 @@ it('wire validation rejects OCR/name-only substitutes and changed images in eith
   expect(assertVisualRequest(JSON.stringify({ messages: [{ content: [{ type: 'image_url', image_url: { url: `data:image/png;base64,${data.toString('base64')}` } }] }] }), hash)).toMatch(/^[a-f0-9]{64}$/)
   expect(() => assertVisualRequest(JSON.stringify({ messages: [{ content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: Buffer.from('different').toString('base64') } }] }] }), hash)).toThrow('CHANGED')
 })
-it('normal production automatically runs C/V, repairs a V finding and reviews the repaired GUI candidate before delivery', async () => {
+it('normal production reviews coverage then repairs local failures before candidate C/V and publication', async () => {
   const { enterDesktopLine } = await import('../../../main/desktop/desktop-route')
   const { findProject } = await import('../../../main/project/project-service')
   const { route, env } = register()
   let step = 0
+  const verificationStatuses:string[]=[]
   const use = (name: string, input: Record<string, unknown>) => ({ type: 'tool_use' as const, id: `a-${step}-${name}`, name, input })
   const query: SDKQuery = async function* (prompt, options) {
     if (options.sessionId !== parent) { yield* route(prompt, options); return }
-    const finding = readQualityLedger(project.project_id).findings.find(f => f.review_kind === 'visual')
     let content
     switch (step++) {
-      case 2: content = [use('check_quality_finding', { finding_id: finding!.id, case_name: 'total' })]; break
-      case 3: reportFinding = false; content = [use('read_file', { path: 'index.html' }), use('write_file', { path: 'index.html', content: html(false) })]; break
-      case 4: content = [use('check_quality_finding', { finding_id: finding!.id, case_name: 'total' })]; break
+      case 0: content = [use('verify_app', {})]; break
+      case 1: reportFinding = false; content = [use('read_file', { path: 'index.html' }), use('write_file', { path: 'index.html', content: html(false) })]; break
+      case 2: content = [use('verify_app', {})]; break
       default: content = [{ type: 'text' as const, text: '当前候选已保留，请按当前图像和台账核对。' }]
     }
     yield { type: 'assistant', message: { role: 'assistant', content } }
     yield { type: 'result', subtype: 'success', usage: { input_tokens: 10, output_tokens: 10 } }
   }
   await enterDesktopLine({ projectId: project.project_id, sessionId: parent, requestId: 'visual-r', content: '完成已确认器材件数界面', maxTokens: 4096, signal: AbortSignal.timeout(150000) }, query, env,
-    { publish: () => {}, persistAssistant: () => {}, persistSystem: () => {}, complete: () => {} })
+    { publish: (_target,type,payload) => {if(type==='tool_call_completed'&&payload.tool==='verify_app'&&(payload.feedback as any)?.verification)verificationStatuses.push((payload.feedback as any).verification)}, persistAssistant: () => {}, persistSystem: () => {}, complete: () => {} })
   const ledger = readQualityLedger(project.project_id)
   expect(findProject(project.project_id).desktop_blocked, JSON.stringify({ step, ledger })).toBeUndefined()
   expect(findProject(project.project_id).status).toBe('completed')
-  expect(ledger.reviews.filter(r => r.status === 'complete').map(r => r.kind)).toEqual(['code', 'visual', 'code', 'visual'])
-  expect(ledger.findings[0].checks.map(c => c.outcome)).toEqual(['failed', 'passed'])
-  expect(leanBudget(project.project_id, 'desktop-implement').snapshot().requests).toBe(step + wireBodies.length + 4)
+  expect(ledger.reviews.filter(r => r.status === 'complete').map(r => [r.purpose??'candidate',r.kind])).toEqual([['coverage','code'],['candidate','code'],['candidate','visual']])
+  expect(verificationStatuses).toEqual(['failed','passed'])
+  expect(leanBudget(project.project_id, 'desktop-implement').snapshot().requests).toBe(step + wireBodies.length + 2)
   const artifacts = join(process.cwd(), 'run-artifacts', 'q2-visual'); mkdirSync(artifacts, { recursive: true })
   writeFileSync(join(artifacts, 'production-ledger.json'), JSON.stringify(ledger, null, 2))
   // A real verified baseline, not selector fixture metadata: only cosmetic CSS
@@ -201,7 +211,7 @@ it('normal production automatically runs C/V, repairs a V finding and reviews th
     if(options.sessionId!==parent){yield*route(prompt,options);return}
     const call=styleCalls++
     const content=call===0?[use('read_file',{path:'theme.css'}),use('write_file',{path:'theme.css',content:'p { color: #236; padding: 8px; }'})]
-      :call===1?[use('check_quality_finding',{finding_id:ledger.findings[0].id,case_name:'total'})]:[{type:'text' as const,text:'样式已调整，旧缺陷已由宿主复测，请按当前候选选择协作。'}]
+      :call===1?[use('verify_app',{})]:[{type:'text' as const,text:'样式已调整，旧缺陷已由宿主复测，请按当前候选选择协作。'}]
     yield{type:'assistant',message:{role:'assistant',content}};yield{type:'result',subtype:'success',usage:{input_tokens:10,output_tokens:10}}
   }
   await enterDesktopLine({projectId:project.project_id,sessionId:parent,requestId:'style',content:'只调整现有颜色和间距',maxTokens:4096,signal:AbortSignal.timeout(120000)},styleQuery,env,{publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
@@ -220,11 +230,12 @@ it('normal production automatically runs C/V, repairs a V finding and reviews th
   expect(unchangedCalls).toBe(1);expect(wireBodies.length).toBe(stableWire);expect(stable.reviews.length).toBe(stableReviews)
   const evidence=join(process.cwd(),'run-artifacts','q4-selection');mkdirSync(evidence,{recursive:true});writeFileSync(join(evidence,'production-ledger.json'),JSON.stringify(stable,null,2))
 
-}, 180000)
+// Three operations retain their original 150s/120s/90s cancellation signals.
+}, (150+120+90+30)*1000)
 it('production stops on the first actual image rejection without retrying V or changing route', async () => {
   const { enterDesktopLine } = await import('../../../main/desktop/desktop-route')
   const { findProject } = await import('../../../main/project/project-service')
-  rejectImages = true
+  rejectImages = true;reportFinding=false;writeFileSync(join(project.root_path,'index.html'),html(false))
   const { route, env } = register(); let parentCalls = 0
   const query: SDKQuery = async function* (prompt, options) {
     if (options.sessionId !== parent) { yield* route(prompt, options); return }
@@ -234,10 +245,27 @@ it('production stops on the first actual image rejection without retrying V or c
   }
   await enterDesktopLine({ projectId: project.project_id, sessionId: parent, requestId: 'visual-r', content: '核对已确认界面', maxTokens: 4096, signal: AbortSignal.timeout(60000) }, query, env,
     { publish: () => {}, persistAssistant: () => {}, persistSystem: () => {}, complete: () => {} })
-  expect(parentCalls).toBe(2)
+  expect(parentCalls).toBe(1)
   expect(wireBodies).toHaveLength(2)
-  expect(leanBudget(project.project_id, 'desktop-implement').snapshot().requests).toBe(6)
+  expect(leanBudget(project.project_id, 'desktop-implement').snapshot().requests).toBe(4)
   expect(readQualityLedger(project.project_id).reviews.filter(r => r.kind === 'visual')).toHaveLength(1)
   expect(findProject(project.project_id).desktop_blocked?.note).toContain('QUALITY_VISUAL_MODEL_UNSUPPORTED')
   expect(findProject(project.project_id).status).toBe('active')
+  await enterDesktopLine({projectId:project.project_id,sessionId:parent,requestId:'resume-unsupported',content:'继续',maxTokens:4096,signal:AbortSignal.timeout(60000)},query,env,
+    {publish:()=>{},persistAssistant:()=>{},persistSystem:()=>{},complete:()=>{}})
+  expect(parentCalls).toBe(1);expect(wireBodies).toHaveLength(2)
+  expect(findProject(project.project_id).desktop_blocked?.note).toContain('QUALITY_VISUAL_MODEL_UNSUPPORTED')
 }, 90000)
+
+it('does not force a single-image V reviewer to claim verification of the entire personal experience', async () => {
+  const brief = readPrdBackplane(project.project_id),model = organizedPrd(brief.requirements, expected).requirements_model
+  model.experience = { summary:'长期保留自己的记录', commitments:[{id:'EXP-001',statement:'重开保留历史',source_ids:['S-001'],feature_ids:['F-001'],scenario_ids:['AC-001'],unacceptable_substitute:'静态演示'}] }
+  brief.lean_brief!.preview='skip'
+  syncDocuments({request_id:'scope',project_id:project.project_id,session_id:parent,checkpoint:'requirement_confirmed'},projectRequirementsModel({...brief,requirements_model:model}))
+  const confirmed=markPrdUserConfirmed(project.project_id)!,scope=prdScopeFingerprint(confirmed)
+  updateProject(project.project_id,{ux_confirmation:{prd_fingerprint:scope,design_hash:scope,html_hash:null}})
+  reportFinding=false;await review('visual')
+  const last=readQualityLedger(project.project_id).reviews.at(-1)!
+  expect(last.status).toBe('complete');expect(last.intent_observations).toBeUndefined()
+  expect(last.visual_observations).toHaveLength(4)
+},60000)

@@ -311,7 +311,7 @@ export const PermissionDialog: React.FC<PermissionDialogProps> = ({ mode: propMo
           {level !== 'dangerous' && (
             <button
               onClick={() => handleRespond('deny')}
-              aria-label="关闭"
+              aria-label="拒绝并关闭"
               style={{
                 width: 28,
                 height: 28,
@@ -348,7 +348,7 @@ export const PermissionDialog: React.FC<PermissionDialogProps> = ({ mode: propMo
           }}
         >
           {currentRequest.user_visible_summary ||
-            `即将执行：${toolReadableName(currentRequest.tool_name)}`}
+            `请求执行：${toolReadableName(currentRequest.tool_name)}。允许后才会执行。`}
         </p>
 
         {/* ── "记住选择"（仅 warning） ── */}
@@ -406,7 +406,7 @@ export const PermissionDialog: React.FC<PermissionDialogProps> = ({ mode: propMo
               e.currentTarget.style.background = 'var(--color-surface-muted)'
             }}
           >
-            取消
+            拒绝本次操作
           </button>
           <button
             onClick={() => handleRespond('allow')}
@@ -437,7 +437,7 @@ export const PermissionDialog: React.FC<PermissionDialogProps> = ({ mode: propMo
                 '0 4px 12px -2px rgba(124,58,237,0.4)'
             }}
           >
-            确认
+            允许本次操作
           </button>
         </div>
 

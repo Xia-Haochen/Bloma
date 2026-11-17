@@ -1,3 +1,8 @@
+import { deliveryQualityGate } from './delivery-qualification'
+import { transferProjectTaskOwner } from './task-assignment'
+import { listSessions } from '../platform/sessions/session-service'
+import { hasSoftwareSessionProcess } from './process-manager'
+import { hasDebugSession } from './debug-sessions'
 import { resolve } from 'node:path'
 import type { LongtermActionInput } from '../../shared/types'
 import { readLongtermState, saveLongtermState, isLongtermSoftware, longtermPendingDecision } from './longterm-state'
@@ -6,7 +11,6 @@ import { verifySoftwareCandidate } from './verification'
 import { findProject, updateProject } from '../project/project-service'
 import { readPrdBackplane } from '../project/prd-store'
 import { prdScopeFingerprint } from '../project/requirement-contract'
-import { commitDesktopDelivery } from '../desktop/delivery-state'
 import { recordEvaluationEvent } from './harness-evaluation'
 import { adoptLeanSuggestions } from '../guide/lean-suggestions'
 import { stageLeanScope } from '../guide/lean-scope'
@@ -19,8 +23,24 @@ export async function performLongtermAction(input:LongtermActionInput,signal:Abo
   if(['archived','abandoned'].includes(findProject(input.project_id).status))throw Error('LONGTERM_PROJECT_ARCHIVED: 先显式恢复项目')
   const state=readLongtermState(input.project_id),current=state?.milestones.find(item=>item.id===state.current_id)
   if(!state||state.revision!==input.revision)throw Error('LONGTERM_STATE_STALE')
-  if(!['confirm','later','adopt_backlog','archive'].includes(input.action))throw Error('LONGTERM_ACTION_INVALID')
+  if(!['confirm','later','adopt_backlog','archive','handoff'].includes(input.action))throw Error('LONGTERM_ACTION_INVALID')
   const notify=()=>deps.emit('longterm_changed',{summary:findProject(input.project_id).longterm_summary})
+  if(input.action==='handoff'){
+    if(deps.busy||!current||current.operation_id!==(findProject(input.project_id).lean_operation_id??'initial')||current.status==='confirming'||current.status==='delivered')throw Error('LONGTERM_HANDOFF_NOT_IDLE')
+    if(current.session_id===input.session_id)throw Error('LONGTERM_HANDOFF_SAME_SESSION')
+    if(!listSessions({request_id:input.request_id,project_id:input.project_id}).sessions.some(s=>s.session_id===input.session_id))throw Error('LONGTERM_HANDOFF_SESSION_INVALID')
+    if(hasSoftwareSessionProcess(input.project_id,current.session_id)||hasDebugSession(input.project_id,current.session_id))throw Error('LONGTERM_HANDOFF_WORK_STILL_RUNNING')
+    return withLeanRuntime(input.project_id,'desktop-implement',signal,async activeSignal=>{
+      activeSignal.throwIfAborted()
+      if(readLongtermState(input.project_id)?.revision!==state.revision||prdScopeFingerprint(readPrdBackplane(input.project_id))!==current.scope_hash)throw Error('LONGTERM_STATE_STALE')
+      const from=current.session_id
+      transferProjectTaskOwner(input.project_id,from,input.session_id)
+      current.session_id=input.session_id
+      const next=saveLongtermState(state)
+      recordEvaluationEvent(input.project_id,'execution_handoff',{from,to:input.session_id,milestone:current.id})
+      notify();return{state:next,detail:'执行归属已转到当前会话，原记录与用量保留；未启动模型或接管旧进程，可在此会话继续。'}
+    })
+  }
   if(input.action==='adopt_backlog'){
     const item=state.backlog.find(item=>item.id===input.backlog_id)
     if(!item||!['deferred','adopt_requested'].includes(item.state))throw Error('LONGTERM_BACKLOG_STALE')
@@ -52,23 +72,25 @@ export async function performLongtermAction(input:LongtermActionInput,signal:Abo
   if(result.status!=='passed'||result.candidate?.id!==candidate.id)throw Error(`LONGTERM_CURRENT_VERIFICATION_REQUIRED: ${result.summary}`)
   const stillCurrent=()=>readLongtermState(input.project_id)?.revision===state.revision&&prdScopeFingerprint(readPrdBackplane(input.project_id))===scope&&isLongtermSoftware(input.project_id)
   activeSignal.throwIfAborted();if(!stillCurrent())throw Error('LONGTERM_PENDING_CHANGED_DURING_CONFIRMATION')
+  const qualityGap=await deliveryQualityGate(input.project_id,activeSignal);if(qualityGap)throw Error(qualityGap)
   const evidence={version:result.core?.fingerprint??candidate.verified!.version,scope,at:new Date().toISOString()}
   await sealSoftwareRelease(candidate,evidence,activeSignal,stillCurrent)
   return async()=>{
   signal.throwIfAborted();if(!stillCurrent())throw Error('LONGTERM_PENDING_CHANGED_DURING_CONFIRMATION')
+  const finalQualityGap=await deliveryQualityGate(input.project_id,signal);if(finalQualityGap)throw Error(finalQualityGap)
   // Persist the human's version-bound intent before changing the active release.
   // A crash leaves an explicit incomplete confirmation which needs a new click.
   current.status='confirming';current.confirmation_requested_at=new Date().toISOString()
   const intent=saveLongtermState(state)
   const stillIntentCurrent=()=>readLongtermState(input.project_id)?.revision===intent.revision&&prdScopeFingerprint(readPrdBackplane(input.project_id))===scope&&isLongtermSoftware(input.project_id)
+  const previousRelease=findProject(input.project_id).software_release_id
   const began=Date.now();let accounted=false
-  try{await promoteSoftwareRelease(candidate,evidence,signal,()=>{leanBudget(input.project_id,'desktop-verify').recordRuntime(Date.now()-began);accounted=true;return stillIntentCurrent()})}
+  try{await promoteSoftwareRelease(candidate,evidence,signal,()=>{leanBudget(input.project_id,'desktop-verify').recordRuntime(Date.now()-began);accounted=true;return stillIntentCurrent()},true)}
   finally{if(!accounted)leanBudget(input.project_id,'desktop-verify').recordRuntime(Date.now()-began)}
-  commitDesktopDelivery(input.project_id,signal)
   current.status='delivered';current.confirmed_at=new Date().toISOString()
   let next:typeof state
   try{next=saveLongtermState(intent)}catch(error){
-    try{updateProject(input.project_id,{status:'active',current_stage:'blocked_for_user_decision',desktop_phase:'desktop-verify',longterm_summary:{status:'awaiting_confirmation',pending_items:state.backlog.filter(item=>['deferred','adopt_requested'].includes(item.state)).length,milestone:current.title}})}catch{/* canonical pending file still refuses a new confirmation */}
+    try{updateProject(input.project_id,{software_release_id:previousRelease,status:'active',current_stage:'blocked_for_user_decision',desktop_phase:'desktop-verify',longterm_summary:{status:'awaiting_confirmation',pending_items:state.backlog.filter(item=>['deferred','adopt_requested'].includes(item.state)).length,milestone:current.title}})}catch{/* canonical pending file still refuses a new confirmation */}
     throw error
   }
   recordEvaluationEvent(input.project_id,'delivery_final',{status:'delivered',candidate_id:candidate.id,milestone_id:current.id})

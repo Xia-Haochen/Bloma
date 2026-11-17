@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "case_id": "exceptions-wardrobe",
+  "core_experience": "选角会结合个人优先级并保留对象豁免",
+  "unacceptable_substitute": "平面衣物清单加随机推荐",
+  "source_quote": "衣柜里的衣服每天开一次选角会，帮我搭配出门穿什么。怕冷比好看更重要，有两件旧衣服是纪念品，不能建议淘汰；改名字也不能丢掉这个身份。",
+  "change_quote": "今天临时参加正式活动，但不要把正式穿着设成以后每天的默认。",
+  "dimensions": [
+    "intent",
+    "behavior",
+    "provenance",
+    "change_recovery",
+    "ui",
+    "delivery"
+  ],
+  "required_evidence": [
+    "actual_interaction",
+    "source_and_scope_identity",
+    "restart_readback",
+    "final_project_state"
+  ],
+  "outcomes": [
+    "passed",
+    "failed",
+    "unverified",
+    "not_applicable"
+  ],
+  "status": "authored_not_executed",
+  "independent": false
+}

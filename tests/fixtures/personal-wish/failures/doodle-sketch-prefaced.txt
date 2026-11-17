@@ -1,0 +1,347 @@
+这是一个可直接运行的HTML文档，呈现了“涂鸦小乐器”的完整界面：左侧导航、涂鸦画布、回放规则版本管理、映射规则编辑与保存提示。它把鼠标线条的速度和颜色转化为节奏与音色，并支持历史版本回放。
+```html
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>涂鸦小乐器 · 橙色斜坡练习</title>
+<style>
+:root{
+  --surface:#fffefb;--soft:#f3f3f0;--primary:#6d8268;--primary-soft:#e7ece3;
+  --focus:#52694c;--selected:#dfe8da;--text:#30342f;--t2:#62685f;--t3:#686e65;--border:#dfe2d9;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{
+  background:var(--soft);color:var(--text);
+  font:14px/1.6 ui-sans-serif,system-ui,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3,p,ul{margin:0}
+button,select{font:inherit}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+
+.app{display:grid;grid-template-columns:212px minmax(0,1fr);height:100vh}
+
+/* ---------- 侧栏 ---------- */
+.sidebar{
+  background:var(--surface);border-right:1px solid var(--border);
+  display:flex;flex-direction:column;padding:18px 14px 14px;overflow:auto;
+}
+.brand{display:flex;gap:9px;align-items:center;padding:0 4px 18px}
+.logo{width:26px;height:26px;border-radius:8px;background:var(--primary);position:relative;flex:none}
+.logo::after{content:"";position:absolute;inset:7px;border-radius:3px;background:var(--primary-soft)}
+.brand b{font-size:14px;letter-spacing:.02em;display:block;line-height:1.3}
+.brand small{display:block;color:var(--t3);font-size:11px;font-weight:400}
+.nav{display:flex;flex-direction:column;gap:2px}
+.nav-item{
+  display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;
+  color:var(--t2);font-size:13px;
+}
+.nav-item.active{background:var(--selected);color:var(--focus);font-weight:600}
+.nav-item .dot{width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.45;flex:none}
+.side-foot{margin-top:auto;padding:14px 6px 0;border-top:1px solid var(--border);color:var(--t3);font-size:11.5px;line-height:1.55}
+
+/* ---------- 主区 ---------- */
+.main{overflow:auto;padding:22px 26px 32px}
+.page-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:18px}
+.page-head h1{font-size:19px;font-weight:650;letter-spacing:.01em}
+.sub{color:var(--t3);font-size:12.5px;margin-top:3px}
+.actions{display:flex;gap:8px;flex-wrap:wrap}
+.btn{
+  border:1px solid var(--border);background:var(--surface);color:var(--text);
+  font-size:13px;padding:7px 14px;border-radius:8px;cursor:pointer;
+}
+.btn:hover{background:var(--primary-soft);border-color:var(--primary)}
+.btn.primary{background:var(--primary);border-color:var(--primary);color:#fff}
+.btn.primary:hover{background:var(--focus);border-color:var(--focus)}
+
+.content{display:grid;grid-template-columns:minmax(0,1fr) 344px;gap:16px;align-items:start}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px}
+.card + .card{margin-top:14px}
+.card h2{font-size:13.5px;font-weight:650}
+.card .lead{color:var(--t3);font-size:12px;margin:2px 0 10px}
+
+/* ---------- 画布 ---------- */
+.canvas-wrap{
+  border:1px solid var(--border);border-radius:10px;overflow:hidden;
+  background-color:var(--soft);
+  background-image:radial-gradient(#e2e6dc 1px,transparent 1px);
+  background-size:20px 20px;
+}
+.canvas-wrap svg{display:block;width:100%;height:auto}
+.transport{display:flex;align-items:center;gap:12px;margin-top:12px;flex-wrap:wrap}
+.play{
+  display:inline-flex;align-items:center;gap:7px;
+  border:1px solid var(--primary);background:var(--primary);color:#fff;
+  font-size:13px;font-weight:600;padding:8px 16px;border-radius:8px;cursor:pointer;
+}
+.play:hover{background:var(--focus);border-color:var(--focus)}
+.scrub{flex:1;min-width:90px;height:6px;border-radius:3px;background:var(--soft);position:relative;overflow:hidden}
+.scrub i{position:absolute;left:0;top:0;bottom:0;width:17%;background:var(--primary);border-radius:3px}
+.time{font-size:12px;color:var(--t3);font-variant-numeric:tabular-nums}
+.badge{
+  font-size:12px;padding:4px 10px;border-radius:999px;
+  background:var(--selected);color:var(--focus);font-weight:600;white-space:nowrap;
+}
+
+/* ---------- 版本选择 ---------- */
+.ver{
+  display:flex;gap:10px;padding:10px 11px;border:1px solid var(--border);
+  border-radius:10px;cursor:pointer;background:var(--surface);margin-bottom:8px;
+}
+.ver:last-of-type{margin-bottom:0}
+.ver:hover{background:var(--primary-soft)}
+.ver input{accent-color:var(--focus);margin:3px 0 0;flex:none}
+.ver:has(input:checked){background:var(--selected);border-color:var(--primary)}
+.ver b{display:block;font-size:13px;font-weight:650;line-height:1.4}
+.ver span{display:block;font-size:11.5px;color:var(--t3);line-height:1.45}
+.foot-note{font-size:11.5px;color:var(--t3);margin-top:10px;line-height:1.55}
+
+/* ---------- 映射列表 ---------- */
+.maplist{list-style:none;padding:0;margin:0;font-size:12.5px}
+.maplist li{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--border)}
+.maplist li:last-child{border-bottom:0;padding-bottom:0}
+.maplist span{color:var(--t2)}
+.maplist b{font-weight:600;white-space:nowrap}
+.swatch{width:11px;height:11px;border-radius:3px;display:inline-block;margin-right:6px;vertical-align:-1px}
+
+/* ---------- 折叠编辑区 ---------- */
+details.card>summary{
+  list-style:none;cursor:pointer;display:flex;justify-content:space-between;
+  align-items:center;font-size:13.5px;font-weight:650;
+}
+details.card>summary::-webkit-details-marker{display:none}
+.chev{color:var(--t3);font-size:11.5px;font-weight:400}
+.chev::after{content:"展开"}
+details[open] .chev::after{content:"收起"}
+.edit-body{padding-top:12px}
+.hint{font-size:12px;color:var(--t3);background:var(--primary-soft);border-radius:8px;padding:8px 10px;line-height:1.5}
+.edit-body h3{font-size:12px;font-weight:650;color:var(--t2);margin:14px 0 4px}
+.frow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:5px 0;font-size:12.5px}
+.frow label{color:var(--t2)}
+select{
+  max-width:64%;padding:5px 8px;border:1px solid var(--border);border-radius:7px;
+  background:var(--surface);color:var(--text);font-size:12.5px;
+}
+.save-row{margin-top:16px;display:flex;justify-content:flex-end}
+
+@media (max-width:1080px){
+  .content{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:820px){
+  .app{grid-template-columns:1fr;height:auto;min-height:100%}
+  .sidebar{border-right:0;border-bottom:1px solid var(--border);flex-direction:row;flex-wrap:wrap;align-items:center;gap:8px;padding:12px 14px}
+  .brand{padding:0}
+  .nav{flex-direction:row;flex-wrap:wrap}
+  .side-foot{display:none}
+  .main{overflow:visible;padding:18px 16px 28px}
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo" aria-hidden="true"></div>
+      <div>
+        <b>涂鸦小乐器</b>
+        <small>线条速度 → 节奏 · 颜色 → 音色</small>
+      </div>
+    </div>
+    <nav class="nav" aria-label="主导航">
+      <span class="nav-item active"><span class="dot"></span>涂鸦与回放</span>
+      <span class="nav-item"><span class="dot"></span>规则版本</span>
+      <span class="nav-item"><span class="dot"></span>画作库</span>
+      <span class="nav-item"><span class="dot"></span>合成音色</span>
+    </nav>
+    <div class="side-foot">
+      画作与规则版本保存在本机「程序的数据目录」，关闭后仍可重新打开。
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="page-head">
+      <div>
+        <h1>橙色斜坡练习</h1>
+        <p class="sub">涂鸦画作 · 保存于 2026-11-02 17:02 · 14 段线条 · 4 种颜色 · 4 个规则版本可用</p>
+      </div>
+      <div class="actions">
+        <button type="button" class="btn">打开旧画</button>
+        <button type="button" class="btn primary">保存为新画作</button>
+      </div>
+    </header>
+
+    <div class="content">
+
+      <div class="col-main">
+        <section class="card" aria-labelledby="cv-title">
+          <h2 id="cv-title">涂鸦画布</h2>
+          <p class="lead">逐段记录位置、时间、速度与颜色；回放时按所选规则版本生成声音。</p>
+
+          <div class="canvas-wrap">
+            <svg viewBox="0 0 720 380" role="img" aria-label="已保存的涂鸦：四条不同颜色与速度的线条">
+              <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M55 292 Q110 150 178 205 T302 172 T424 112" stroke="#c98a3f" stroke-width="9" opacity=".92"/>
+                <path d="M70 118 C150 58 226 214 302 242 S436 158 508 220" stroke="#5d8f86" stroke-width="7.5" opacity=".92"/>
+                <path d="M470 300 C524 262 592 292 604 232 S524 182 472 232 S502 322 566 302" stroke="#7f7bb0" stroke-width="7" opacity=".92"/>
+                <path d="M118 342 C180 320 222 352 282 330" stroke="#b56a76" stroke-width="8" opacity=".92"/>
+              </g>
+              <g fill="#30342f" opacity=".18">
+                <circle cx="178" cy="205" r="3"/><circle cx="302" cy="172" r="3"/>
+                <circle cx="302" cy="242" r="3"/><circle cx="508" cy="220" r="3"/>
+                <circle cx="604" cy="232" r="3"/><circle cx="472" cy="232" r="3"/>
+                <circle cx="222" cy="340" r="3"/>
+              </g>
+            </svg>
+          </div>
+
+          <div class="transport">
+            <button type="button" class="play">▶ 播放涂鸦</button>
+            <div class="scrub" aria-hidden="true"><i></i></div>
+            <span class="time">00:00 / 00:09</span>
+            <span class="badge">回放规则 · v2</span>
+          </div>
+        </section>
+      </div>
+
+      <aside class="col-side">
+
+        <section class="card" aria-labelledby="ver-title">
+          <h2 id="ver-title">回放规则版本</h2>
+          <p class="lead">旧画回放时明确使用所选版本；切换只改变声音生成。</p>
+
+          <label class="ver">
+            <input type="radio" name="rule-version" value="v3">
+            <span>
+              <b>v3 · 现行新规则</b>
+              <span>2026-11-03 09:20 · 3 档速度 · 4 种颜色</span>
+            </span>
+          </label>
+
+          <label class="ver">
+            <input type="radio" name="rule-version" value="v2" checked>
+            <span>
+              <b>v2 · 本画保存时所用</b>
+              <span>2026-11-02 16:40 · 3 档速度 · 4 种颜色</span>
+            </span>
+          </label>
+
+          <label class="ver">
+            <input type="radio" name="rule-version" value="v1">
+            <span>
+              <b>v1 · 初版</b>
+              <span>2026-11-01 11:05 · 3 档速度 · 4 种颜色</span>
+            </span>
+          </label>
+
+          <p class="foot-note">
+            本次回放使用上方所选版本，不会改写原涂鸦，也不会覆盖任何历史版本。
+          </p>
+        </section>
+
+        <section class="card" aria-labelledby="map-title">
+          <h2 id="map-title">现行规则 v3 映射明细</h2>
+          <p class="lead">线条速度决定节奏，线条颜色决定合成音色。</p>
+
+          <ul class="maplist">
+            <li><span>慢 · &lt; 90 px/s</span><b>二分步进 · 520 ms</b></li>
+            <li><span>中 · 90–200 px/s</span><b>四分步进 · 300 ms</b></li>
+            <li><span>快 · &gt; 200 px/s</span><b>八分步进 · 150 ms</b></li>
+          </ul>
+
+          <ul class="maplist" style="margin-top:12px">
+            <li><span><i class="swatch" style="background:#c98a3f"></i>琥珀</span><b>方波</b></li>
+            <li><span><i class="swatch" style="background:#5d8f86"></i>青绿</span><b>三角波</b></li>
+            <li><span><i class="swatch" style="background:#7f7bb0"></i>蓝紫</span><b>正弦波</b></li>
+            <li><span><i class="swatch" style="background:#b56a76"></i>玫红</span><b>锯齿波</b></li>
+          </ul>
+        </section>
+
+        <details class="card">
+          <summary>编辑映射规则 <span class="chev"></span></summary>
+          <div class="edit-body">
+            <p class="hint">修改后保存为新版本；v3 与更早的版本不会被覆盖，仍可继续回放。</p>
+
+            <h3>线条速度 → 节奏</h3>
+            <div class="frow">
+              <label for="sp1">慢 · &lt; 90 px/s</label>
+              <select id="sp1">
+                <option selected>二分步进 · 520 ms</option>
+                <option>四分步进 · 300 ms</option>
+                <option>八分步进 · 150 ms</option>
+              </select>
+            </div>
+            <div class="frow">
+              <label for="sp2">中 · 90–200 px/s</label>
+              <select id="sp2">
+                <option>二分步进 · 520 ms</option>
+                <option selected>四分步进 · 300 ms</option>
+                <option>八分步进 · 150 ms</option>
+              </select>
+            </div>
+            <div class="frow">
+              <label for="sp3">快 · &gt; 200 px/s</label>
+              <select id="sp3">
+                <option>二分步进 · 520 ms</option>
+                <option>四分步进 · 300 ms</option>
+                <option selected>八分步进 · 150 ms</option>
+              </select>
+            </div>
+
+            <h3>线条颜色 → 合成音色</h3>
+            <div class="frow">
+              <label for="c1"><i class="swatch" style="background:#c98a3f"></i>琥珀</label>
+              <select id="c1">
+                <option selected>方波</option><option>三角波</option>
+                <option>正弦波</option><option>锯齿波</option>
+              </select>
+            </div>
+            <div class="frow">
+              <label for="c2"><i class="swatch" style="background:#5d8f86"></i>青绿</label>
+              <select id="c2">
+                <option>方波</option><option selected>三角波</option>
+                <option>正弦波</option><option>锯齿波</option>
+              </select>
+            </div>
+            <div class="frow">
+              <label for="c3"><i class="swatch" style="background:#7f7bb0"></i>蓝紫</label>
+              <select id="c3">
+                <option>方波</option><option>三角波</option>
+                <option selected>正弦波</option><option>锯齿波</option>
+              </select>
+            </div>
+            <div class="frow">
+              <label for="c4"><i class="swatch" style="background:#b56a76"></i>玫红</label>
+              <select id="c4">
+                <option>方波</option><option>三角波</option>
+                <option>正弦波</option><option selected>锯齿波</option>
+              </select>
+            </div>
+
+            <div class="save-row">
+              <button type="button" class="btn primary">保存为新版本（v4）</button>
+            </div>
+          </div>
+        </details>
+
+      </aside>
+    </div>
+  </main>
+</div>
+</body>
+</html>
+```
+### 玩法与版本管理
+
+涂鸦、规则、回放三者在这里形成了一条清晰又有弹性的工作流。
+
+- **涂鸦画布**：画布区域逐段记录线条的位置、时间、速度和颜色，播放时按当前所选规则版本生成声音。
+- **规则版本切换**：右侧面板默认选中v2（本画保存时所用），可随时切换到v3现行新规则或v1初版，切换只影响回放声音，不会改写原涂鸦或历史版本。
+- **映射编辑与保存**：折叠面板里能调整速度到节奏、颜色到音色的对应关系，保存后生成新版本，旧版本继续保留可回放。
+- **反馈与状态**：当前回放版本、映射明细、保存对话会随操作更新，整体自洽，不会出现未触发的错误提示。
+---
+
+**优化建议：** 画布目前展示的是示例涂鸦，您可以在涂鸦画布区域用鼠标绘制自己的线条来替换它，其他默认播放和版本信息会随之对应。

@@ -1,0 +1,836 @@
+{
+  "findings": [
+    {
+      "id": "f50d6c78-fd73-438e-b736-450ed3dbd8b0",
+      "review": "6807ed12-a5eb-4d77-b9c8-c99a48efea59",
+      "review_kind": "visual",
+      "identity": {
+        "source": "cf7eac8112801f5c681ee671746cacd898297e7fb229f6fae47da3db509c4ce4",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "画作库应能区分不同画作，重新打开时不与其他画作混淆；当前侧栏出现两条同名画作，选择时无法辨别。",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "32745ca3-d4c2-48bf-9d05-f840c0e82827",
+      "review": "6807ed12-a5eb-4d77-b9c8-c99a48efea59",
+      "review_kind": "visual",
+      "identity": {
+        "source": "cf7eac8112801f5c681ee671746cacd898297e7fb229f6fae47da3db509c4ce4",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "清空画布会销毁整幅涂鸦（不受影响的旧画与历史版本要求外，删除必须是用户显式且可确认的动作）。当前画布卡片头部把「清空画布」与「撤销上一笔」并列为主操作。",
+      "severity": "medium",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "91f6a0a4-a5aa-4e78-bd1f-010f6eda52eb",
+      "review": "6807ed12-a5eb-4d77-b9c8-c99a48efea59",
+      "review_kind": "visual",
+      "identity": {
+        "source": "cf7eac8112801f5c681ee671746cacd898297e7fb229f6fae47da3db509c4ce4",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "回放规则选择与说明文字必须与当前选中的版本一致，且不静默混用。当前截图核对为一致，但版本说明与侧栏摘要的书写粒度不同，需保持同一来源。",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "e0aa1a79-dc2a-44ac-908b-661cc152ecda",
+      "review": "72783d6a-d6af-49d9-bcce-d5144c7115b5",
+      "review_kind": "code",
+      "identity": {
+        "source": "d66357c993f07c11660ed0a16cef7aaafe6999a6b58b20913854d77901ccd474",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-006 / AC-018：旧画与规则版本载入数据不可读或缺失时，应提示载入失败，且其他已保存画作与历史规则版本不得被改写或删除。",
+      "severity": "high",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "3393d649-d7f0-4f2e-9cbd-beb2ea3d76df",
+      "review": "72783d6a-d6af-49d9-bcce-d5144c7115b5",
+      "review_kind": "code",
+      "identity": {
+        "source": "d66357c993f07c11660ed0a16cef7aaafe6999a6b58b20913854d77901ccd474",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "EXP-001 / BR-006 / AC-012：回放旧画必须明确显示并使用用户选择的规则版本；所选版本不可用时须明确提示并让用户重新选择，不能静默套用当前规则。",
+      "severity": "medium",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "bff23983-a8cb-4f77-a842-bdd614560d2d",
+      "review": "72783d6a-d6af-49d9-bcce-d5144c7115b5",
+      "review_kind": "code",
+      "identity": {
+        "source": "d66357c993f07c11660ed0a16cef7aaafe6999a6b58b20913854d77901ccd474",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "BR-004 / AC-017 / EXP-003：切换/保存规则与载入画作只影响声音与当前视图，不得改写原涂鸦；不同画作不得混淆。",
+      "severity": "medium",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "4f35dbe3-aad7-4e6d-bc60-9e59b84b13ef",
+      "review": "72783d6a-d6af-49d9-bcce-d5144c7115b5",
+      "review_kind": "code",
+      "identity": {
+        "source": "d66357c993f07c11660ed0a16cef7aaafe6999a6b58b20913854d77901ccd474",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-006 / AC-017：重新打开画作时应只载入该画作，不与其他画作混淆。",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "24df8d15-99ae-48b2-98a6-5d5fb8825f13",
+      "review": "72783d6a-d6af-49d9-bcce-d5144c7115b5",
+      "review_kind": "code",
+      "identity": {
+        "source": "d66357c993f07c11660ed0a16cef7aaafe6999a6b58b20913854d77901ccd474",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-003：修改映射后保存为新的规则版本（一次保存应产生一个版本），历史版本不被覆盖。",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "820dd9d3-092d-4250-af7e-d87f75d4affb",
+      "review": "72783d6a-d6af-49d9-bcce-d5144c7115b5",
+      "review_kind": "code",
+      "identity": {
+        "source": "d66357c993f07c11660ed0a16cef7aaafe6999a6b58b20913854d77901ccd474",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "BR-001 / AC-002：线条段需保留自身真实速度，极短线条也要保留自身速度而不被吞掉/失真。",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "d15edd3d-2403-4576-b764-c7d6a6f4feaa",
+      "review": "72783d6a-d6af-49d9-bcce-d5144c7115b5",
+      "review_kind": "code",
+      "identity": {
+        "source": "d66357c993f07c11660ed0a16cef7aaafe6999a6b58b20913854d77901ccd474",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "BR-001 / F-002：速度作为节奏映射输入，其分档口径应与界面标注一致且稳定。",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "18a51889-1789-4fa7-b3d8-19996a57cccd",
+      "review": "72783d6a-d6af-49d9-bcce-d5144c7115b5",
+      "review_kind": "code",
+      "identity": {
+        "source": "d66357c993f07c11660ed0a16cef7aaafe6999a6b58b20913854d77901ccd474",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "BR-003 / AC-009：规则版本一经保存即不可变；放弃改动不产生半成品、不留副作用。",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "f7691c75-afa7-49b2-8e28-9ac607db641b",
+      "review": "72783d6a-d6af-49d9-bcce-d5144c7115b5",
+      "review_kind": "code",
+      "identity": {
+        "source": "d66357c993f07c11660ed0a16cef7aaafe6999a6b58b20913854d77901ccd474",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-003 / AC-009：编辑映射规则时放弃或切换基版本的行为应可控，不静默丢失用户改动。",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "09bf8451-91e5-4d42-8c05-bc1db31b7581",
+      "review": "1f07b334-4883-40de-9d6c-1e9e4a60fb89",
+      "review_kind": "visual",
+      "identity": {
+        "source": "8973da18259989a2b6ac4e078c30eada2be0f8aa84e57ece6823804e667ccc8d",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-002",
+      "severity": "low",
+      "disposition": "disputed",
+      "checks": []
+    },
+    {
+      "id": "cfaa02b2-2e7c-4211-813c-487ed446fdb6",
+      "review": "1f07b334-4883-40de-9d6c-1e9e4a60fb89",
+      "review_kind": "visual",
+      "identity": {
+        "source": "8973da18259989a2b6ac4e078c30eada2be0f8aa84e57ece6823804e667ccc8d",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-001",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "ee5be9ba-6608-4eeb-abee-6d8b4ad98b4c",
+      "review": "0d22ff95-0e89-42b5-83b3-2334adf48a23",
+      "review_kind": "code",
+      "identity": {
+        "source": "8973da18259989a2b6ac4e078c30eada2be0f8aa84e57ece6823804e667ccc8d",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-006",
+      "severity": "medium",
+      "disposition": "suspected",
+      "checks": []
+    },
+    {
+      "id": "dd8fe716-c6b6-4dea-b5cf-f188aa07fd16",
+      "review": "0d22ff95-0e89-42b5-83b3-2334adf48a23",
+      "review_kind": "code",
+      "identity": {
+        "source": "8973da18259989a2b6ac4e078c30eada2be0f8aa84e57ece6823804e667ccc8d",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-003",
+      "severity": "low",
+      "disposition": "suspected",
+      "checks": []
+    },
+    {
+      "id": "6c616ea3-486d-4ddc-8a3f-20ab5641a636",
+      "review": "0d22ff95-0e89-42b5-83b3-2334adf48a23",
+      "review_kind": "code",
+      "identity": {
+        "source": "8973da18259989a2b6ac4e078c30eada2be0f8aa84e57ece6823804e667ccc8d",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-004",
+      "severity": "low",
+      "disposition": "suspected",
+      "checks": []
+    },
+    {
+      "id": "19ef7fa6-ad00-432f-83b7-12f3c9fc38b0",
+      "review": "0d22ff95-0e89-42b5-83b3-2334adf48a23",
+      "review_kind": "code",
+      "identity": {
+        "source": "8973da18259989a2b6ac4e078c30eada2be0f8aa84e57ece6823804e667ccc8d",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-006",
+      "severity": "medium",
+      "disposition": "suspected",
+      "checks": []
+    },
+    {
+      "id": "4eec5474-01e7-4a74-9784-ea8a3d55068b",
+      "review": "0d22ff95-0e89-42b5-83b3-2334adf48a23",
+      "review_kind": "code",
+      "identity": {
+        "source": "8973da18259989a2b6ac4e078c30eada2be0f8aa84e57ece6823804e667ccc8d",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-004",
+      "severity": "low",
+      "disposition": "suspected",
+      "checks": []
+    },
+    {
+      "id": "4d3dc480-eb59-41a8-8313-f9a6c5705eb5",
+      "review": "0d22ff95-0e89-42b5-83b3-2334adf48a23",
+      "review_kind": "code",
+      "identity": {
+        "source": "8973da18259989a2b6ac4e078c30eada2be0f8aa84e57ece6823804e667ccc8d",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-003",
+      "severity": "low",
+      "disposition": "suspected",
+      "checks": []
+    },
+    {
+      "id": "726cc213-285f-4b6e-9dd8-8375cf6b40e9",
+      "review": "0d22ff95-0e89-42b5-83b3-2334adf48a23",
+      "review_kind": "code",
+      "identity": {
+        "source": "8973da18259989a2b6ac4e078c30eada2be0f8aa84e57ece6823804e667ccc8d",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "unscoped",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "b375fb69-48e3-4365-9f4d-66b4128a3010",
+      "review": "0d22ff95-0e89-42b5-83b3-2334adf48a23",
+      "review_kind": "code",
+      "identity": {
+        "source": "8973da18259989a2b6ac4e078c30eada2be0f8aa84e57ece6823804e667ccc8d",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "unscoped",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "e99fc7dd-a7f8-4a7a-a332-318de0d0b1cd",
+      "review": "752f7bda-5975-411a-8773-4452dc9b138c",
+      "review_kind": "code",
+      "identity": {
+        "source": "d3e60604b7a8484a3e5250b89833bb59099516932eba96fe0f5066b8498740f2",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-006",
+      "severity": "medium",
+      "disposition": "suspected",
+      "checks": []
+    },
+    {
+      "id": "368733a6-6632-41a7-a41a-db0981e6f5ef",
+      "review": "752f7bda-5975-411a-8773-4452dc9b138c",
+      "review_kind": "code",
+      "identity": {
+        "source": "d3e60604b7a8484a3e5250b89833bb59099516932eba96fe0f5066b8498740f2",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-003",
+      "severity": "low",
+      "disposition": "suspected",
+      "checks": []
+    },
+    {
+      "id": "7242ed83-d6b5-4cab-9274-72e9541b46eb",
+      "review": "752f7bda-5975-411a-8773-4452dc9b138c",
+      "review_kind": "code",
+      "identity": {
+        "source": "d3e60604b7a8484a3e5250b89833bb59099516932eba96fe0f5066b8498740f2",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-006",
+      "severity": "low",
+      "disposition": "disputed",
+      "checks": []
+    },
+    {
+      "id": "3d24d3d3-2223-4071-8355-d6687cd311e1",
+      "review": "752f7bda-5975-411a-8773-4452dc9b138c",
+      "review_kind": "code",
+      "identity": {
+        "source": "d3e60604b7a8484a3e5250b89833bb59099516932eba96fe0f5066b8498740f2",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-004",
+      "severity": "low",
+      "disposition": "suspected",
+      "checks": []
+    },
+    {
+      "id": "6f3eef8d-3058-4618-8b28-2c7068225499",
+      "review": "752f7bda-5975-411a-8773-4452dc9b138c",
+      "review_kind": "code",
+      "identity": {
+        "source": "d3e60604b7a8484a3e5250b89833bb59099516932eba96fe0f5066b8498740f2",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-001",
+      "severity": "low",
+      "disposition": "suspected",
+      "checks": []
+    },
+    {
+      "id": "0d6da0fd-f35d-4e46-ba9c-bbc5eb8708fd",
+      "review": "752f7bda-5975-411a-8773-4452dc9b138c",
+      "review_kind": "code",
+      "identity": {
+        "source": "d3e60604b7a8484a3e5250b89833bb59099516932eba96fe0f5066b8498740f2",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-001",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "a748847d-5cd2-4f61-8651-f2c58e709698",
+      "review": "d154450d-d929-4bb0-a795-9794fbceffdb",
+      "review_kind": "visual",
+      "identity": {
+        "source": "08bee500b388402583ad86e53cb0e150d8c3a9b392ab4824984abb44c2a83a37",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-002",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "f6ec338a-5cb2-4fdf-969f-b953ba7a1a17",
+      "review": "d154450d-d929-4bb0-a795-9794fbceffdb",
+      "review_kind": "visual",
+      "identity": {
+        "source": "08bee500b388402583ad86e53cb0e150d8c3a9b392ab4824984abb44c2a83a37",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-004",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "083604c9-57cd-43dd-829f-db02041935f6",
+      "review": "d154450d-d929-4bb0-a795-9794fbceffdb",
+      "review_kind": "visual",
+      "identity": {
+        "source": "08bee500b388402583ad86e53cb0e150d8c3a9b392ab4824984abb44c2a83a37",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-001",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "093d3251-d5d6-44d2-8bc4-cba5dd358cbb",
+      "review": "6171776b-1db9-4c2b-bee7-ceef382b9096",
+      "review_kind": "code",
+      "identity": {
+        "source": "08bee500b388402583ad86e53cb0e150d8c3a9b392ab4824984abb44c2a83a37",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-004",
+      "severity": "medium",
+      "disposition": "suspected",
+      "checks": []
+    },
+    {
+      "id": "80e24b61-55e5-46bc-b009-17a7578d7427",
+      "review": "6171776b-1db9-4c2b-bee7-ceef382b9096",
+      "review_kind": "code",
+      "identity": {
+        "source": "08bee500b388402583ad86e53cb0e150d8c3a9b392ab4824984abb44c2a83a37",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-006",
+      "severity": "low",
+      "disposition": "suspected",
+      "checks": []
+    },
+    {
+      "id": "0bb2d840-e8db-4961-9b17-957bbec28f1e",
+      "review": "6171776b-1db9-4c2b-bee7-ceef382b9096",
+      "review_kind": "code",
+      "identity": {
+        "source": "08bee500b388402583ad86e53cb0e150d8c3a9b392ab4824984abb44c2a83a37",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-003",
+      "severity": "low",
+      "disposition": "disputed",
+      "checks": []
+    },
+    {
+      "id": "b0931383-269c-499f-bd54-831e8beb8bb3",
+      "review": "6171776b-1db9-4c2b-bee7-ceef382b9096",
+      "review_kind": "code",
+      "identity": {
+        "source": "08bee500b388402583ad86e53cb0e150d8c3a9b392ab4824984abb44c2a83a37",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-004",
+      "severity": "low",
+      "disposition": "disputed",
+      "checks": []
+    },
+    {
+      "id": "f56fc3a5-323f-4359-911e-57948ba3bca1",
+      "review": "6171776b-1db9-4c2b-bee7-ceef382b9096",
+      "review_kind": "code",
+      "identity": {
+        "source": "08bee500b388402583ad86e53cb0e150d8c3a9b392ab4824984abb44c2a83a37",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-003",
+      "severity": "low",
+      "disposition": "suspected",
+      "checks": []
+    },
+    {
+      "id": "50801781-0f98-4ceb-93b8-4d85d5684a6b",
+      "review": "6171776b-1db9-4c2b-bee7-ceef382b9096",
+      "review_kind": "code",
+      "identity": {
+        "source": "08bee500b388402583ad86e53cb0e150d8c3a9b392ab4824984abb44c2a83a37",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-006",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "00655689-50db-4d71-88bc-8c1f4895f321",
+      "review": "6171776b-1db9-4c2b-bee7-ceef382b9096",
+      "review_kind": "code",
+      "identity": {
+        "source": "08bee500b388402583ad86e53cb0e150d8c3a9b392ab4824984abb44c2a83a37",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-001",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "e49e1a8a-71b0-4255-977d-ff075b9f39e0",
+      "review": "fcbac993-03de-43cf-9d63-116a64f30268",
+      "review_kind": "code",
+      "identity": {
+        "source": "40cd24fde07dd59661fc3f1fe8228914df8b1546fd45078b8f75d8c297c0b592",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-006",
+      "severity": "low",
+      "disposition": "suspected",
+      "checks": []
+    },
+    {
+      "id": "64702198-685c-4eda-ac8b-885bc6f1a618",
+      "review": "fcbac993-03de-43cf-9d63-116a64f30268",
+      "review_kind": "code",
+      "identity": {
+        "source": "40cd24fde07dd59661fc3f1fe8228914df8b1546fd45078b8f75d8c297c0b592",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-003",
+      "severity": "low",
+      "disposition": "disputed",
+      "checks": []
+    },
+    {
+      "id": "bf0a73ce-23e8-4dea-b6f6-4fb9701ff2f3",
+      "review": "fcbac993-03de-43cf-9d63-116a64f30268",
+      "review_kind": "code",
+      "identity": {
+        "source": "40cd24fde07dd59661fc3f1fe8228914df8b1546fd45078b8f75d8c297c0b592",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-006",
+      "severity": "low",
+      "disposition": "suspected",
+      "checks": []
+    },
+    {
+      "id": "3324e3da-8223-49f2-bf5c-abc2877ca3e3",
+      "review": "fcbac993-03de-43cf-9d63-116a64f30268",
+      "review_kind": "code",
+      "identity": {
+        "source": "40cd24fde07dd59661fc3f1fe8228914df8b1546fd45078b8f75d8c297c0b592",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-006",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "03c09097-71ef-415b-9b46-285555c1565c",
+      "review": "fcbac993-03de-43cf-9d63-116a64f30268",
+      "review_kind": "code",
+      "identity": {
+        "source": "40cd24fde07dd59661fc3f1fe8228914df8b1546fd45078b8f75d8c297c0b592",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-001",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "0baff1b1-4f9a-48c2-92f1-ee044959d067",
+      "review": "fcbac993-03de-43cf-9d63-116a64f30268",
+      "review_kind": "code",
+      "identity": {
+        "source": "40cd24fde07dd59661fc3f1fe8228914df8b1546fd45078b8f75d8c297c0b592",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "unscoped",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "67dd78be-f3fb-4360-a3b0-0099225659c3",
+      "review": "df928105-0779-47a9-ba7d-601973fd8690",
+      "review_kind": "code",
+      "identity": {
+        "source": "63ddb70aae207b4b99c967e112273bb70e4ae1589b2dd20aaa5eed0cba1920fc",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-003",
+      "severity": "low",
+      "disposition": "disputed",
+      "checks": []
+    },
+    {
+      "id": "fa4dadb4-3ee7-49a4-8abe-0264237594f7",
+      "review": "df928105-0779-47a9-ba7d-601973fd8690",
+      "review_kind": "code",
+      "identity": {
+        "source": "63ddb70aae207b4b99c967e112273bb70e4ae1589b2dd20aaa5eed0cba1920fc",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-006",
+      "severity": "low",
+      "disposition": "suspected",
+      "checks": []
+    },
+    {
+      "id": "48549200-b13e-45d0-809e-72b8afa0bccb",
+      "review": "df928105-0779-47a9-ba7d-601973fd8690",
+      "review_kind": "code",
+      "identity": {
+        "source": "63ddb70aae207b4b99c967e112273bb70e4ae1589b2dd20aaa5eed0cba1920fc",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-001",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "64e77921-f41e-4cbf-b7f6-ed49e466b572",
+      "review": "df928105-0779-47a9-ba7d-601973fd8690",
+      "review_kind": "code",
+      "identity": {
+        "source": "63ddb70aae207b4b99c967e112273bb70e4ae1589b2dd20aaa5eed0cba1920fc",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-006",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "9eab5887-1003-4a54-9663-6cab9183bea5",
+      "review": "df928105-0779-47a9-ba7d-601973fd8690",
+      "review_kind": "code",
+      "identity": {
+        "source": "63ddb70aae207b4b99c967e112273bb70e4ae1589b2dd20aaa5eed0cba1920fc",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "unscoped",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "6aaa7fb3-dd6b-4b9f-9a5f-98efd368fb06",
+      "review": "4c4ff355-9433-4c0e-a345-0eef28f800c4",
+      "review_kind": "code",
+      "identity": {
+        "source": "47d4a2611c32e04ed8abd00efcd9c413715947880199201845adeed125b8d1d5",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-003",
+      "severity": "low",
+      "disposition": "disputed",
+      "checks": []
+    },
+    {
+      "id": "3f42dda1-010a-4d2c-a9e5-7e8c4c164ba7",
+      "review": "4c4ff355-9433-4c0e-a345-0eef28f800c4",
+      "review_kind": "code",
+      "identity": {
+        "source": "47d4a2611c32e04ed8abd00efcd9c413715947880199201845adeed125b8d1d5",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-004",
+      "severity": "low",
+      "disposition": "suspected",
+      "checks": []
+    },
+    {
+      "id": "10a8f155-c3e1-4622-94ad-8af4fec5b227",
+      "review": "4c4ff355-9433-4c0e-a345-0eef28f800c4",
+      "review_kind": "code",
+      "identity": {
+        "source": "47d4a2611c32e04ed8abd00efcd9c413715947880199201845adeed125b8d1d5",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-002",
+      "severity": "low",
+      "disposition": "disputed",
+      "checks": []
+    },
+    {
+      "id": "46b00582-f2c5-4978-9796-7698dc8cf149",
+      "review": "4c4ff355-9433-4c0e-a345-0eef28f800c4",
+      "review_kind": "code",
+      "identity": {
+        "source": "47d4a2611c32e04ed8abd00efcd9c413715947880199201845adeed125b8d1d5",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-006",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "63faf2cb-59cc-4742-a08f-5988f160e8bd",
+      "review": "4c4ff355-9433-4c0e-a345-0eef28f800c4",
+      "review_kind": "code",
+      "identity": {
+        "source": "47d4a2611c32e04ed8abd00efcd9c413715947880199201845adeed125b8d1d5",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-006",
+      "severity": "low",
+      "disposition": "suspected",
+      "checks": []
+    },
+    {
+      "id": "d704c059-5bc3-409e-980f-ee3ab7e3d01d",
+      "review": "4c4ff355-9433-4c0e-a345-0eef28f800c4",
+      "review_kind": "code",
+      "identity": {
+        "source": "47d4a2611c32e04ed8abd00efcd9c413715947880199201845adeed125b8d1d5",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-001",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "f77b2f0e-7864-4bf7-aa7f-9e466b516af3",
+      "review": "eac5c108-1f6d-41d6-8227-3b340ee7afaa",
+      "review_kind": "visual",
+      "identity": {
+        "source": "ae99ee7089a5492f8c4e17087ac417bf418aa47c44fa53b779045f59ba894f49",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-004",
+      "severity": "high",
+      "disposition": "suspected",
+      "checks": []
+    },
+    {
+      "id": "dafae3ea-9223-4910-8b8f-cee5f1b463a7",
+      "review": "eac5c108-1f6d-41d6-8227-3b340ee7afaa",
+      "review_kind": "visual",
+      "identity": {
+        "source": "ae99ee7089a5492f8c4e17087ac417bf418aa47c44fa53b779045f59ba894f49",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "unscoped",
+      "severity": "medium",
+      "disposition": "suggestion",
+      "checks": []
+    },
+    {
+      "id": "5182a847-b672-4a68-beae-75627390d3ca",
+      "review": "eac5c108-1f6d-41d6-8227-3b340ee7afaa",
+      "review_kind": "visual",
+      "identity": {
+        "source": "ae99ee7089a5492f8c4e17087ac417bf418aa47c44fa53b779045f59ba894f49",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "F-004",
+      "severity": "low",
+      "disposition": "disputed",
+      "checks": []
+    },
+    {
+      "id": "26a477bd-a3e7-48b1-ac4e-9dec1fdd0ec1",
+      "review": "eac5c108-1f6d-41d6-8227-3b340ee7afaa",
+      "review_kind": "visual",
+      "identity": {
+        "source": "ae99ee7089a5492f8c4e17087ac417bf418aa47c44fa53b779045f59ba894f49",
+        "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+        "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed"
+      },
+      "requirement": "unscoped",
+      "severity": "low",
+      "disposition": "suggestion",
+      "checks": []
+    }
+  ],
+  "current_identity": {
+    "target": "01243e102f52589179ec8938e2afee6a2d020783d7d42f0cba238a98510d5e1c",
+    "environment": "b61805d6326f34dffe592c43ee7c385cf5ee54bc4ebe9fc771d8ee94d77ae7ed",
+    "source": "fe642c6af242e69912956f9fa0440756f7a17471ede6a58c379c258742a08a66"
+  },
+  "provenance": "2026-11-04 observed decision fields; prose omitted; no delivery result implied"
+}

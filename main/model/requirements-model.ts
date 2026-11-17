@@ -1,9 +1,11 @@
+import { experienceIssues, type PersonalExperience } from './personal-intent'
 import type { PrdBackplane, SketchRequirement } from './prd-backplane'
-import { validRequirementCapabilities } from './requirement-capabilities'
+import { validAcceptanceScenarios, validRequirementCapabilities } from './requirement-capabilities'
 
 /** Sources belong to the host; the model may reference them but may not invent user statements. */
 export interface RequirementSource { id: string; text: string }
 export interface RequirementsModel {
+  experience?: PersonalExperience
   version: 1
   goal: string
   target_users: string[]
@@ -11,7 +13,7 @@ export interface RequirementsModel {
   entities: Array<{ id: string; name: string; description: string; attributes: string[] }>
   relations: Array<{ from: string; to: string; description: string }>
   workflows: Array<{ id: string; name: string; steps: string[]; feature_ids: string[] }>
-  rules: Array<{ id: string; statement: string; feature_ids: string[]; source_ids: string[]; origin: 'user' | 'assumption' }>
+  rules: Array<{ id: string; statement: string; feature_ids: string[]; source_ids: string[]; origin: 'user' | 'assumption'; verification?: { operation: 'sum_decimal' | 'count_inputs' | 'sorted_unique' } }>
   scenarios: Array<{
     id: string; feature_id: string; kind: 'normal' | 'boundary' | 'exception'
     given?: string; when?: string; then?: string; not_applicable?: string; rule_ids: string[]
@@ -49,6 +51,7 @@ export function validateRequirementsModel(raw: unknown, features: SketchRequirem
     if (!record(feature) || !/^F-\d{3,}$/.test(feature.id) || !text(feature.description)) { issues.push('功能项 id 或描述无效'); continue }
     if (featureIds.has(feature.id)) issues.push(`功能项重复：${feature.id}`)
     if (feature.capabilities !== undefined && !validRequirementCapabilities(feature.capabilities)) issues.push(`${feature.id} 能力声明无效`)
+    if (feature.acceptance_scenarios !== undefined && !validAcceptanceScenarios(feature.acceptance_scenarios)) issues.push(`${feature.id} 验收场景声明无效`)
     featureIds.add(feature.id)
     if (!['P0', 'P1', 'P2'].includes(feature.priority ?? '')) issues.push(`${feature.id} 未声明优先级`)
   }
@@ -86,6 +89,7 @@ export function validateRequirementsModel(raw: unknown, features: SketchRequirem
   const ruleIds = new Set(rules.map(row => row.id as string))
   for (const rule of rules) {
     if (!text(rule.statement) || !['user', 'assumption'].includes(rule.origin as string)) issues.push(`${rule.id} 业务规则无效`)
+    if (rule.verification !== undefined && (!record(rule.verification) || Object.keys(rule.verification).some(k => k !== 'operation') || !['sum_decimal','count_inputs','sorted_unique'].includes(String(rule.verification.operation)))) issues.push(`${rule.id} 确定性判定器无效`)
     refs(rule.feature_ids, featureIds, `${rule.id} 功能`, true)
     refs(rule.source_ids, sourceIds, `${rule.id} 来源`, rule.origin === 'user')
   }
@@ -108,6 +112,11 @@ export function validateRequirementsModel(raw: unknown, features: SketchRequirem
   }
   for (const rule of rules) for (const id of list(rule.feature_ids)) {
     if (!scenarios.some(row => row.feature_id === id && row.not_applicable === undefined && list(row.rule_ids).includes(rule.id))) issues.push(`${rule.id} 未在关联功能 ${id} 的验收中覆盖`)
+  }
+  issues.push(...experienceIssues(raw.experience, featureIds, sourceIds, new Set(scenarios.filter(s => s.not_applicable === undefined).map(s => String(s.id)))))
+  if (record(raw.experience) && Array.isArray(raw.experience.commitments)) for (const c of raw.experience.commitments) {
+    if (record(c) && Array.isArray(c.scenario_ids) && Array.isArray(c.feature_ids)
+      && c.scenario_ids.some(id => !scenarios.some(s => s.id === id && (c.feature_ids as unknown[]).includes(s.feature_id)))) issues.push('核心体验场景与功能不匹配')
   }
   const covered = new Set<string>()
   for (const row of list(raw.coverage)) {
@@ -135,8 +144,13 @@ export function parseOrganizedRequirements(raw: unknown, sources: RequirementSou
       onIssues?.([`${value.id}: capabilities 必须为已支持能力的数组`])
       return undefined
     }
+    if (value.acceptance_scenarios !== undefined && !validAcceptanceScenarios(value.acceptance_scenarios)) {
+      onIssues?.([`${value.id}: acceptance_scenarios 必须为受支持的场景数组`])
+      return undefined
+    }
     requirements.push({ id: value.id, description: value.description, priority: value.priority as SketchRequirement['priority'],
       ...(value.capabilities !== undefined ? { capabilities: [...new Set(value.capabilities)] } : {}),
+      ...(value.acceptance_scenarios !== undefined ? { acceptance_scenarios: [...new Set(value.acceptance_scenarios)] } : {}),
       ...(text(value.story) ? { story: value.story } : {}),
       ...(text(value.scope_notes) ? { scope_notes: value.scope_notes } : {}),
       ...(texts(value.behavior_assertions) ? { behavior_assertions: value.behavior_assertions } : {}),
@@ -174,6 +188,7 @@ export function renderRequirementsDocument(backplane: PrdBackplane): string {
   const model = backplane.requirements_model!
   const lines = [`# PRD：${backplane.name || backplane.positioning}`, '', '## 目标与范围', model.goal,
     `目标用户：${model.target_users.join('、')}`, `产品定位：${backplane.positioning}`, '', '## 核心对象与关系']
+  if (model.experience) lines.push('', '## 核心体验', model.experience.summary, ...model.experience.commitments.map(c => `- ${c.id} ${c.statement}；不能替代为：${c.unacceptable_substitute}`))
   for (const entity of model.entities) lines.push(`- [${entity.id}] ${entity.name}：${entity.description}；属性：${entity.attributes.join('、') || '无额外属性'}`)
   for (const relation of model.relations) lines.push(`- ${relation.from} → ${relation.to}：${relation.description}`)
   if (!model.entities.length) lines.push('- 本产品无需要独立管理的业务对象')

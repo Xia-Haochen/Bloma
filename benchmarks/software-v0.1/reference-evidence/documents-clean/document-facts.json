@@ -1,0 +1,35 @@
+{
+  "imported_files": [
+    "交付.pdf",
+    "会议.pdf",
+    "预算.md",
+    "风险.md",
+    "b/项目纪要.txt",
+    "a/项目纪要.txt"
+  ],
+  "search_results": [
+    {
+      "file": "交付.pdf",
+      "location": "page:1",
+      "text": "青禾交付清单"
+    },
+    {
+      "file": "预算.md",
+      "location": "line:1",
+      "text": "# 青禾预算"
+    },
+    {
+      "file": "a/项目纪要.txt",
+      "location": "line:1",
+      "text": "青禾项目负责人是林舟。"
+    }
+  ],
+  "selected_files": [
+    "a/项目纪要.txt",
+    "预算.md",
+    "交付.pdf"
+  ],
+  "original_input_sha256_before": "9854949de5abeeaa7e8c61595eefe4643b835a22f236f63111ece60ad00146a1",
+  "original_input_sha256_after": "9854949de5abeeaa7e8c61595eefe4643b835a22f236f63111ece60ad00146a1",
+  "exported_text": "## T1\n\n来源：document-inputs/交付.pdf\n\n状态：completed\n\n收到本轮内容：document-inputs/交付.pdf\npage:1 青禾交付清单\npage:1 交付物包括桌面程序、使用说明和数据备份。\npage:2 验收安排\npage:2 2026年11月20日检查保存和重启。。此前用户轮次：0。\n\n## T2\n\n来源：document-inputs/预算.md\n\n状态：completed\n\n收到本轮内容：document-inputs/预算.md\nline:1 # 青禾预算\nline:2 本次预算300元。\nline:3 界面采用蓝色主题。。此前用户轮次：0。\n\n## T3\n\n来源：document-inputs/a/项目纪要.txt\n\n状态：completed\n\n收到本轮内容：document-inputs/a/项目纪要.txt\nline:1 青禾项目负责人是林舟。\nline:2 计划2026年11月20日交付。\nline:3 验收先检查记录重启，再检查导出。。此前用户轮次：0。\n\n## T4\n\n来源：document-inputs/交付.pdf\n\n状态：completed\n\n收到本轮内容：document-inputs/交付.pdf\npage:1 青禾交付清单\npage:1 交付物包括桌面程序、使用说明和数据备份。\npage:2 验收安排\npage:2 2026年11月20日检查保存和重启。。此前用户轮次：0。\n\n## T5\n\n来源：document-inputs/预算.md\n\n状态：completed\n\n收到本轮内容：document-inputs/预算.md\nline:1 # 青禾预算\nline:2 本次预算300元。\nline:3 界面采用蓝色主题。。此前用户轮次：0。\n\n## T6\n\n来源：document-inputs/a/项目纪要.txt\n\n状态：cancelled\n\n\n\n## T7\n\n来源：document-inputs/a/项目纪要.txt\n\n状态：completed\n\n收到本轮内容：document-inputs/a/项目纪要.txt\nline:1 青禾项目负责人是林舟。\nline:2 计划2026年11月20日交付。\nline:3 验收先检查记录重启，再检查导出。。此前用户轮次：0。\n\n## T8\n\n来源：document-inputs/a/项目纪要.txt;document-inputs/交付.pdf;document-inputs/预算.md\n\n状态：completed\n\n收到本轮内容：document-inputs/a/项目纪要.txt\nline:1 青禾项目负责人是林舟。\nline:2 计划2026年11月20日交付。\nline:3 验收先检查记录重启，再检查导出。\n\ndocument-inputs/交付.pdf\npage:1 青禾交付清单\npage:1 交付物包括桌面程序、使用说明和数据备份。\n。此前用户轮次：0。\n\n## T9\n\n来源：document-inputs/a/项目纪要.txt\n\n状态：completed\n\n收到本轮内容：document-inputs/a/项目纪要.txt\nline:1 青禾项目负责人是林舟。\nline:2 计划2026年11月20日交付。\nline:3 验收先检查记录重启，再检查导出。。此前用户轮次：0。"
+}

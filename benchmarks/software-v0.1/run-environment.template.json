@@ -1,0 +1,19 @@
+{
+  "system_id": "TO_BE_SET",
+  "agent_version": "TO_BE_SET",
+  "build_or_commit": "TO_BE_SET",
+  "windows_version": "TO_BE_SET",
+  "hardware": "TO_BE_SET",
+  "api_protocol": "TO_BE_SET",
+  "effective_model_id": "deepseek-flash",
+  "effective_thinking": "enabled",
+  "effective_reasoning_effort": "high",
+  "effective_context_limit": 1048576,
+  "effective_output_limit": 32768,
+  "common_assets_verified": false,
+  "common_assets_path": "TO_BE_SET",
+  "speech_python_path": "TO_BE_SET",
+  "device_and_volume": "TO_BE_SET",
+  "configuration_deviations": [],
+  "redacted_request_evidence": "TO_BE_SET"
+}

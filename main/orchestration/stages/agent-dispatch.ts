@@ -69,7 +69,7 @@ export async function runAgent(input: AgentSendMessageInput): Promise<AgentSendM
   const runId = randomUUID()
   const publishForRun = (event: AgentEvent): void => {
     if (input.client_message_id && !isCurrentReceiptGeneration(input.client_message_id, input.run_generation ?? 1)) return
-    streamPublisher(input.client_message_id ? { ...event, payload: { ...event.payload, client_message_id: input.client_message_id, run_generation: input.run_generation ?? 1 } } : event)
+    streamPublisher({ ...event, payload: { ...event.payload, run_id: runId, ...(input.client_message_id ? { client_message_id: input.client_message_id, run_generation: input.run_generation ?? 1 } : {}) } })
   }
   const abortController = new AbortController()
   const run: ActiveRun = {
@@ -247,8 +247,8 @@ export async function runAgent(input: AgentSendMessageInput): Promise<AgentSendM
         },
         {
           publish: (_target, type, payload) => publishForRun(makeEvent(input, type, payload)),
-          persistAssistant,
-          persistSystem,
+          persistAssistant: (_sessionId, text) => persistAssistant(text),
+          persistSystem: (_sessionId, text) => persistSystem(text),
           complete: (sessionId, _projectId, outcome) => {
             if (outcome === 'incomplete') receiptOutcome = 'failed'
             persistTerminalMessage(sessionId, outcome === 'incomplete' ? 'incomplete' : 'completed',

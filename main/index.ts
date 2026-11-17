@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, Notification, screen, session, type MessageBoxOptions, type WebContents } from 'electron'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync, renameSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { registerIpcHandlers } from './ipc'
@@ -32,6 +32,7 @@ import { initialWindowBounds } from './platform/shell/window-bounds'
 import { appIconPath } from './platform/shell/app-icon'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
+const windowsAppId = 'Bloma.Desktop'
 
 // 委派 worktree 隔离装配（全链路审查 P1-9，2026-10-02）：web 线拆除时把旧 generate.ts
 // 的装配点一并拆掉，BLOMA_DELEGATION_WORKTREE 开关变成静默 no-op（开关 on 用户以为
@@ -44,11 +45,12 @@ let mainWindow: BrowserWindow | undefined
 
 async function createMainWindow(): Promise<void> {
   const available = screen.getPrimaryDisplay().workAreaSize
+  const icon = appIconPath()
   mainWindow = new BrowserWindow({
     ...initialWindowBounds(available),
     autoHideMenuBar: true,
     title: 'Bloma',
-    icon: appIconPath(),
+    icon,
     webPreferences: {
       autoplayPolicy: 'no-user-gesture-required',
       preload: resolvePreloadPath(),
@@ -58,6 +60,29 @@ async function createMainWindow(): Promise<void> {
       webviewTag: false,
     },
   })
+  if (process.platform === 'win32') {
+    const launcher = app.isPackaged ? process.execPath : join(app.getAppPath(), 'start-bloma.cmd')
+    mainWindow.setAppDetails({
+      appId: windowsAppId,
+      appIconPath: icon,
+      ...(existsSync(launcher) && { relaunchCommand: `"${launcher}"`, relaunchDisplayName: 'Bloma' }),
+    })
+  }
+
+  // Optional root-launcher timing, fixed project-local path and one-time nonce.
+  // This measures first paint, not project recovery, model readiness or delivery.
+  const startupToken = process.env.BLOMA_STARTUP_TOKEN
+  if (startupToken && /^[0-9a-f-]{36}$/i.test(startupToken)) {
+    mainWindow.once('ready-to-show', () => {
+      try {
+        const dir = join(app.getAppPath(), '.bloma-build')
+        mkdirSync(dir, { recursive: true })
+        const path = join(dir, `ready-${startupToken}.json`)
+        writeFileSync(path + '.tmp', JSON.stringify({ token: startupToken, pid: process.pid, at: Date.now() }))
+        renameSync(path + '.tmp', path)
+      } catch { /* Timing must not prevent normal startup. */ }
+    })
+  }
 
   configureContentSecurity(mainWindow)
   configureOutboundAllowlist()
@@ -158,6 +183,7 @@ async function reconcileInterruptedProjectsAtStartup(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+  if (process.platform === 'win32') app.setAppUserModelId(windowsAppId)
   nativeTheme.themeSource = 'light'
   configureMediaPermissions()
   // bloma-file:// 预览协议（2026-10-05 方案 A）：特权注册须在 ready 前（见模块底部顶层调用），

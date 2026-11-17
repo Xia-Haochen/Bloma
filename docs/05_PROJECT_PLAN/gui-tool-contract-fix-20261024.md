@@ -40,4 +40,4 @@ Bloma会话e47b41d6-ab3a-4adc-a86a-cf58d03d73bc中，register_gui_check调用61�
 
 ## 后续方案约束
 
-四项优先方案另见software-specialization-four-priorities-20261024.md。新增工具的公开schema、运行校验、恢复反馈与进展识别必须同批接线和回归；不能再次只测预先写对的参数。方案是后续开发稿，不作为每个用户项目必须执行的新流程。
+四项能力的结果见[软件专精实施记录](software-specialization-implementation-20261024.md)，未完成项见[当前索引](README.md)。新增工具的公开schema、运行校验、恢复反馈与进展识别必须同批接线和回归；不能再次只测预先写对的参数。四项能力不作为每个用户项目必须执行的新流程。

@@ -1,0 +1,14 @@
+{
+  "mode": "voice-live",
+  "started_at": "2026-11-16T06:20:17.394Z",
+  "checks": [
+    {
+      "name": "live_deepseek_high_four_facts_three_rounds_restart_continue",
+      "status": "passed",
+      "human_semantic_and_listening_review": "pending"
+    }
+  ],
+  "scope": "Actual Electron UI, local controlled service, process restart and exported artifacts. Live-provider semantics, physical microphone and human listening are separate.",
+  "status": "passed",
+  "finished_at": "2026-11-16T06:21:14.568Z"
+}

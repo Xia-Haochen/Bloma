@@ -46,7 +46,7 @@ const INTERRUPTED_STAGES: ReadonlySet<WorkflowStage> = new Set([
 const QUALITY_GATE_STAGES: ReadonlySet<WorkflowStage> = new Set(['testing', 'judge_review', 'repairing'])
 
 const STAGE_LABEL: Partial<Record<WorkflowStage, string>> = {
-  generating_mvp: '正在生成完整功能',
+  generating_mvp: '制作程序',
   testing: '正在检查能不能正常使用',
   judge_review: '正在确认功能是否到位',
   repairing: '正在尝试修复',
@@ -208,12 +208,12 @@ function persistReconcileMessage(
   const sessionId = project.last_session_id
   if (!sessionId) return
 
-  const parts = [`检测到上次运行在「${STAGE_LABEL[project.current_stage] ?? project.current_stage}」阶段被中断。`]
+  const parts = [`上次任务在「${STAGE_LABEL[project.current_stage] ?? project.current_stage}」阶段中断了。`]
   if (action === 'snapshot_restored' && restoredFrom) {
     parts.push(`磁盘上的产物不完整，已回滚到最近一个健康快照（${restoredFrom.snapshot_id.slice(0, 8)}，${restoredFrom.created_at.slice(0, 19).replace('T', ' ')} 创建）。`)
   }
   if (action === 'desktop_preserved') {
-    parts.push('桌面项目的当前源码和使用数据已保留，没有自动回滚。制作停在原阶段，尚未取得新的验证结论；发送继续或修改意见后再恢复。')
+    parts.push('程序文件和使用数据已保留。恢复后还会继续检查；你可以选择继续制作，或先补充修改意见。')
   } else if (toStage === 'ready') {
     parts.push('现在磁盘上的产物是完整的，项目已恢复为可用状态。')
     if (QUALITY_GATE_STAGES.has(project.current_stage)) {

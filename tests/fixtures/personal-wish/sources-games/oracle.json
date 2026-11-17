@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "case_id": "sources-games",
+  "core_experience": "不确定留空、关联可解释、纠正可延续",
+  "unacceptable_substitute": "把机器猜测写成确定的游玩历史",
+  "source_quote": "我有很多老游戏截图和自己的游玩笔记。把它们整理成探险档案，帮我串起经历，但截图认不出的地点就留空，不要按常识补。我能纠正地点，并查看为什么会关联到这条笔记。",
+  "change_quote": "同名地点其实在不同游戏里，把它们分开，但别丢掉旧备注。",
+  "dimensions": [
+    "intent",
+    "behavior",
+    "provenance",
+    "change_recovery",
+    "ui",
+    "delivery"
+  ],
+  "required_evidence": [
+    "actual_interaction",
+    "source_and_scope_identity",
+    "restart_readback",
+    "final_project_state"
+  ],
+  "outcomes": [
+    "passed",
+    "failed",
+    "unverified",
+    "not_applicable"
+  ],
+  "status": "authored_not_executed",
+  "independent": false
+}

@@ -1,0 +1,401 @@
+这是涂鸦琴的HTML代码，一个把鼠标涂鸦变成可回放小演奏的桌面工具界面。它包含画布、回放、映射规则和版本管理，全在本机运行，不依赖网络。
+```html
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>涂鸦琴 · 本地工作区</title>
+<style>
+:root{
+  --surface:#fffefb;
+  --muted:#f3f3f0;
+  --primary:#6d8268;
+  --primary-soft:#e7ece3;
+  --focus:#52694c;
+  --selected:#dfe8da;
+  --text:#30342f;
+  --text-muted:#686e65;
+  --text-2:#62685f;
+  --border:#dfe2d9;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;
+  font:14px/1.55 -apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  color:var(--text);
+  background:var(--muted);
+  -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3,p,ul{margin:0}
+ul{padding:0;list-style:none}
+button,select,input{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px;border-radius:6px}
+
+/* ---- shell ---- */
+.app{
+  display:grid;
+  grid-template-areas:"top top" "side main";
+  grid-template-columns:248px minmax(0,1fr);
+  grid-template-rows:58px minmax(0,1fr);
+  height:100vh;
+}
+.ws{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+
+/* ---- topbar ---- */
+.topbar{
+  grid-area:top;
+  display:flex;align-items:center;justify-content:space-between;gap:16px;
+  padding:0 20px;
+  background:var(--surface);
+  border-bottom:1px solid var(--border);
+}
+.brand{display:flex;align-items:center;gap:10px;min-width:0}
+.mark{
+  display:grid;place-items:center;width:32px;height:32px;border-radius:9px;
+  background:var(--primary);color:#fff;font-size:15px;font-weight:600;flex:0 0 auto;
+}
+.app-name{font-size:14.5px;font-weight:600;letter-spacing:.01em}
+.app-sub{font-size:12px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.topbar-meta{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--text-muted);flex:0 0 auto}
+.pill{
+  background:var(--primary-soft);color:var(--focus);
+  border-radius:999px;padding:2px 10px;font-size:12px;font-weight:500;
+}
+
+/* ---- sidebar ---- */
+.sidebar{
+  grid-area:side;
+  background:var(--surface);
+  border-right:1px solid var(--border);
+  padding:16px 12px 24px;
+  overflow-y:auto;
+  display:flex;flex-direction:column;gap:24px;
+}
+.side-head{display:flex;align-items:center;justify-content:space-between;padding:0 6px 8px}
+.side-head h2{font-size:12px;font-weight:600;letter-spacing:.06em;color:var(--text-muted)}
+.count{
+  font-size:11.5px;color:var(--focus);background:var(--primary-soft);
+  border-radius:999px;padding:1px 8px;font-weight:600;
+}
+.work-list,.rule-list{display:flex;flex-direction:column;gap:2px}
+.work{
+  padding:8px 10px;border-radius:9px;border:1px solid transparent;
+  display:flex;flex-direction:column;gap:1px;
+}
+.work:hover{background:var(--muted)}
+.work.is-active{background:var(--selected);border-color:#cfdcc7}
+.work-name{font-size:13.5px;font-weight:500}
+.work-meta{font-size:11.5px;color:var(--text-muted)}
+.rule{
+  display:flex;align-items:baseline;gap:8px;
+  padding:7px 10px;border-radius:9px;
+}
+.rule:hover{background:var(--muted)}
+.rule-v{font-size:13px;font-weight:600;color:var(--focus);min-width:22px}
+.rule-meta{font-size:11.5px;color:var(--text-muted)}
+.rule.is-current{background:var(--primary-soft)}
+.rule.is-current .rule-meta{color:var(--focus)}
+
+/* ---- main ---- */
+.main{
+  grid-area:main;
+  display:flex;flex-direction:column;min-width:0;
+  background:var(--muted);
+}
+.tabbar{
+  display:flex;gap:4px;
+  padding:10px 20px 0;
+  background:var(--surface);
+  border-bottom:1px solid var(--border);
+  flex:0 0 auto;
+}
+.tab{
+  padding:8px 15px;border-radius:8px 8px 0 0;
+  font-size:13.5px;color:var(--text-muted);
+  border:1px solid transparent;border-bottom:0;
+  cursor:pointer;user-select:none;
+}
+.tab:hover{background:var(--muted);color:var(--text)}
+.panel-wrap{flex:1 1 auto;overflow-y:auto;padding:22px 24px 40px}
+
+.panel{display:none}
+#ws-play:checked ~ .main .panel-play,
+#ws-map:checked ~ .main .panel-map,
+#ws-ver:checked ~ .main .panel-ver{display:block}
+#ws-play:checked ~ .main .tab[for="ws-play"],
+#ws-map:checked ~ .main .tab[for="ws-map"],
+#ws-ver:checked ~ .main .tab[for="ws-ver"]{
+  background:var(--primary-soft);color:var(--focus);font-weight:600;
+}
+
+/* ---- shared pieces ---- */
+.work-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:16px;flex-wrap:wrap}
+.work-head h1,.panel-head h1{font-size:19px;font-weight:600;letter-spacing:.01em}
+.sub{font-size:12.5px;color:var(--text-muted);margin-top:4px}
+.head-actions{display:flex;gap:8px;flex-wrap:wrap}
+
+.btn{
+  border:1px solid var(--border);
+  background:var(--surface);
+  color:var(--text);
+  border-radius:8px;
+  padding:7px 14px;
+  font-size:13px;
+  line-height:1.4;
+  transition:background .12s,border-color .12s;
+}
+.btn:hover{background:var(--primary-soft);border-color:#cfdcc7}
+.btn-primary{background:var(--primary);border-color:var(--primary);color:#fff;font-weight:500}
+.btn-primary:hover{background:var(--focus);border-color:var(--focus)}
+.btn-quiet{color:var(--text-2)}
+.btn-play{font-size:13.5px;padding:8px 18px;display:inline-flex;align-items:center;gap:7px}
+.ico{font-size:11px}
+
+.card{
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:16px 18px;
+}
+.card h2{font-size:13.5px;font-weight:600}
+.card-sub{font-size:12px;color:var(--text-muted);margin-top:2px}
+
+/* ---- canvas ---- */
+.canvas{
+  position:relative;
+  border:1px solid var(--border);
+  border-radius:12px;
+  background-color:var(--surface);
+  background-image:
+    linear-gradient(to right,#f1f1ec 1px,transparent 1px),
+    linear-gradient(to bottom,#f1f1ec 1px,transparent 1px);
+  background-size:32px 32px;
+  background-position:-1px -1px;
+  padding:14px;
+  overflow:hidden;
+}
+.canvas-badge{
+  position:absolute;top:12px;right:12px;
+  font-size:11.5px;color:var(--text-muted);
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:999px;padding:2px 10px;
+}
+.doodle{display:block;width:100%;height:auto}
+
+.legend{
+  display:flex;flex-wrap:wrap;gap:6px 18px;
+  margin:10px 2px 18px;
+  font-size:12px;color:var(--text-muted);
+}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.sw{display:inline-block;width:9px;height:9px;border-radius:50%;flex:0 0 auto;vertical-align:-1px}
+
+/* ---- playbar ---- */
+.playbar{
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:14px 18px;
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  margin-bottom:16px;
+}
+.select-field{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text-muted)}
+select{
+  border:1px solid var(--border);
+  background:var(--surface);
+  border-radius:7px;
+  padding:6px 9px;
+  font-size:13px;
+  color:var(--text);
+  max-width:100%;
+}
+select:hover{border-color:#cfdcc7}
+.playbar-tip{font-size:11.5px;color:var(--text-muted);margin-left:auto}
+
+.progress{
+  height:4px;border-radius:999px;background:var(--muted);
+  margin:0 2px 20px;overflow:hidden;
+}
+.progress-fill{height:100%;width:0;background:var(--primary)}
+
+/* ---- tables ---- */
+.block-title{font-size:13.5px;font-weight:600;margin:0 0 10px 2px}
+.table-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:16px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{
+  text-align:left;font-weight:600;font-size:11.5px;letter-spacing:.04em;
+  color:var(--text-muted);background:var(--muted);
+  padding:8px 14px;border-bottom:1px solid var(--border);white-space:nowrap;
+}
+td{padding:9px 14px;border-bottom:1px solid var(--border);vertical-align:middle}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover{background:#fbfbf8}
+.num{color:var(--text-muted);font-variant-numeric:tabular-nums}
+.cell-color{display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:12px;color:var(--text-2)}
+.tag{
+  display:inline-block;font-size:11.5px;padding:1px 8px;border-radius:999px;
+  background:var(--primary-soft);color:var(--focus);font-weight:500;white-space:nowrap;
+}
+.tag-current{background:var(--primary);color:#fff}
+.muted{color:var(--text-muted)}
+
+/* ---- mapping editor ---- */
+.grid-2{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-bottom:16px}
+.map-table td{padding:7px 14px}
+.map-table th{padding:8px 14px}
+.map-table select{width:100%;min-width:110px}
+.savebar{
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  background:var(--surface);border:1px solid var(--border);border-radius:12px;
+  padding:14px 18px;
+}
+.hint{font-size:12px;color:var(--text-muted)}
+.note{
+  font-size:12px;color:var(--text-muted);
+  background:var(--primary-soft);border-radius:10px;
+  padding:10px 14px;margin-top:4px;
+}
+
+/* ---- versions ---- */
+.ver-table td:last-child{text-align:right}
+.ver-table select{min-width:150px}
+
+@media (max-width:880px){
+  body{overflow:auto}
+  .app{
+    grid-template-areas:"top" "side" "main";
+    grid-template-columns:minmax(0,1fr);
+    grid-template-rows:auto auto minmax(0,1fr);
+    height:auto;min-height:100vh;
+  }
+  .sidebar{
+    flex-direction:row;flex-wrap:wrap;gap:18px;
+    border-right:0;border-bottom:1px solid var(--border);
+    overflow:visible;
+  }
+  .side-block{flex:1 1 230px}
+  .main{min-height:70vh}
+  .panel-wrap{padding:18px 16px 32px}
+  .playbar-tip{margin-left:0;width:100%}
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <input class="ws" type="radio" name="ws" id="ws-play" checked>
+  <input class="ws" type="radio" name="ws" id="ws-map">
+  <input class="ws" type="radio" name="ws" id="ws-ver">
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="mark">涂</span>
+      <div>
+        <div class="app-name">涂鸦琴</div>
+        <div class="app-sub">把鼠标涂鸦变成可回放的小演奏</div>
+      </div>
+    </div>
+    <div class="topbar-meta">
+      <span class="pill">本机</span>
+      <span>2026-11-04</span>
+    </div>
+  </header>
+
+  <aside class="sidebar">
+    <section class="side-block">
+      <div class="side-head">
+        <h2>作品库</h2>
+        <span class="count">5</span>
+      </div>
+      <ul class="work-list">
+        <li class="work is-active">
+          <span class="work-name">春日折线</span>
+          <span class="work-meta">2026-11-02 · 7.3 秒 · 3 段</span>
+        </li>
+        <li class="work">
+          <span class="work-name">雨点折线</span>
+          <span class="work-meta">2026-10-30 · 6.8 秒 · 5 段</span>
+        </li>
+        <li class="work">
+          <span class="work-name">慢速波浪</span>
+          <span class="work-meta">2026-10-28 · 9.1 秒 · 4 段</span>
+        </li>
+        <li class="work">
+          <span class="work-name">橙色锯齿</span>
+          <span class="work-meta">2026-10-25 · 3.4 秒 · 2 段</span>
+        </li>
+        <li class="work">
+          <span class="work-name">深夜圆弧</span>
+          <span class="work-meta">2026-10-21 · 5.7 秒 · 6 段</span>
+        </li>
+      </ul>
+    </section>
+
+    <section class="side-block">
+      <div class="side-head">
+        <h2>规则版本</h2>
+        <span class="count">3</span>
+      </div>
+      <ul class="rule-list">
+        <li class="rule is-current">
+          <span class="rule-v">v3</span>
+          <span class="rule-meta">当前 · 2026-11-03</span>
+        </li>
+        <li class="rule">
+          <span class="rule-v">v2</span>
+          <span class="rule-meta">2026-10-30</span>
+        </li>
+        <li class="rule">
+          <span class="rule-v">v1</span>
+          <span class="rule-meta">2026-10-24</span>
+        </li>
+      </ul>
+    </section>
+  </aside>
+
+  <main class="main">
+    <div class="tabbar">
+      <label class="tab" for="ws-play">回放</label>
+      <label class="tab" for="ws-map">映射规则</label>
+      <label class="tab" for="ws-ver">规则版本</label>
+    </div>
+
+    <div class="panel-wrap">
+
+      <!-- ================= 回放 ================= -->
+      <section class="panel panel-play">
+        <div class="work-head">
+          <div>
+            <h1>春日折线</h1>
+            <p class="sub">绘制于 2026-11-02 14:26 · 3 段线条 · 总时长 7.3 秒 · 保存在本机</p>
+          </div>
+          <div class="head-actions">
+            <button type="button" class="btn btn-quiet">另存为副本</button>
+            <button type="button" class="btn btn-quiet">继续涂鸦</button>
+          </div>
+        </div>
+
+        <div class="canvas">
+          <span class="canvas-badge">只读回放</span>
+          <svg class="doodle" viewBox="0 0 720 260" preserveAspectRatio="xMidYMid meet" role="img"
+               aria-label="春日折线：三段不同颜色与速度的涂鸦线条">
+            <path d="M62 196 L104 128 L146 208 L188 118 L228 198 L262 152"
+                  fill="none" stroke="#6d8268" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M300 176 C338 118 384 226 430 172 C466 130 500 214 536 168"
+                  fill="none" stroke="#b98055" stroke-width="5" stroke-linecap="round"/>
+            <path d="M566 178 C592 108 668 104 676 172 C682 222 618 240 590 196"
+                  fill="none" stroke="#7f8ea3" stroke-width="3.5" stroke-linecap="round"/>
+            <circle cx="62" cy="196" r="4" fill="#6d8268" opacity=".35"/>
+            <circle cx="590" cy="196" r="4" fill="#7f8ea3" opacity=".35"/>
+          </svg>
+        </div>
+
+        <div class="legend">
+          <span><i class="sw" style="background:#6d8268"></i>苔绿 · 快速（线细）</span>
+          <span><i class="sw" style="background:#b98055"></i>陶土橙 · 慢速（线粗）</span>
+          <span><i class="sw" style="background:#7f

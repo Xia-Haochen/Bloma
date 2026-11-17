@@ -1,0 +1,8 @@
+<!doctype html><html lang="zh"><meta charset="utf-8"><title>文档参考应用</title>
+<style>body{font:16px system-ui;margin:24px}input,button{font:inherit;margin:4px;padding:5px}section{margin:16px 0}pre{white-space:pre-wrap}li{margin:8px}article{border:1px solid #bbb;padding:10px;margin:10px 0}</style>
+<h1>文档批处理</h1>
+<section><label>服务地址<input id="endpoint"></label><label>模型<input id="model"></label><label>密钥<input id="key" type="password"></label><button id="save-settings">保存设置</button></section>
+<section><input id="files" type="file" webkitdirectory multiple><button id="import">导入目录</button><label>关键词<input id="query"></label><button id="search">搜索</button><button id="clear">清空筛选</button></section>
+<p id="status" role="status"></p><div id="import-errors"></div><div id="documents"></div><ul id="search-results"></ul><pre id="source"></pre>
+<button id="queue">逐份摘要</button><button id="aggregate">所选汇总</button><button id="export-md">导出Markdown</button><button id="export-csv">导出CSV</button>
+<div id="tasks"></div><script src="common-renderer.js"></script><script src="documents-renderer.js"></script></html>

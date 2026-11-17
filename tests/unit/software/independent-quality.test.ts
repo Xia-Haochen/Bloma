@@ -16,6 +16,7 @@ import { verifySoftwareCandidate, recentSoftwareVerification } from '../../../ma
 import { createQualityReview, readQualityLedger } from '../../../main/software/quality-review'
 import { createSoftwareCollaborationPolicy } from '../../../main/software/collaboration-policy'
 import { buildLeanGuiTool } from '../../../main/desktop/lean-gui-tool'
+import { guiSuitePath } from '../../../main/desktop/gui-acceptance'
 import { createToolState } from '../../../main/agent/loop/agent-loop'
 import { closeAllDebugSessions } from '../../../main/software/debug-sessions'
 import { enterDesktopLine } from '../../../main/desktop/desktop-route'
@@ -48,7 +49,7 @@ function cancelA(){el('nameA').value=localStorage.getItem('A')||'';render()}rend
 beforeEach(async () => {
   previous = process.env.PROMA_HOME; home = mkdtempSync(join(tmpdir(), 'bloma-b-quality-')); process.env.PROMA_HOME = home; calls = 0
   project = createProject({ request_id: 'c', mode: 'quick' }, { workflowVersion: 'software-v1' })
-  const parsed = parseLeanBrief(JSON.stringify({ action: 'brief', goal: '双记录编辑保存', ui: 'required', delivery: 'browser', requirements: [{ description: '独立维护两条记录及取消、异常、重开', expected }] }), { projectId: project.project_id, sessionId: 's', source: '双记录', previous: readPrdBackplane(project.project_id), software: true })!
+  const parsed = parseLeanBrief(JSON.stringify({ action: 'brief', goal: '双记录编辑保存', ui: 'required', delivery: 'browser', requirements: [{ description: '独立维护两条记录及取消、异常、重开', expected, acceptance_scenarios: ['multi_object','exception','cancel','reopen'] }] }), { projectId: project.project_id, sessionId: 's', source: '双记录', previous: readPrdBackplane(project.project_id), software: true })!
   if (parsed.action !== 'brief') throw Error('fixture'); parsed.brief.lean_brief!.preview = 'skip'
   syncDocuments({ project_id: project.project_id, session_id: 's', request_id: 'sync', checkpoint: 'requirement_confirmed' }, parsed.brief)
   const brief = markPrdUserConfirmed(project.project_id)!, scope = prdScopeFingerprint(brief)
@@ -82,6 +83,19 @@ async function freeze() {
   writeFileSync(join(project.root_path, 'INDEPENDENT_ADAPTER.json'), JSON.stringify({ version: 1, design_digest: design.digest, controls: Object.fromEntries(Object.entries(controls).filter(([control]) => contract.cases.some(c => c.steps.some(s => 'control' in s && s.control === control)))) }))
   return design
 }
+it('records a real B-only renderer crash as a confirmed defect and closes it after the same contract passes',async()=>{
+  await freeze()
+  writeFileSync(join(project.root_path,'index.html'),html(false).replace("el('error').textContent='';render()}","el('error').textContent='';render();if(value==='Gamma')throw Error('B save crashed')}"))
+  const failed=await verifySoftwareCandidate(project.project_id,'b-runtime',ctx().signal,true)
+  expect(failed.core?.status).toBe('passed');expect(failed.status).toBe('failed')
+  expect(failed.independent?.case_results?.find(c=>c.id==='identity')).toMatchObject({status:'failed',kind:'product_runtime'})
+  const finding=readQualityLedger(project.project_id).findings.find(f=>f.independent?.case_id==='identity')!
+  expect(finding.disposition).toBe('confirmed');expect(finding.checks.at(-1)?.outcome).toBe('failed')
+  writeFileSync(join(project.root_path,'index.html'),html(false))
+  const passed=await verifySoftwareCandidate(project.project_id,'b-runtime-fixed',ctx().signal,true)
+  expect(passed.status,passed.summary).toBe('passed')
+  expect(readQualityLedger(project.project_id).findings.find(f=>f.id===finding.id)?.disposition).toBe('closed')
+},150000)
 it('actual isolated B cases expose cross-object corruption, preserve cancel/error/reopen evidence and close through the existing finding tool only after a same-contract host retest', async () => {
   const design = await freeze(), before = readFileSync(join(home, 'software-independent-design', project.project_id, 'current.json'))
   expect(assessIndependentCases(readPrdBackplane(project.project_id), contract).ready).toBe(true)
@@ -114,7 +128,7 @@ it('actual isolated B cases expose cross-object corruption, preserve cancel/erro
   expect(readIndependentDesign(project.project_id)?.digest).toBe(design.digest);expect(calls).toBe(1)
   writeFileSync(join(artifacts,'challenge.json'),JSON.stringify({finding:updated,result:disputed,tool_is_error:challenged.isError},null,2))
 }, 180000)
-it('wrong or unknown business expectations remain disputes, are not executed and stop normal production before A or a new B request', async () => {
+it('wrong or unknown business expectations remain disputes and stop an explicitly requested redesign before implementation', async () => {
   contract.cases = [contract.cases[0]]; contract.cases[0].basis!.expected_source = '未确认的新需求：新增自动备份'
   contract.coverage_notes = (['multi_object', 'exception', 'cancel', 'reopen'] as const).map(category => ({ feature: 'F-001', category, disposition: 'unresolved', reason: '需要核对', source: expected }))
   const briefHash = prdScopeFingerprint(readPrdBackplane(project.project_id)); await freeze(); writeFileSync(join(project.root_path, 'index.html'), html(false))
@@ -123,17 +137,33 @@ it('wrong or unknown business expectations remain disputes, are not executed and
   expect(result.independent?.case_results?.[0]).toMatchObject({ status: 'not_run', kind: 'semantic', steps: [] })
   expect(readQualityLedger(project.project_id).findings[0].disposition).toBe('disputed')
   const model = vi.fn(async function* () { throw Error('A must not implement disputed expectations') })
-  await enterDesktopLine({ projectId: project.project_id, sessionId: 's', requestId: 'new', content: '继续', maxTokens: 4096, signal: ctx().signal }, model, { ANTHROPIC_MODEL: 'model-a' }, { publish: () => {}, persistAssistant: () => {}, persistSystem: () => {}, complete: () => {} })
-  expect(model).not.toHaveBeenCalled(); expect(calls).toBe(1); expect(findProject(project.project_id).current_stage).toBe('blocked_for_user_decision')
+  await enterDesktopLine({ projectId: project.project_id, sessionId: 's', requestId: 'new', redesignIndependentCases:true, content: '继续', maxTokens: 4096, signal: ctx().signal }, model, { ANTHROPIC_MODEL: 'model-a' }, { publish: () => {}, persistAssistant: () => {}, persistSystem: () => {}, complete: () => {} })
+  expect(model).not.toHaveBeenCalled(); expect(calls).toBe(1)
+  expect(findProject(project.project_id).current_stage).toBe('generating_mvp')
+  expect(findProject(project.project_id).desktop_blocked?.note).toContain('工程处理阶段')
   expect(prdScopeFingerprint(readPrdBackplane(project.project_id))).toBe(briefHash)
 }, 90000)
-it('missing static adapter controls are unverified harness findings, not reproduced product defects', async () => {
+it('runs independent browser scenarios when the local suite is missing and withholds delivery', async () => {
+  await freeze()
+  writeFileSync(join(project.root_path,'index.html'), html(false))
+  rmSync(guiSuitePath(project.project_id))
+  const result = await verifySoftwareCandidate(project.project_id, 'independent-without-local-suite', ctx().signal, true)
+  expect(result.core?.status).toBe('unverified')
+  expect(result.launch?.passed).toBe(true)
+  expect(result.independent?.status, result.summary).toBe('passed')
+  expect(result.independent?.case_results?.map(row => row.status)).toEqual(['passed','passed','passed','passed','passed'])
+  expect(result.status).toBe('unverified')
+  expect(await recentSoftwareVerification(project.project_id, 'independent-without-local-suite')).toBeUndefined()
+}, 90000)
+it('keeps missing static adapter controls in verification evidence without creating a product suspicion', async () => {
   await freeze(); writeFileSync(join(project.root_path, 'index.html'), html(false))
   const file = join(project.root_path, 'INDEPENDENT_ADAPTER.json'), adapter = JSON.parse(readFileSync(file, 'utf8')); delete adapter.controls.nameA; writeFileSync(file, JSON.stringify(adapter))
   const result = await verifySoftwareCandidate(project.project_id, 'r', ctx().signal, true)
   expect(result.status).toBe('unverified'); expect(result.independent?.case_results?.[0].kind).toBe('adapter')
-  expect(readQualityLedger(project.project_id).findings[0].disposition).toBe('suspected')
-  expect(readQualityLedger(project.project_id).findings[0].checks.some(c => c.outcome === 'failed')).toBe(false)
+  expect(result.independent_mapping).toMatchObject({
+    status: 'mapping_pending', detail: expect.stringContaining('"missing":["nameA"]'),
+  })
+  expect(readQualityLedger(project.project_id).findings).toEqual([])
 }, 90000)
 it('rejects cross-object input oracles, invented literal values, cosmetic coverage labels and terminal restarts without changing frozen proposals', () => {
   const brief = readPrdBackplane(project.project_id)
@@ -153,4 +183,24 @@ it('a changed B design cannot discharge an old reproduced defect while its confi
   saveQualityLedger(project.project_id,{version:1,reviews:[],findings:[prior]})
   await recordIndependentFindings(project.project_id,{source:{digest:identity.source}} as never,{status:'passed',case_results:[],design_version:independentDesignVersion(project.project_id),design_digest:'new'},true)
   expect(readQualityLedger(project.project_id).findings[0].disposition).toBe('confirmed')
+})
+it.each(['isolated_local','controlled_service'])('does not close a failure from %s with a different service configuration',async mode=>{
+  const identity=await qualityIdentity(project.project_id),version=independentDesignVersion(project.project_id)
+  const prior:QualityFinding={id:'prior-service',review:'B',identity,requirement:'F-001',expected_source:expected,category:'independent_behavior',severity:'high',location:'B:normal',trigger:'same case',evidence:'prior failure',reproduction:'normal',unknowns:'',disposition:'confirmed',independent:{design_version:version,design_digest:'design',case_id:'normal'},checks:[{at:new Date().toISOString(),identity,case_name:'normal',rules:version,outcome:'failed',observation:JSON.stringify({case:{status:'failed',...(mode==='controlled_service'?{environment:{mode,configuration_digest:'previous-config'}}:{})}})}]}
+  saveQualityLedger(project.project_id,{version:1,reviews:[],findings:[prior]})
+  const row={id:'normal',feature:'F-001',status:'passed',kind:'none',steps:[{id:'step',passed:true}],environment:{version:1,mode:'controlled_service',configuration_digest:'config',readiness:'ready',external_model_effects:'unverified',requests:[]}}
+  const result={status:'passed',design_version:version,design_digest:'design',case_results:[row]}
+  await recordIndependentFindings(project.project_id,{source:{digest:identity.source}} as never,result as never,true)
+  expect(readQualityLedger(project.project_id).findings[0].disposition).toBe('confirmed')
+  expect(readQualityLedger(project.project_id).findings[0].checks).toHaveLength(1)
+  await recordIndependentFindings(project.project_id,{source:{digest:identity.source}} as never,
+    {...result,status:'failed',case_results:[{...row,status:'failed',kind:'product_assertion',steps:[{id:'step',passed:false}]}]} as never,false)
+  expect(readQualityLedger(project.project_id).findings).toHaveLength(2)
+  // A repaired case closes even while an unrelated case is still pending.
+  await recordIndependentFindings(project.project_id,{source:{digest:identity.source}} as never,{...result,status:'unverified'} as never,false)
+  expect(readQualityLedger(project.project_id).findings.map(f=>f.disposition)).toEqual(['confirmed','closed'])
+  if(mode==='controlled_service')row.environment.configuration_digest='previous-config'
+  else delete (row as {environment?:unknown}).environment
+  await recordIndependentFindings(project.project_id,{source:{digest:identity.source}} as never,result as never,true)
+  expect(readQualityLedger(project.project_id).findings[0].disposition).toBe('closed')
 })

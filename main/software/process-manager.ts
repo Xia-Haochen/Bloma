@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events'
 import { spawn, execFile, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
@@ -8,6 +9,7 @@ import { projectDirectory, resolveSoftwareCommand, softwareEnvironment, bindSoft
 import { mainRootDir } from '../platform/paths'
 import { softwareVerificationFingerprint } from '../desktop/verification-fingerprint'
 import { createProcessOutput, type ProcessOutput } from './process-output'
+import { createProcessLog, readProcessLog, readProcessLogRecord, type ProcessLogInfo } from './process-log'
 import { dependencyInputVersion, isDependencySetup } from './dependency-state'
 
 export interface SoftwareProcessSnapshot {
@@ -15,6 +17,8 @@ export interface SoftwareProcessSnapshot {
   completion_reason?: 'exit' | 'timeout' | 'cancelled' | 'host_interrupted'
   output_seq?: number
   output?: ProcessOutput[]
+  output_incomplete?: boolean
+  log?: ProcessLogInfo
   dependency_setup?: { root: string; input_version: string }
   purpose?: 'trial' | 'development' | 'acceptance' | 'user' | 'correction'
   source?: string
@@ -24,7 +28,7 @@ export interface SoftwareProcessSnapshot {
   id: string; projectId: string; sessionId: string; state: 'starting' | 'running' | 'stopping' | 'exited' | 'failed' | 'stopped' | 'interrupted'
   pid?: number; code?: number | null; url?: string; ready?: boolean; stdout: string; stderr: string; startedAt: string
 }
-interface OwnedProcess { snapshot: SoftwareProcessSnapshot; commandKey: string; file: string; child: ChildProcess; abort: () => void; signal?: AbortSignal; timer?: ReturnType<typeof setTimeout>; deadlineTimer?: ReturnType<typeof setTimeout>; stdinClosed?: boolean; stopping?: Promise<void>; restart?: (signal: AbortSignal) => Promise<SoftwareProcessSnapshot> }
+interface OwnedProcess { changed: EventEmitter; snapshot: SoftwareProcessSnapshot; commandKey: string; file: string; child: ChildProcess; abort: () => void; signal?: AbortSignal; timer?: ReturnType<typeof setTimeout>; deadlineTimer?: ReturnType<typeof setTimeout>; stdinClosed?: boolean; stopping?: Promise<void>; restart?: (signal: AbortSignal) => Promise<SoftwareProcessSnapshot> }
 const processes = new Map<string, OwnedProcess>()
 const TAIL = 32768
 const pathFor = (id: string) => {
@@ -38,9 +42,9 @@ export function redactSoftwareOutput(text: string): string {
   return text.replace(/((?:api[_-]?key|authorization|password|access[_-]?token|refresh[_-]?token|token|secret)\s*["']?\s*[:=]\s*["']?)[^\s"',};&]+/gi, '$1[REDACTED]')
 }
 function visibleOutput(snapshot: SoftwareProcessSnapshot, stream: 'stdout' | 'stderr') {
-  return snapshot.kind === 'command' ? (snapshot.output ?? []).filter(line => line.stream === stream).map(line => line.text).join('').slice(-TAIL) : redactSoftwareOutput(snapshot[stream])
+  return snapshot.output ? snapshot.output.filter(line => line.stream === stream).map(line => line.text).join('').slice(-TAIL) : redactSoftwareOutput(snapshot[stream])
 }
-function persist(entry: OwnedProcess) { writeJsonFile(entry.file, { ...entry.snapshot, stdout: visibleOutput(entry.snapshot, 'stdout'), stderr: visibleOutput(entry.snapshot, 'stderr') }) }
+function persist(entry: OwnedProcess) { try { writeJsonFile(entry.file, { ...entry.snapshot, stdout: visibleOutput(entry.snapshot, 'stdout'), stderr: visibleOutput(entry.snapshot, 'stderr') }) } finally { entry.changed.emit('change') } }
 /** Completed one-shot commands have no adoptable PID/handle. */
 export function recordCompletedSoftwareCommand(input:{projectId:string;sessionId:string;root:string;dataDir:string;source:string;code:number;stdout:string;stderr:string}):SoftwareProcessSnapshot{
   const snapshot:SoftwareProcessSnapshot={id:randomUUID(),projectId:input.projectId,sessionId:input.sessionId,root:input.root,data_dir:input.dataDir,source:input.source,purpose:'trial',
@@ -117,6 +121,8 @@ export async function startSoftwareProcess(input: { root: string; projectId: str
   if (input.kind === 'command' && isDependencySetup(input.command)) snapshot.dependency_setup = { root: cwd, input_version: dependencyInputVersion(cwd, input.command) }
   // Save ownership before spawn. A failure cannot leave an untracked child.
   const file = pathFor(snapshot.id)
+  const archive = createProcessLog(snapshot.id)
+  snapshot.log = archive.info()
   writeJsonFile(file, snapshot)
   const supervisor = input.independentUserApp ? resolved : resolveSoftwareCommand(input.root,
     ['node', join(mainRootDir(), 'templates/tools/software_process_supervisor.cjs')], softwareEnvironment(input.projectId, input.dataDir))
@@ -124,12 +130,12 @@ export async function startSoftwareProcess(input: { root: string; projectId: str
     detached: process.platform !== 'win32' || input.independentUserApp, stdio: [input.independentUserApp ? 'ignore' : 'pipe', 'pipe', 'pipe'] })
   child.stdin?.on('error', () => { /* lifecycle error/exit handlers own terminal state */ })
   if (!input.independentUserApp) child.stdin?.write(`${JSON.stringify({ ...resolved, cwd, windowsHide:!input.visibleDesktop, interactive: input.kind === 'command' })}\n`)
-  const entry: OwnedProcess = { snapshot, commandKey, file, child, signal: input.signal, restart: signal => startSoftwareProcess({ ...input, signal }), abort: () => { void stopSoftwareProcess(input.projectId, snapshot.id).catch(() => undefined) } }
+  const entry: OwnedProcess = { changed: new EventEmitter(), snapshot, commandKey, file, child, signal: input.signal, restart: signal => startSoftwareProcess({ ...input, signal }), abort: () => { void stopSoftwareProcess(input.projectId, snapshot.id).catch(() => undefined) } }
   processes.set(snapshot.id, entry)
   for (const [id, previous] of processes) if (processes.size > 128 && !['starting', 'running', 'stopping'].includes(previous.snapshot.state)) processes.delete(id)
   snapshot.pid = child.pid
-  const output = createProcessOutput(redactSoftwareOutput)
-  const updateOutput = () => Object.assign(snapshot, output.snapshot())
+  const output = createProcessOutput(redactSoftwareOutput, undefined, archive.appendMany)
+  const updateOutput = () => { Object.assign(snapshot, output.snapshot(), { log: archive.info() }); entry.changed.emit('change') }
   const schedule = () => { if (!entry.timer) entry.timer = setTimeout(() => { entry.timer = undefined; try { persist(entry) } catch { entry.abort() } }, 200) }
   child.stdout?.on('data', data => { snapshot.stdout = (snapshot.stdout + data.toString('utf8')).slice(-TAIL); output.push('stdout', data); updateOutput(); schedule() })
   child.stderr?.on('data', data => { snapshot.stderr = (snapshot.stderr + data.toString('utf8')).slice(-TAIL); output.push('stderr', data); updateOutput(); schedule() })
@@ -181,16 +187,25 @@ export async function readSoftwareProcess(projectId: string, id: string, session
   if (snapshot.state !== 'interrupted' && since > (snapshot.output_seq ?? 0)) throw Error('PROCESS_CURSOR_INVALID')
   const entry = processes.get(id)
   if (entry && waitMs && ['starting','running','stopping'].includes(snapshot.state) && (snapshot.output_seq ?? 0) <= since) await new Promise<void>((resolve, reject) => {
-    const cleanup = () => { clearTimeout(timer); clearInterval(poll); entry.child.off('close', done); signal?.removeEventListener('abort', abort) }
+    const cleanup = () => { clearTimeout(timer); entry.changed.off('change', check); signal?.removeEventListener('abort', abort) }
     const done = () => { cleanup(); resolve() }
     const abort = () => { cleanup(); reject(signal?.reason ?? Error('PROCESS_READ_CANCELLED')) }
-    const timer = setTimeout(done, waitMs), poll = setInterval(() => { if ((entry.snapshot.output_seq ?? 0) > since) done() }, 50)
-    entry.child.once('close', done); signal?.addEventListener('abort', abort, { once: true }); if (signal?.aborted) abort()
-    if (!['starting','running','stopping'].includes(entry.snapshot.state)) done()
+    const check = () => { if ((entry.snapshot.output_seq ?? 0) > since || !['starting','running','stopping'].includes(entry.snapshot.state)) done() }
+    const timer = setTimeout(done, waitMs)
+    entry.changed.on('change', check); signal?.addEventListener('abort', abort, { once: true })
+    if (signal?.aborted) abort(); else check()
+
   })
   snapshot = softwareProcess(projectId, id, sessionId)
   return { ...snapshot, output: (snapshot.output ?? []).filter(line => line.seq > since),
-    output_truncated: since > (snapshot.output_seq ?? 0) || Boolean(snapshot.output?.length && since < snapshot.output[0].seq - 1), next_seq: snapshot.output_seq ?? 0 }
+    output_truncated: since > (snapshot.output_seq ?? 0) || Boolean(snapshot.output?.length && since < snapshot.output[0].seq - 1) || Boolean(snapshot.output?.some(line => line.seq > since && line.truncated)), next_seq: snapshot.output_seq ?? 0 }
+}
+
+export function readSoftwareProcessLog(projectId: string, id: string, sessionId: string, input: { since?: number; limit?: number; pattern?: string; record_seq?: number; char_offset?: number }) {
+  const snapshot = softwareProcess(projectId, id, sessionId)
+  const result = input.record_seq !== undefined ? readProcessLogRecord(id, snapshot.log, input.record_seq, input.char_offset ?? 0)
+    : readProcessLog(id, snapshot.log, input)
+  return { ...result, state: snapshot.state, completion_reason: snapshot.completion_reason, verification: 'not_applicable', task_completion: 'unverified' }
 }
 
 export function writeSoftwareProcess(projectId: string, id: string, sessionId: string, text: string, closeStdin = false) {

@@ -4,12 +4,19 @@ import { isAbsolute, join } from 'node:path'
 import { getPromaHome } from '../../storage/config-paths'
 import { writeTextFileAtomic } from '../../storage/json-store'
 import { findProject } from '../project/project-service'
+import { readPrdBackplane } from '../project/prd-store'
 
 export interface IndependentDesignPolicy {
   version: 1; enabled: boolean; channel_id: string; model: string; monetary_policy_path: string; authorization_path: string
   timeout_ms: number; max_tokens: number
 }
-export type IndependentPolicy = IndependentDesignPolicy | { version: 1; enabled: false }
+export interface SharedIndependentDesignPolicy { version: 1; enabled: true; funding: 'project' }
+export type IndependentPolicy = IndependentDesignPolicy | SharedIndependentDesignPolicy | { version: 1; enabled: false }
+export function independentDesignMatchesPolicy(record:{funding?:string;channel_id?:string;model?:string},policy:IndependentPolicy){
+  if(!policy.enabled)return false
+  return 'funding' in policy ? record.funding==='project'
+    : record.funding!=='project'&&record.channel_id===policy.channel_id&&record.model===policy.model
+}
 function directory(projectId: string) {
   if (!/^[A-Za-z0-9_-]+$/.test(projectId)) throw Error('INDEPENDENT_PROJECT_INVALID')
   return join(getPromaHome(), 'software-independent-design', projectId)
@@ -17,6 +24,10 @@ function directory(projectId: string) {
 export function validateIndependentPolicy(input: unknown): IndependentPolicy {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw Error('INDEPENDENT_POLICY_INVALID')
   const value = input as IndependentDesignPolicy
+  if('funding' in value&&value.funding==='project'){
+    if(value.version!==1||value.enabled!==true||Object.keys(value).some(key=>!['version','enabled','funding'].includes(key)))throw Error('INDEPENDENT_POLICY_INVALID')
+    return {version:1,enabled:true,funding:'project'}
+  }
   const keys = value.enabled ? ['version','enabled','channel_id','model','monetary_policy_path','authorization_path','timeout_ms','max_tokens'] : ['version','enabled']
   if (value.version !== 1 || typeof value.enabled !== 'boolean' || Object.keys(value).some(key => !keys.includes(key))) throw Error('INDEPENDENT_POLICY_INVALID')
   if (!value.enabled) return { version: 1, enabled: false }
@@ -35,14 +46,26 @@ export function readIndependentPolicy(projectId?: string): IndependentPolicy | u
     const file = join(directory(projectId), 'policy.json')
     if (existsSync(file)) {
       const record = JSON.parse(readFileSync(file, 'utf8'))
-      if (record.version !== 1 || record.project_id !== projectId
-        || record.operation_id !== (findProject(projectId).lean_operation_id ?? 'initial')) throw Error('INDEPENDENT_POLICY_SCOPE_CHANGED')
-      return validateIndependentPolicy(record.policy)
+      if (record.version !== 1 || record.project_id !== projectId) throw Error('INDEPENDENT_POLICY_SCOPE_CHANGED')
+      const policy=validateIndependentPolicy(record.policy)
+      // Shared routing is a project preference, with no operation-specific B
+      // funding proof. Frozen designs still bind each operation separately.
+      if(record.operation_id!==(findProject(projectId).lean_operation_id??'initial')
+        &&!(policy.enabled&&'funding' in policy))throw Error('INDEPENDENT_POLICY_SCOPE_CHANGED')
+      return policy
     }
     if (existsSync(join(directory(projectId), 'policies'))) throw Error('INDEPENDENT_POLICY_MISSING')
   }
   const file = join(getPromaHome(), 'software-independent-design', 'policy.json')
-  if (!existsSync(file)) return
+  if (!existsSync(file)) {
+    if(projectId&&findProject(projectId).independent_design_default==='project'){
+      if(readPrdBackplane(projectId).lean_brief?.ui==='none'){
+        return existsSync(join(directory(projectId),'current.json')) ? {version:1,enabled:false} : undefined
+      }
+      return {version:1,enabled:true,funding:'project'}
+    }
+    return
+  }
   // Preserve the old disabled-policy format, which may retain route fields.
   const value = JSON.parse(readFileSync(file, 'utf8'))
   if (value.version === 1 && value.enabled === false) return { version: 1, enabled: false }

@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "case_id": "history-plants",
+  "core_experience": "真实记录与创作隔离且历史不被新规则覆盖",
+  "unacceptable_substitute": "普通浇水表加几句拟人化文案",
+  "source_quote": "给阳台盆栽做个小王国。我手动记浇水和生长，它们可以用角色口吻讲故事，但真实记录和编的故事分开。换一条故事规则只能影响以后，不能改掉以前发生的事。",
+  "change_quote": "我发现昨天记错浇水量，纠正真实记录，受影响故事标注需重看。",
+  "dimensions": [
+    "intent",
+    "behavior",
+    "provenance",
+    "change_recovery",
+    "ui",
+    "delivery"
+  ],
+  "required_evidence": [
+    "actual_interaction",
+    "source_and_scope_identity",
+    "restart_readback",
+    "final_project_state"
+  ],
+  "outcomes": [
+    "passed",
+    "failed",
+    "unverified",
+    "not_applicable"
+  ],
+  "status": "authored_not_executed",
+  "independent": false
+}

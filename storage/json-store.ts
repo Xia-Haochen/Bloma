@@ -32,6 +32,11 @@ export function appendJsonLine(path: string, value: unknown): void {
  * 保留原文件并上抛，不回退直接覆盖（设置不能半写后假报保存成功）。
  */
 export function writeTextFileAtomic(path: string, content: string): void {
+  writeFileAtomic(path, content)
+}
+
+/** Shared atomic publication for both UTF-8 text and frozen binary inputs. */
+export function writeFileAtomic(path: string, content: string | Uint8Array): void {
   mkdirSync(dirname(path), { recursive: true })
   const tmpPath = join(dirname(path), `.${basenameOf(path)}.tmp-${randomBytes(12).toString('hex')}`)
   let descriptor: number | undefined

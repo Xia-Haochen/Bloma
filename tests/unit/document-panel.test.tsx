@@ -139,3 +139,18 @@ describe('全局内容渲染（2026-10-04：DocumentContent 分流）', () => {
     })
   })
 })
+
+it('a slower previous file read cannot replace the latest selected file', async () => {
+  let finishFirst!: (value: unknown) => void
+  const fileRead = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finishFirst = resolve }))
+    .mockResolvedValueOnce({ ok: true, data: { path: 'server.js', content: '最新文件', truncated: false } })
+  window.electronAPI = { documents: api.documents, project: { fileRead } } as unknown as ElectronAPI
+  renderPanel()
+  fireEvent.click(document.querySelectorAll('[data-ai-id="document-panel-file-quick"]')[0]!)
+  fireEvent.click(document.querySelectorAll('[data-ai-id="document-panel-file-quick"]')[1]!)
+  await waitFor(() => expect(document.querySelector('[data-ai-id="document-file-content"]')?.textContent).toContain('最新文件'))
+  finishFirst({ ok: true, data: { path: 'index.html', content: '过期结果', truncated: false } })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(document.querySelector('[data-ai-id="document-file-content"]')?.textContent).toContain('最新文件')
+  cleanup(); delete window.electronAPI
+})

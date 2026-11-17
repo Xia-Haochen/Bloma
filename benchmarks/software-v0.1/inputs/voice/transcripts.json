@@ -1,0 +1,21 @@
+{
+  "provenance": "independent pre-generated sherpa-onnx VITS audio; synthetic, not human recording",
+  "records": [
+    {
+      "file": "01-name.wav",
+      "text": "我叫小林，我的项目叫语音助手，计划周五交付。",
+      "seconds": 5.5554375
+    },
+    {
+      "file": "02-budget.wav",
+      "text": "请记住，项目预算三百元，界面使用蓝色主题。",
+      "seconds": 6.2083125
+    },
+    {
+      "file": "03-recall.wav",
+      "text": "我的项目叫什么，何时交付，预算多少，主题是什么颜色？",
+      "seconds": 6.7529375
+    }
+  ],
+  "physical_microphone": "我叫小林，我的项目叫语音助手，计划周五交付。"
+}

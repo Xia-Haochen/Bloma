@@ -37,8 +37,12 @@ export function requirementEvidenceHash(backplane: PrdBackplane, item: SketchReq
     backplane.assumptions ?? [], backplane.requirements_model ?? null]
   // Preserve historical hashes for old features; a new declaration invalidates old evidence.
   if (item.capabilities !== undefined) fields.push({ capabilities: item.capabilities })
+  if (item.acceptance_scenarios !== undefined) fields.push({ acceptance_scenarios: item.acceptance_scenarios })
   if (backplane.lean_brief) fields.push({ workflow: 'lean-v1', ui: backplane.lean_brief.ui })
   if (backplane.lean_brief?.delivery) fields.push({ delivery: backplane.lean_brief.delivery })
+  if (backplane.lean_brief?.intent_assessment) fields.push({ intent_assessment: backplane.lean_brief.intent_assessment, intent_sources: backplane.lean_brief.intent_sources })
+  if (backplane.lean_brief?.design_assets) fields.push({ design_assets: backplane.lean_brief.design_assets })
+  if (backplane.lean_brief?.design_theme) fields.push({ design_theme: backplane.lean_brief.design_theme })
   if (backplane.lean_brief?.distribution) fields.push({ distribution: backplane.lean_brief.distribution })
   return digest(fields)
 }
@@ -50,7 +54,8 @@ export function requirementVerificationContext(backplane: PrdBackplane): unknown
 /** Business/design scope, independent of confirmation timestamps and implementation status. */
 export function prdScopeFingerprint(backplane: PrdBackplane): string {
   return digest([backplane.project_id, backplane.positioning, requirementVerificationContext(backplane),
-    backplane.pages ?? [], backplane.personas ?? [], backplane.glossary ?? [], backplane.data_model ?? null, backplane.interface_spec ?? []])
+    backplane.pages ?? [], backplane.personas ?? [], backplane.glossary ?? [], backplane.data_model ?? null, backplane.interface_spec ?? [], ...(backplane.project_plan ? [backplane.project_plan] : []),
+    ...(!backplane.lean_brief?.intent_assessment && backplane.lean_brief?.intent_sources ? [{intent_sources:backplane.lean_brief.intent_sources}] : [])])
 }
 
 /** Revisions must not inherit acceptance text from a different meaning under the same id. */

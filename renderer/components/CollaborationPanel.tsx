@@ -1,4 +1,5 @@
 import React from 'react'
+import type { AgentLoadMessagesResult } from '../../shared/types'
 import { X } from './icons'
 import { useAtom, useAtomValue } from 'jotai'
 import {
@@ -32,7 +33,6 @@ export const CollaborationPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
     activeSessionId ? delegationsFamily(activeSessionId) : emptyDelegationsFallback,
   )
 
-  if (!expanded) return null
 
   return (
     <div
@@ -42,8 +42,8 @@ export const CollaborationPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
       style={{
         position: embedded ? 'relative' : 'fixed', top: 0, right: 0, bottom: 0, zIndex: embedded ? undefined : 900,
         width: embedded ? '100%' : 'min(420px, 92vw)', minHeight: 0, height: embedded ? '100%' : undefined,
-        display: 'flex', flexDirection: 'column',
-        background: 'var(--color-surface)',
+        display: expanded ? 'flex' : 'none', flexDirection: 'column',
+        background: embedded ? 'transparent' : 'var(--color-surface)',
         borderLeft: '1px solid var(--color-border)',
         boxShadow: embedded ? 'none' : 'var(--shadow-lg)',
         animation: 'tile-enter 0.2s ease both',
@@ -84,7 +84,7 @@ export const CollaborationPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 'var(--space-3)' }}>
         {delegations.length === 0 ? (
           <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', padding: 'var(--space-4) var(--space-2)', lineHeight: 1.6 }}>
-            还没有委派子会话。编程主 agent 调用 delegate_agent 并行协作时，这里会实时显示子会话状态。
+            还没有协作记录。任务需要多人协作时，这里会显示各项工作的进展与结果。
           </p>
         ) : (
           delegations.map((item) => <DelegationCard key={item.delegation_id} item={item} />)
@@ -96,6 +96,7 @@ export const CollaborationPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
 
 const DelegationCard: React.FC<{ item: DelegationView }> = ({ item }) => {
   const [expanded, setExpanded] = React.useState(false)
+  const [history, setHistory] = React.useState(false)
   const hasPending = Boolean(item.pending_question)
   return (
     <div
@@ -144,17 +145,58 @@ const DelegationCard: React.FC<{ item: DelegationView }> = ({ item }) => {
         {expanded ? '收起详情' : '查看详情'}
       </button>
 
-      {expanded && (
+      {expanded && !history && (
         <div data-ai-id="collaboration-card-detail" style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', lineHeight: 1.6 }}>
           <span>委派 id：{item.delegation_id}</span>
           <span>子会话 id：{item.child_session_id}</span>
           <span>目标：{item.goal || '—'}</span>
+          <button type="button" className="theatre-tool" onClick={() => setHistory(true)}>查看执行过程与结果</button>
           {item.pending_question && <span style={{ color: 'var(--color-warning)' }}>待回答问题：{item.pending_question}</span>}
           <span style={{ color: 'var(--color-text-muted)' }}>会话 id（短）：{shortId(item.child_session_id)}</span>
         </div>
       )}
+      {expanded && history && <SessionHistory sessionId={item.child_session_id} onBack={() => setHistory(false)} />}
     </div>
   )
+}
+
+const SessionHistory: React.FC<{ sessionId: string; onBack: () => void }> = ({ sessionId, onBack }) => {
+  const project = useAtomValue(currentProjectAtom)
+  const [result, setResult] = React.useState<AgentLoadMessagesResult | null>(null)
+  const [error, setError] = React.useState('')
+  const [revision, refresh] = React.useReducer(value => value + 1, 0)
+  React.useEffect(() => {
+    let cancelled = false
+    setResult(null); setError('')
+    const load = async () => {
+      try {
+        const api = window.electronAPI?.agent
+        if (!api?.loadMessages || !sessionId) throw new Error('当前无法读取此子会话，记录可能已归档或不存在。')
+        let response = await api.loadMessages({ request_id: crypto.randomUUID(), session_id: sessionId, limit: 200 })
+        if (!response.ok) throw new Error(response.error.user_visible_message || response.error.message)
+        if (response.data.truncated) response = await api.loadMessages({ request_id: crypto.randomUUID(), session_id: sessionId, limit: response.data.total })
+        if (!response.ok) throw new Error(response.error.user_visible_message || response.error.message)
+        if (response.data.session.project_id !== project?.project_id) throw new Error('此会话不属于当前项目，无法在这里查看。')
+        if (!cancelled) setResult(response.data)
+      } catch (cause) {
+        if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause))
+      }
+    }
+    void load()
+    return () => { cancelled = true }
+  }, [sessionId, project?.project_id, revision])
+  return <section className="collaboration-history" aria-label="子会话执行记录">
+    <button type="button" className="theatre-tool" onClick={onBack}>返回协作详情</button>
+    <button type="button" className="theatre-tool" onClick={refresh}>刷新记录</button>
+    {error ? <p role="alert">{error}</p> : !result ? <p role="status">正在读取记录…</p> : <>
+      <p>只读记录 · {result.messages.length} 条{result.truncated ? '（记录未完整返回）' : ''}</p>
+      {!result.messages.length && <p>此子会话暂无可读取的消息，可能尚未执行或已归档。</p>}
+      {result.messages.map((message, index) => <article key={message.id ?? index}>
+        <strong>{message.role === 'assistant' ? '执行回复' : message.role === 'user' ? '任务输入' : '系统记录'}</strong>
+        <pre>{message.content.map(block => block.type === 'text' ? block.text : block.type === 'image' ? '[图片记录]' : JSON.stringify(block, null, 2)).join('\n')}</pre>
+      </article>)}
+    </>}
+  </section>
 }
 
 export default CollaborationPanel

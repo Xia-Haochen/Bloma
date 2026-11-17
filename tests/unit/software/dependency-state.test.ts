@@ -51,3 +51,9 @@ it('explains a partial install rather than claiming all dependencies are missing
   const root = fixture(); electron(root)
   expect(() => electronEntry(root, ['electron', '.'])).toThrow('npm包已存在')
 })
+
+it('rejects an incompatible installed Electron before resolving its local alias',()=>{
+ const root=fixture(),exe=electron(root);mkdirSync(join(exe,'..'),{recursive:true});writeFileSync(exe,'fixture')
+ writeFileSync(join(root,'package.json'),JSON.stringify({devDependencies:{electron:'^39.0.0'}}))
+ expect(()=>electronEntry(root,['electron','.'])).toThrow('RUNTIME_PROJECT_ENGINE_MISMATCH')
+})

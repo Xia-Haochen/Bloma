@@ -8,7 +8,7 @@
  * 需求契约由本模块直接导出，旧sketch-engine转发入口已移除。
  */
 import type { ConstraintLevel, ProjectMode, TemplateType } from '../../shared/types'
-import { requirementCapabilities, type RequirementCapability } from './requirement-capabilities'
+import { requirementCapabilities, type AcceptanceScenario, type RequirementCapability } from './requirement-capabilities'
 
 /** 章节标识（章节 schema 的 id 集；schema 定义在 prd-sections.ts，类型真相源在此随背板维护）。 */
 export type PrdSectionId =
@@ -327,6 +327,7 @@ export const TEMPLATE_META_VERSION = 1
 export interface SketchRequirement {
   /** Host verification adapter selection, frozen with the confirmed feature. */
   capabilities?: RequirementCapability[]
+  acceptance_scenarios?: AcceptanceScenario[]
   source_refs?: import('../../shared/attachment-types').MaterialSourceRef[]
   id: string
   description: string
@@ -547,8 +548,9 @@ export interface GenerationGuardrails {
  * F-001 固定为"主题锚点"（用户最初想做什么），澄清/纠错/迭代只追加后续项、不覆盖主题。
  */
 export interface PrdBackplane {
+  project_plan?: { version: 1; stages: Array<{ id: string; title: string; feature_ids: string[] }>; current: string }
   /** Small production brief, with source provenance; no synthetic requirements graph. */
-  lean_brief?: { version: 1; ui: 'required' | 'none'; delivery?: 'desktop' | 'browser' | 'command'; distribution?: 'local' | 'portable' | 'installer' | 'source'; preview?: 'skip' | 'reuse'; reference_html_hash?: string; source_session_id: string; source_sha256: string }
+  lean_brief?: { work_items?: string[]; intent_assessment?: import('./personal-intent').IntentAssessment; intent_sources?: import('./requirements-model').RequirementSource[]; design_assets?: import('./design-assets').DesignAsset[]; design_theme?: import('../../shared/product-design-theme').ProductDesignTheme; version: 1; ui: 'required' | 'none'; delivery?: 'desktop' | 'browser' | 'command'; distribution?: 'local' | 'portable' | 'installer' | 'source'; preview?: 'skip' | 'reuse'; reference_html_hash?: string; source_session_id: string; source_sha256: string }
   /** Structured business requirements; old projects without this field remain readable. */
   requirements_model?: import('./requirements-model').RequirementsModel
   project_id: string

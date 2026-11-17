@@ -1,0 +1,30 @@
+{
+  "date": "2026-11-01",
+  "scope": "reference artifacts only; no renderer implementation",
+  "files": [
+    {
+      "file": "approved-preview.html",
+      "source": "C:\\Users\\17359\\.codex\\visualizations\\2026\\11\\01\\01a195e0-3e48-78f3-a1f7-ed3239b40156\\bloma-matte-overlays.html",
+      "bytes": 838856,
+      "sha256": "f7258fd0a0c50083a445dcb3288625b3b27848c7b1a921c14e70c1a940c27fbc",
+      "kind": "approved inline prototype fragment",
+      "normalized_lf_sha256": "e560fe6b7afcc77263d77756633c55e04bb8de86858ae50995c4d5c08d3f8edd"
+    },
+    {
+      "file": "live-workspace.jpg",
+      "source": "C:\\Users\\17359\\.codex\\visualizations\\2026\\11\\01\\01a195e0-3e48-78f3-a1f7-ed3239b40156\\bloma-live-project.png",
+      "bytes": 135062,
+      "sha256": "835288006cae622dc508f9dd73f3cc35708e665e4350ff41ee3264d36576ad84",
+      "kind": "live Bloma screenshot from this conversation"
+    },
+    {
+      "file": "react-bits-LICENSE.md",
+      "source": "C:\\Users\\17359\\.codex\\visualizations\\2026\\11\\01\\01a195e0-3e48-78f3-a1f7-ed3239b40156\\react-bits-LICENSE.md",
+      "bytes": 2060,
+      "sha256": "4bdd1fa59a6b7d5954bc3b213dbc34e455c635a94bbcecf9293553797d0fad02",
+      "kind": "license for bundled reference component",
+      "normalized_lf_sha256": "4bdd1fa59a6b7d5954bc3b213dbc34e455c635a94bbcecf9293553797d0fad02"
+    }
+  ],
+  "hash_note": "sha256 describes captured bytes; normalized_lf_sha256 permits text verification across checkout line endings."
+}

@@ -13,6 +13,6 @@ describe('tool history feedback presentation', () => {
   })
   it('budget error preserves its actual category in replay', () => {
     render(<ToolBlocksReplay blocks={[{ type: 'tool_result', tool_use_id: 'x', is_error: true, content: formatToolFeedback({ schema_version: 1, execution: 'not_run', verification: 'unverified', category: 'budget' }, 'stop') }]} />)
-    expect(screen.getByText('额度已用尽')).toBeTruthy()
+    expect(screen.getByText('额度保护未放行')).toBeTruthy()
   })
 })

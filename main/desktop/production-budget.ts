@@ -3,6 +3,9 @@ import { join } from 'node:path'
 import { getPromaHome } from '../../storage/config-paths'
 import { readJsonFile, writeJsonFile } from '../../storage/json-store'
 import type { SDKQuery, SDKQueryOptions } from '../orchestration/stages/orchestration-contracts'
+import { MonetaryBudgetError } from '../platform/llm/monetary-budget'
+import {ModelRequestRefusal} from '../platform/llm/model-request-refusal'
+import { HTTPError } from '../platform/upstream/providers/sse-reader'
 
 interface BudgetState {
   version: 1
@@ -18,11 +21,25 @@ interface BudgetState {
   runtimeUncertainMs?: number
 }
 const liveRuntimeLeases = new Map<string, string>()
+const liveOutputReservations = new Map<string, Set<string>>()
+const outputWaiters = new Map<string, Set<() => void>>()
+function notifyOutput(key: string) { for (const wake of [...(outputWaiters.get(key) ?? [])]) wake() }
+function waitForOutput(key: string, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const waits = outputWaiters.get(key) ?? new Set<() => void>(); outputWaiters.set(key, waits)
+    const cleanup = () => { waits.delete(wake); if (!waits.size) outputWaiters.delete(key); signal.removeEventListener('abort', abort) }
+    const wake = () => { cleanup(); resolve() }
+    const abort = () => { cleanup(); reject(signal.reason ?? new Error('AGENT_CANCELLED')) }
+    waits.add(wake); signal.addEventListener('abort', abort, { once: true }); if (signal.aborted) abort()
+  })
+}
 export const RUNTIME_HEARTBEAT_MS = 5000
 const RUNTIME_LEASE_MS = 15000
 export interface ProductionLimits { requests: number; output: number; perResponse: number; phaseRequests: number }
 const PHASE_REQUESTS: Record<string, number> = { 'desktop-arch': 64, 'desktop-scaffold': 32, 'desktop-implement': 160, 'desktop-verify': 64 }
-export const PRODUCTION_LIMITS = { requests: 256, output: 262144, perResponse: 16384 }
+// Global cumulative safety tier; per-response caps and monetary authorization
+// remain independent. Changing defaults never resets durable usage/reservations.
+export const PRODUCTION_LIMITS = { requests: 1024, output: 1048576, perResponse: 16384 }
 export function productionDeadlineMs(phase: string): number {
   return ({ 'desktop-arch': 8, 'desktop-scaffold': 5, 'desktop-implement': 30, 'desktop-verify': 15 }[phase] ?? 15) * 60_000
 }
@@ -55,12 +72,12 @@ export function createProductionBudget(projectId: string, scope: string, phase: 
   const persist = (value: BudgetState) => {
     try { writeJsonFile(file, value) } catch { throw new Error('HARNESS_BUDGET_UNWRITABLE: 预算不能落盘，未放行后续请求') }
   }
-  const reserve = (requested: number) => {
+  const reserve = (requested: number, minimum = 512) => {
     const state = load()
     if (runtimeMode === 'lease' && liveRuntimeLeases.has(key) && state.runtimeOwner !== liveRuntimeLeases.get(key)) throw Error('HARNESS_RUNTIME_LEASE_LOST')
     if (state.requests >= limits.requests || (state.phases[phase] ?? 0) >= limits.phaseRequests) throw new Error('HARNESS_REQUEST_BUDGET_EXHAUSTED')
     const tokens = Math.min(requested, limits.perResponse, limits.output - state.output)
-    if (tokens < 512) throw new Error('HARNESS_OUTPUT_BUDGET_EXHAUSTED')
+    if (tokens < minimum) throw new Error('HARNESS_OUTPUT_BUDGET_EXHAUSTED')
     state.requests++
     state.phases[phase] = (state.phases[phase] ?? 0) + 1
     state.output += tokens
@@ -69,10 +86,29 @@ export function createProductionBudget(projectId: string, scope: string, phase: 
   }
   const wrap = (query: SDKQuery): SDKQuery => async function* (prompt, options) {
     options.signal.throwIfAborted()
-    let reservation = reserve(Math.max(512, options.maxTokens ?? limits.perResponse))
+    const reservationId = randomUUID()
+    let reservation: number
+    for (;;) {
+      options.signal.throwIfAborted()
+      try {
+        reservation = reserve(Math.max(512, options.maxTokens ?? limits.perResponse))
+        const live = liveOutputReservations.get(key) ?? new Set<string>(); live.add(reservationId); liveOutputReservations.set(key, live)
+        break
+      } catch (error) {
+        // A concurrent parent's maximum reservation is not spent output. Wait
+        // for its actual receipt instead of failing and re-creating a reviewer.
+        if (!(error instanceof Error) || error.message !== 'HARNESS_OUTPUT_BUDGET_EXHAUSTED' || !liveOutputReservations.get(key)?.size) throw error
+        await waitForOutput(key, options.signal)
+      }
+    }
     let physical = 0
     let usage: { output_tokens?: number } | undefined
-    let completed = false
+    let completed = false, settled = false, transportStarted = false
+    const settle = () => {
+      if (!settled && completed && !options.signal.aborted && Number.isSafeInteger(usage?.output_tokens) && usage!.output_tokens! >= 0) {
+        const state = load(); state.output += usage!.output_tokens! - reservation; persist(state); settled = true; notifyOutput(key)
+      }
+    }
     const requestGuard: SDKQueryOptions['requestGuard'] = request => {
       options.signal.throwIfAborted()
       options.requestGuard?.(request)
@@ -80,24 +116,38 @@ export function createProductionBudget(projectId: string, scope: string, phase: 
       const actual = body.max_tokens ?? body.max_output_tokens
       if (typeof actual === 'number' && actual > reservation) throw new Error('HARNESS_RESPONSE_LIMIT_EXCEEDED')
       if (physical++ > 0) {
-        const next = reserve(reservation)
-        if (next < reservation) throw new Error('HARNESS_OUTPUT_BUDGET_EXHAUSTED')
-        reservation = next
+        reservation = reserve(reservation, reservation)
+        transportStarted = false
+        usage = undefined
       }
     }
     try {
-      for await (const message of query(prompt, { ...options, maxTokens: reservation, requestGuard })) {
+      for await (const message of query(prompt, { ...options, maxTokens: reservation, requestGuard, onTransportAttempt: state => {
+        if (state === 'started') transportStarted = true
+        options.onTransportAttempt?.(state)
+      } })) {
         if (message.usage) usage = { ...usage, ...message.usage }
         if (message.type === 'result') completed = message.subtype === 'success'
+        settle()
         yield message
       }
+    } catch (error) {
+      // Release the current reservation only with proof that generation did
+      // not start. Earlier uncertain physical attempts keep their reservations.
+      const unsent = !transportStarted && (error instanceof ModelRequestRefusal || error instanceof MonetaryBudgetError
+        && ['MONETARY_BUDGET_EXHAUSTED','MONETARY_OPERATION_EXHAUSTED','MONETARY_RESERVATION_WAIT_TIMEOUT','REQUEST_BUDGET_EXHAUSTED'].includes(error.message))
+      const rejected = transportStarted && error instanceof HTTPError && error.generationRejected
+      if (!settled && !usage && (unsent || rejected)) {
+        const state = load(); state.output -= reservation; persist(state); settled = true; notifyOutput(key)
+      }
+      throw error
     } finally {
       // Unknown/cancelled requests keep their full reservation. Retried failed
       // transports also retain theirs; only the final complete usage releases it.
-      if (completed && !options.signal.aborted && Number.isSafeInteger(usage?.output_tokens) && usage!.output_tokens! >= 0) {
-        const state = load()
-        state.output += usage!.output_tokens! - reservation
-        persist(state)
+      try { settle() } finally {
+        const live = liveOutputReservations.get(key); live?.delete(reservationId)
+        if (!live?.size) liveOutputReservations.delete(key)
+        notifyOutput(key)
       }
     }
   }

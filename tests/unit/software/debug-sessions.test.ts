@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { runtimeInventory } from '../../../main/software/release-store'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:net'
@@ -8,7 +9,7 @@ import { debugWorkspace } from '../../../main/software/debug-workspace'
 import { buildSoftwareInspectTool } from '../../../main/software/inspect-tool'
 import { buildSoftwareImageTool } from '../../../main/software/image-tool'
 import { createSoftwareCollaborationPolicy } from '../../../main/software/collaboration-policy'
-import { closeDebugSessions, readDebugSession, retainedDebugVersion } from '../../../main/software/debug-sessions'
+import { closeDebugSessions, readDebugSession, retainedDebugVersion, activeDebugSessionId } from '../../../main/software/debug-sessions'
 import { softwareVerificationFingerprint } from '../../../main/desktop/verification-fingerprint'
 import { createToolState, type ToolContext } from '../../../main/agent/loop/agent-loop'
 import { startSoftwareProcess, stopSoftwareSession } from '../../../main/software/process-manager'
@@ -26,6 +27,20 @@ const html = `<!doctype html><meta charset="utf-8"><title>Debug fixture</title><
 const client=window.api||{count:()=>fetch('/count').then(r=>r.text()),inc:()=>fetch('/count',{method:'POST'}),version:()=>fetch('/version').then(r=>r.text())};async function refresh(){document.querySelector('#count').textContent=await client.count();document.querySelector('#version').textContent=await client.version()}document.querySelector('#inc').onclick=async()=>{await client.inc();await refresh()};document.querySelector('#crash').onclick=()=>{console.error('Authorization: Bearer PRIVATE_BEARER');console.log('api_key=PRIVATE_KEY token=PRIVATE_TOKEN');fetch('/fail?token=QUERY_SECRET').catch(()=>{});setTimeout(()=>{throw Error('real-renderer-bug')},0)};refresh()</script><input id="file" type="file"><pre id="file-text"></pre><script>document.querySelector('#file').onchange=async e=>document.querySelector('#file-text').textContent=await e.target.files[0].text()</script>`
 const serverSource = (version: string) => `const fs=require('fs'),path=require('path'),file=path.join(process.env.APP_DATA_DIR,'count');require('http').createServer((q,s)=>{if(q.url==='/count'){if(q.method==='POST')fs.writeFileSync(file,String(Number(fs.existsSync(file)?fs.readFileSync(file):0)+1));s.end(fs.existsSync(file)?fs.readFileSync(file):'0')}else if(q.url==='/version')s.end('${version}');else if(q.url.startsWith('/fail')){setTimeout(()=>{s.writeHead(500);s.end('deliberate error')},125)}else if(q.url.startsWith('/slow'))setTimeout(()=>s.end('slow actual response'),1100);else{s.setHeader('Content-Type','text/html');s.end(fs.readFileSync('index.html'))}}).listen(Number(process.argv[2]),'127.0.0.1')`
 const mainSource = (version: string) => `const{app,BrowserWindow,ipcMain}=require('electron'),fs=require('fs'),path=require('path'),file=path.join(process.env.APP_DATA_DIR,'count');ipcMain.handle('count',()=>fs.existsSync(file)?fs.readFileSync(file,'utf8'):'0');ipcMain.handle('inc',()=>fs.writeFileSync(file,String(Number(fs.existsSync(file)?fs.readFileSync(file):0)+1)));ipcMain.handle('version',()=>'${version}');app.whenReady().then(()=>{const window=new BrowserWindow({webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false}});window.webContents.setWindowOpenHandler(()=>({action:'allow',overrideBrowserWindowOptions:{webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false}}}));window.loadFile('index.html')});app.on('window-all-closed',()=>app.quit())`
+it('runs real diagnostic code outside the candidate without changing its identity or issuing acceptance', async()=>{
+  const root=project.root_path,p=await freePort()
+  writeFileSync(join(root,'index.html'),html);writeFileSync(join(root,'server.cjs'),serverSource('v1'))
+  writeFileSync(join(root,'LAUNCH.json'),JSON.stringify({schema_version:2,ui:'browser',command:['node','server.cjs',String(p)],url:`http://127.0.0.1:${p}`}))
+  const before=(await runtimeInventory(root)).digest,tool=buildSoftwareInspectTool(project.project_id,createSoftwareCollaborationPolicy(project.project_id,root,'s'))
+  const result=await tool.execute({script_source:'export default async({page,expect})=>{await page.locator("#inc").click();await expect(page.locator("#count")).toHaveText("1")} '},ctx())
+  expect(result.isError,result.output).not.toBe(true)
+  expect(result.output).toContain('browser-script');expect(result.output).toContain('"passed":true')
+  expect((await runtimeInventory(root)).digest).toBe(before)
+  const workspace=debugWorkspace(project.project_id,'s')
+  expect(readdirSync(workspace).some(n=>n.startsWith('diagnostic-')&&n.endsWith('.mjs'))).toBe(true)
+  const mixed=await tool.execute({script_source:'export default()=>{}',script:'outside.mjs'},ctx())
+  expect(mixed.isError).toBe(true);expect(mixed.output).toContain('BROWSER_SCRIPT_SOURCE_INVALID')
+},45000)
 it.skipIf(process.platform !== 'win32' || !existsSync(electron))('reports the real Electron backend port conflict and owned process exit instead of a generic page timeout', async () => {
   const root = project.root_path, occupied = createServer()
   await new Promise<void>(done => occupied.listen(0, '127.0.0.1', done))
@@ -199,3 +214,58 @@ it('isolates retained development data by operation and session, and rejects a r
   expect(readFileSync(join(target, 'marker'), 'utf8')).toBe('must stay')
   expect(readFileSync(join(first, 'data/count'), 'utf8')).toBe('kept old operation')
 })
+it.skipIf(process.platform !== 'win32' || !existsSync(electron)).each(['browser','electron'] as const)('exposes semantic observation/ref input on the real %s debug lifecycle without granting another session authority', async ui => {
+  const root = project.root_path, port = await freePort(), context = ctx()
+  writeFileSync(join(root, 'index.html'), html)
+  if (ui === 'electron') {
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'semantic-runtime', main: 'main.cjs' }))
+    writeFileSync(join(root, 'main.cjs'), mainSource('semantic-v1'))
+    writeFileSync(join(root, 'preload.cjs'), `const{contextBridge,ipcRenderer}=require('electron');contextBridge.exposeInMainWorld('api',{count:()=>ipcRenderer.invoke('count'),inc:()=>ipcRenderer.invoke('inc'),version:()=>ipcRenderer.invoke('version')})`)
+    writeFileSync(join(root, 'LAUNCH.json'), JSON.stringify({ schema_version: 2, ui, command: [electron, '.'], window_title: 'Debug fixture' }))
+  } else {
+    writeFileSync(join(root, 'server.cjs'), serverSource('semantic-v1'))
+    writeFileSync(join(root, 'LAUNCH.json'), JSON.stringify({ schema_version: 2, ui, command: ['node','server.cjs',String(port)], url: `http://127.0.0.1:${port}` }))
+  }
+  const tool = buildSoftwareInspectTool(project.project_id, createSoftwareCollaborationPolicy(project.project_id, root, 's'))
+  expect(JSON.parse((await tool.execute({ mode: 'capabilities' }, context)).output).capabilities.references).toContain('current observation')
+  const opened = await tool.execute({ steps: [{ id:'initial',kind:'expect',selector:'#count',equals:'0' },{ id:'ready',kind:'expect',selector:'#version',equals:'semantic-v1' }], observation: { role:'button',name:'Increment' } }, context)
+  expect(opened.isError,opened.output).not.toBe(true)
+  const initial = JSON.parse(opened.output), ref = initial.ui.nodes[0].ref, id = initial.debug_session_id
+  const foreign = await tool.execute({ mode:'act',debug_session_id:id,control:{ ref,kind:'click' } }, { ...context,sessionId:'foreign' })
+  expect(foreign.isError).toBe(true)
+  const acted = await tool.execute({ mode:'act',debug_session_id:id,control:{ ref,kind:'click' } }, context)
+  expect(acted.isError,acted.output).not.toBe(true)
+  expect(JSON.parse(acted.output).steps[0].actual).toMatchObject({execution:'completed',verification:'not_applicable'})
+  const observed = await tool.execute({ steps:[{ id:'after',kind:'expect',selector:'#count',equals:'1' }], observation:{ role:'button',name:'Increment' } }, context)
+  expect(observed.isError,observed.output).not.toBe(true)
+  const replay = await tool.execute({ control:{ref,kind:'click'} },context)
+  expect(replay.isError).toBe(true);expect(replay.output).toContain('UI_REF_STALE')
+  const mixed = await tool.execute({ control:{ref,kind:'click'},steps:[{ id:'wrong',kind:'click',selector:'#inc' }] },context)
+  expect(mixed.isError).toBe(true);expect(mixed.output).toContain('UI_CONTROL_MIXED_INPUT')
+  expect(readDebugSession(project.project_id,'s',id)).toMatchObject({stale:false,state:'ready'})
+}, 60000)
+it.skipIf(process.platform!=='win32'||!existsSync(electron))('routes real owned Electron UIA refs and native image through the existing inspect tool without PID authority or replay',async()=>{
+ const root=project.root_path
+ writeFileSync(join(root,'package.json'),JSON.stringify({name:'native-uia-electron',main:'main.cjs'}))
+ writeFileSync(join(root,'main.cjs'),`const{app,BrowserWindow,screen}=require('electron');app.commandLine.appendSwitch('force-renderer-accessibility');app.whenReady().then(()=>{const window=new BrowserWindow({show:false,width:420,height:260,webPreferences:{contextIsolation:true,nodeIntegration:false}});window.setPosition(Math.max(...screen.getAllDisplays().map(d=>d.bounds.x+d.bounds.width))+600,40);window.loadFile('index.html');window.once('ready-to-show',()=>window.showInactive())});app.on('window-all-closed',()=>app.quit())`)
+ writeFileSync(join(root,'index.html'),`<!doctype html><title>Owned UIA Electron fixture</title><button onclick="document.querySelector('#count').textContent=String(++window.count)">Native save</button><output id="count">0</output><script>window.count=0</script>`)
+ writeFileSync(join(root,'LAUNCH.json'),JSON.stringify({schema_version:2,ui:'electron',command:[electron,'.'],window_title:'Owned UIA Electron fixture'}))
+ const tool=buildSoftwareInspectTool(project.project_id,createSoftwareCollaborationPolicy(project.project_id,root,'s')),context=ctx()
+ const opened=await tool.execute({mode:'open',native:{query:{name:'Native save'}}},context)
+ expect(opened.isError,opened.output).not.toBe(true)
+ const snapshot=JSON.parse(opened.output),button=snapshot.native_ui.nodes.find((n:{name:string})=>n.name==='Native save')
+ expect(snapshot.native_ui.backend).toBe('Windows.UIAutomation');expect(button,snapshot.native_ui).toBeTruthy()
+ const viewer=buildSoftwareImageTool(project.project_id),image=await viewer.execute({debug_session_id:snapshot.debug_session_id,surface:'native'},context)
+ expect(image.isError,image.output).not.toBe(true);expect(image.images).toHaveLength(1);expect(JSON.parse(image.output).surface).toBe('native')
+ const click=await tool.execute({mode:'act',debug_session_id:snapshot.debug_session_id,native:{control:{ref:button.ref,kind:'invoke'}}},context)
+ expect(click.isError,click.output).not.toBe(true);expect(JSON.parse(click.output).native_ui.method).toBe('UIA.InvokePattern')
+ const actual=await tool.execute({debug_session_id:snapshot.debug_session_id,steps:[{id:'real-native-result',kind:'expect',selector:'#count',equals:'1'}]},context)
+ expect(actual.isError,actual.output).not.toBe(true)
+ const old=await tool.execute({native:{control:{ref:button.ref,kind:'invoke'}}},context);expect(old.isError).toBe(true);expect(old.output).toContain('NATIVE_REFERENCE_STALE')
+ const mixed=await tool.execute({native:{},script_source:'export default()=>{}'},context);expect(mixed.output).toContain('NATIVE_MIXED_INPUT')
+ const foreign=await tool.execute({native:{root_pid:process.pid}},context);expect(foreign.output).toContain('NATIVE_REQUEST_INVALID')
+ const other=await tool.execute({debug_session_id:snapshot.debug_session_id,native:{}},{...context,sessionId:'other'});expect(other.isError).toBe(true)
+ await tool.execute({mode:'close',debug_session_id:snapshot.debug_session_id},context)
+ const closed=await tool.execute({mode:'act',debug_session_id:snapshot.debug_session_id,native:{control:{ref:button.ref,kind:'invoke'}}},context)
+ expect(closed.output).toContain('DEBUG_SESSION_NOT_READY');expect(activeDebugSessionId(project.project_id,'s')).toBeUndefined()
+},60000)

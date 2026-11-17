@@ -1,3 +1,4 @@
+import { serializeRedactedJson } from '../../shared/redacted-json'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -9,6 +10,9 @@ import type { AgentLoopTool } from '../agent/loop/agent-loop'
 import { importedProjectContext, importedProjectChanges } from './import-project'
 import { redactSoftwareOutput } from './process-manager'
 import {changeImpact} from './change-impact'
+import { codeServiceCapabilities, type CodeServiceRequest } from './code-service'
+import { executeCodeService } from './code-service-executor'
+import { pythonCodeServiceCapabilities } from './python-code-service'
 
 const ignored = new Set(['.git', 'node_modules', '.venv', 'venv', '__pycache__', '.cache', 'dist', 'build', '00_HISTORY', '00_VERIFY'])
 const sourceFile = /\.(?:[cm]?[jt]sx?|py|rs|go|java|cs|cpp|c|h|html|css|json|toml|md|yaml|yml|lock|mod|txt)$|^\.python-version$/i
@@ -51,19 +55,28 @@ export function repositoryFileFacts(projectId: string, root: string, requested: 
   writeTextFileAtomic(cache, JSON.stringify(facts)); return { ...facts, reused: false }
 }
 export function buildRepositoryContextTool(projectId: string): AgentLoopTool {
-  return { name: 'inspect_repository', parallelSafe: true, description: '已有工程按需定位：overview看脚本/锁文件/测试；changes比较导入字节；impact(paths)沿静态相对导入定位受影响模块与开发期测试候选，不执行、不跳过正式验收；file/search继续定位。候选不是通过证据。',
-    input_schema: { type: 'object', required: ['mode'], additionalProperties: false, properties: { mode: { type: 'string', enum: ['overview', 'file', 'search', 'changes','impact'] }, path: { type: 'string' }, query: { type: 'string', minLength: 1, maxLength: 120 },paths:{type:'array',minItems:1,maxItems:32,items:{type:'string'}} } },
+  return { name: 'inspect_repository', parallelSafe: true, description: '已有工程按需定位：overview看脚本/锁文件/测试；changes比较导入字节；impact(paths)沿静态相对导入定位受影响模块与开发期测试候选，不执行、不跳过正式验收；file/search继续定位。definition/references/diagnostics/symbol使用真实TS/JS LanguageService或宿主配置的Python Jedi静态stdio桥（非LSP，Python diagnostics仅语法、引用写入属性未知），1-based UTF-16 line/column，symbol为指定文件声明；capabilities报告真实边界。每次内容/config hash绑定，expected_file_version及expected_index_version接语义结果的sha256:版本；缺依赖/后端明确报出，不以词法模拟。候选不是通过证据。',
+    input_schema: { type: 'object', required: ['mode'], additionalProperties: false, properties: { mode: { type: 'string', enum: ['overview', 'file', 'search', 'changes','impact','capabilities','definition','references','diagnostics','symbol'] }, path: { type: 'string', maxLength: 2048 }, line: { type: 'integer', minimum: 1 }, column: { type: 'integer', minimum: 1 }, limit: { type: 'integer', minimum: 1, maximum: 200 }, include_declaration: { type: 'boolean' }, expected_file_version: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' }, expected_index_version: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' }, query: { type: 'string', minLength: 1, maxLength: 120 },paths:{type:'array',minItems:1,maxItems:32,items:{type:'string'}} } },
     execute: async (input, ctx) => {
       try {
         if (ctx.projectId !== projectId) throw Error('REPOSITORY_PROJECT_MISMATCH')
         const root = resolveProjectRoot(projectId, () => findProject(projectId).root_path)
-        if (input.mode === 'changes') return { output: redactSoftwareOutput(JSON.stringify(await importedProjectChanges(projectId, root, ctx.signal))) }
+        if (input.mode === 'capabilities') return { output: serializeRedactedJson({ ...codeServiceCapabilities(), python: await pythonCodeServiceCapabilities(ctx.signal), execution: { max_parallel_queries: 2, host_deadline_ms: 15000, typescript: { isolated_worker: true, max_heap_mb: 512 }, python: { owned_child_process: true, hard_heap_limit: false }, evidence: 'read-only semantics, not verification' } }, redactSoftwareOutput) }
+        if (['definition','references','diagnostics','symbol'].includes(String(input.mode))) {
+          if (typeof input.path !== 'string' || !input.path) throw Error('REPOSITORY_FILE_REQUIRED')
+          const result = await executeCodeService(root, { kind: input.mode as CodeServiceRequest['kind'], path: input.path,
+            line: input.line as number | undefined, column: input.column as number | undefined, limit: input.limit as number | undefined,
+            query: input.query as string | undefined, includeDeclaration: input.include_declaration as boolean | undefined,
+            expectedFileVersion: input.expected_file_version as string | undefined, expectedIndexVersion: input.expected_index_version as string | undefined }, { signal: ctx.signal })
+          return { output: serializeRedactedJson(result, redactSoftwareOutput), isError: !result.ok }
+        }
+        if (input.mode === 'changes') return { output: serializeRedactedJson(await importedProjectChanges(projectId, root, ctx.signal),redactSoftwareOutput) }
         if (input.mode === 'file') {
           if (typeof input.path !== 'string' || !input.path) throw Error('REPOSITORY_FILE_REQUIRED')
-          return { output: redactSoftwareOutput(JSON.stringify(repositoryFileFacts(projectId, root, input.path))) }
+          return { output: serializeRedactedJson(repositoryFileFacts(projectId, root, input.path),redactSoftwareOutput) }
         }
         let files = repositoryFiles(root)
-        if(input.mode==='impact')return{output:redactSoftwareOutput(JSON.stringify(changeImpact(root,files,input.paths as string[],ctx.signal)))}
+        if(input.mode==='impact')return{output:serializeRedactedJson(changeImpact(root,files,input.paths as string[],ctx.signal),redactSoftwareOutput)}
         if (input.mode === 'search' && typeof input.path === 'string' && input.path) {
           const directory = realpathSync(resolve(root, input.path)), rel = relative(realpathSync(root), directory)
           if (isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) throw Error('REPOSITORY_SEARCH_OUTSIDE_PROJECT')
@@ -81,8 +94,8 @@ export function buildRepositoryContextTool(projectId: string): AgentLoopTool {
             manifests: files.filter(file => /(?:^|\/)(?:package.json|package-lock.json|pnpm-lock.yaml|yarn.lock|pyproject.toml|uv.lock|requirements.txt|Cargo.toml|go.mod)$/.test(file)).slice(0, 60),
             tests: files.filter(file => /(^|\/)(tests?|__tests__)\/|[.](test|spec)[.]/.test(file)).slice(0, 30),
             imported: importedProjectContext(projectId), note: '先复用现有脚本和入口；清单仅定位，不执行测试或证明依赖可用。' }
-          const output = JSON.stringify(overview)
-          return { output: redactSoftwareOutput(output.length <= 14000 ? output : JSON.stringify({ files: files.length, scripts, overview_truncated: true, note: '清单过大，按目录用find/grep或inspect_repository file/search继续定位；未将截断JSON当作完整索引。' })) }
+          const output = serializeRedactedJson(overview,redactSoftwareOutput)
+          return { output: output.length <= 14000 ? output : serializeRedactedJson({ files: files.length, scripts, overview_truncated: true, note: '清单过大，按目录用find/grep或inspect_repository file/search继续定位；未将截断JSON当作完整索引。' },redactSoftwareOutput) }
         }
         if (input.mode !== 'search' || typeof input.query !== 'string' || !input.query.trim() || input.query.length > 120) throw Error('REPOSITORY_SEARCH_QUERY_REQUIRED')
         const query = input.query.toLowerCase(), hits: Array<{ path: string; line: number; text: string }> = []; let skipped = 0, scanned = 0

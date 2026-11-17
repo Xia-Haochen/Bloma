@@ -70,6 +70,21 @@ describe('parseSketchHtml（解析契约）', () => {
 })
 
 describe('generateUxSketch', () => {
+  it('lets software generation outlive the old stage timer but still obeys caller cancellation',async()=>{
+    const actual=await vi.importActual<typeof import('../../../main/kernel/llm-call')>('../../../main/kernel/llm-call')
+    mockCall.mockImplementation(actual.callLlmForJson)
+    vi.useFakeTimers()
+    const caller=new AbortController();let observed:AbortSignal|undefined
+    try{
+      const task=generateUxSketch({...baseInput,signal:caller.signal,backplane:{positioning:'器材站',requirements:baseInput.requirements,acceptance:{},constraints:[],out_of_scope:[],assumptions:[],lean_brief:{version:1,ui:'required',delivery:'desktop',distribution:'local'}} as never,
+        query:async function*(_prompt,options){observed=options.signal;await new Promise<void>((_resolve,reject)=>options.signal.addEventListener('abort',()=>reject(Error('cancelled')),{once:true}));yield{type:'result',subtype:'success'}}}).catch(error=>error)
+      await vi.advanceTimersByTimeAsync(240001)
+      expect(observed).toBeDefined();expect(observed!.aborted).toBe(false)
+      caller.abort();await task;expect(observed!.aborted).toBe(true)
+      expect(mockCall.mock.calls[0][0].timeoutMs).toBe(0)
+    }finally{vi.useRealTimers()}
+  })
+
   it('regenerates a truncated lean sketch compactly without replaying partial HTML', async () => {
     mockCall.mockImplementation(async options => {
       expect(options.retryWithFreshContext).toBe(true)

@@ -1,3 +1,4 @@
+import { electronConstraint, importElectronRuntime } from './electron-runtime'
 import { createRequire } from 'node:module'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -54,6 +55,7 @@ function findExecutable(directory: string, filename: string, depth = 4): string 
   }
 }
 export function projectRuntimeRequest(root: string, kind: RuntimeKind): string | undefined {
+  if (kind === 'electron') return electronConstraint(root)
   if (kind === 'node') {
     const file = join(root, 'package.json'); if (!existsSync(file)) return
     const value = JSON.parse(readFileSync(file, 'utf8')) as { engines?: { node?: unknown } }
@@ -133,9 +135,9 @@ async function pythonRuntime(request: string, signal?: AbortSignal): Promise<Man
 }
 const preparing = new Map<string, Promise<ManagedRuntime>>()
 export async function prepareSoftwareRuntime(projectId: string, root: string, kind: RuntimeKind, requested?: string, signal?: AbortSignal) {
-  if (!['node', 'python'].includes(kind) || process.platform !== 'win32' || process.arch !== 'x64') throw Error('MANAGED_RUNTIME_PLATFORM_UNSUPPORTED: 首期支持Windows x64；其它环境仍可使用已有真实运行时')
-  const constraint = projectRuntimeRequest(root, kind), request = requested ?? constraint ?? (kind === 'node' ? '>=22' : '3.13')
-  if (kind === 'node' && !semver.validRange(request)) throw Error('NODE_VERSION_REQUEST_INVALID')
+  if (!['node', 'python', 'electron'].includes(kind) || process.platform !== 'win32' || process.arch !== 'x64') throw Error('MANAGED_RUNTIME_PLATFORM_UNSUPPORTED: 首期支持Windows x64；其它环境仍可使用已有真实运行时')
+  const constraint = projectRuntimeRequest(root, kind), request = requested ?? constraint ?? (kind === 'node' ? '>=22' : kind === 'electron' ? '*' : '3.13')
+  if (kind !== 'python' && !semver.validRange(request)) throw Error('NODE_VERSION_REQUEST_INVALID')
   let existing: ManagedRuntime | undefined
   try { existing = managedRuntime(projectId, kind) } catch { /* explicit prepare may repair a corrupted private binding */ }
   if (existing && satisfies(existing.version, request, kind) && (!constraint || satisfies(existing.version, constraint, kind))) return { ...existing, reused: true }
@@ -152,11 +154,12 @@ export async function prepareSoftwareRuntime(projectId: string, root: string, ki
   }
   const key = `${kind}:${request}`
   if (preparing.has(key)) throw Error('RUNTIME_PREPARATION_BUSY: 同一运行时正在准备，请稍后复用')
-  const work = kind === 'node' ? nodeRuntime(request, signal) : pythonRuntime(request, signal)
+  const work = kind === 'electron' ? importElectronRuntime(root, request, signal) : kind === 'node' ? nodeRuntime(request, signal) : pythonRuntime(request, signal)
   preparing.set(key, work)
   try {
     const runtime = await work
     if (constraint && !satisfies(runtime.version, constraint, kind)) throw Error(`RUNTIME_PROJECT_ENGINE_MISMATCH: ${runtime.version} / ${constraint}`)
+    writeTextFileAtomic(catalog(kind, runtime.version), JSON.stringify(runtime))
     bindManagedRuntime(projectId, runtime); return { ...runtime, reused: false }
   } finally { preparing.delete(key) }
 }

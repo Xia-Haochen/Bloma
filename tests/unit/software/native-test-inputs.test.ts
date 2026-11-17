@@ -40,7 +40,7 @@ it('captures explicitly declared dynamic assets and rejects escaping or linked h
   symlinkSync(outside, join(root, 'alias'), process.platform === 'win32' ? 'junction' : 'dir')
   expect(() => nativeTestInputs(root, 'tests/acceptance.mjs')).toThrow('GUI_NATIVE_LINK_UNSUPPORTED')
 })
-it.each(['commonjs', 'module'])('really imports the frozen project layout and third-party %s helper through a host-owned runtime link', mode => {
+it.each(['commonjs', 'module'])('really imports the frozen project layout and third-party %s helper through a host-owned runtime link', async mode => {
   mkdirSync(join(root, 'tools')); mkdirSync(join(root, 'node_modules/local-test-helper'), { recursive: true })
   const extension = mode === 'module' ? 'mjs' : 'cjs'
   writeFileSync(join(root, 'node_modules/local-test-helper/package.json'), JSON.stringify({ name: 'local-test-helper', ...(mode === 'module' ? { exports: { import: './index.mjs' } } : { main: 'index.cjs' }) }))
@@ -48,7 +48,7 @@ it.each(['commonjs', 'module'])('really imports the frozen project layout and th
   writeFileSync(join(root, `tools/helper.${extension}`), mode === 'module' ? `export {default} from 'local-test-helper'` : `module.exports=require('local-test-helper')`)
   writeFileSync(join(root, 'tests/acceptance.mjs'), `import helper from '../tools/helper.${extension}';if(helper.input!=='Alice')throw Error('bad helper');\n` + script)
   const native = freezeNativeGuiTests('p', root, 'tests/acceptance.mjs', ['F-001']), workspace = join(home, 'software-debug-data/p/owned'); mkdirSync(workspace, { recursive: true })
-  const runtime = prepareNativeTestRuntime('p', native, root, workspace)
+  const runtime = await prepareNativeTestRuntime('p', native, root, workspace)
   try {
     expect(execFileSync(process.execPath, ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(runtime.file).href)});console.log('imported')`], { encoding: 'utf8', windowsHide: true }).trim()).toBe('imported')
     runtime.verify(); writeFileSync(runtime.file, 'modified input'); expect(() => runtime.verify()).toThrow('GUI_NATIVE_INPUT_CHANGED')

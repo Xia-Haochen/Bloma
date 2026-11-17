@@ -1,3 +1,4 @@
+import { workspaceThemeVariables } from '../../shared/product-design-theme'
 /** web 线拆除刀3：点选纠错通道退役，类型本地最小化（UI 降级红点模式） */
 type DomCollectContextResult = { fallback_mode: boolean; element_selector?: string; text_content?: string; bounding_rect?: { x: number; y: number; width: number; height: number } }
 import React from 'react'
@@ -15,7 +16,8 @@ import { DeliveryPanel } from './DeliveryPanel'
 import type { AgentMessage } from './atoms'
 import { PreviewPanel } from './PreviewPanel'
 import { TimelinePanel } from './TimelinePanel'
-import { MvpStatusBanner } from './MvpStatusBanner'
+import { ActionGuidance } from './ActionGuidance'
+import { useSoftwareStatus } from '../hooks/use-software-status'
 import { DocumentPanel } from './DocumentPanel'
 import { CollaborationPanel } from './CollaborationPanel'
 import { HistoryAttachments } from './HistoryAttachments'
@@ -115,38 +117,69 @@ export const WorkspaceShell: React.FC<WorkspaceShellProps> = (props) => {
     : workspaceScene(project, stage, phase ?? project?.desktop_phase ?? null, Boolean(props.previewUrl && props.onConfirmSketch && !props.deliveryPanel), busy)
   const stream = useAtomValue(agentStreamStateFamily(activeSession ?? '__workspace-empty__'))
   const last = stream.events[stream.events.length - 1]
+  const statusSignal = [...stream.events].reverse().find(event => ['stage_changed', 'completed', 'error', 'delegation_started', 'delegation_completed', 'delegation_failed', 'tool_call_completed', 'user_decision_required'].includes(event.type))?.event_id ?? ''
+  const status = useSoftwareStatus(project?.project_id, project?.lean_operation_id, statusSignal, busy)
+  const [acceptanceRequest, setAcceptanceRequest] = React.useState(0)
+  React.useEffect(() => setAcceptanceRequest(0), [project?.project_id, project?.lean_operation_id])
+  const showDelivery = props.deliveryPanel || acceptanceRequest > 0
+  const [actionResult, setActionResult] = React.useState('')
+  React.useEffect(() => setActionResult(''), [project?.project_id])
+
   const decision = scopePending || requirementDialog || prdDialog || clarificationDialog ? 'requirements' : canConfirmSketch ? 'design' : undefined
   const progress = deriveWorkspaceProgress({ project, stage, phase: phase ?? project?.desktop_phase ?? null, busy, decision, hasSketch: Boolean(props.previewUrl), error: last?.type === 'error' ? stream.last_error : undefined })
   const live = pickLiveLine(buildProgressLines(stream.events, []))
   const liveDetail = busy && live ? `${live.label}${live.detail ? ` · ${live.detail}` : ''}` : undefined
+  const toolTrigger = React.useRef<HTMLElement | null>(null)
   const openTool = (name: 'documents' | 'collaboration' | 'versions' | 'materials' | 'records') => {
+    if (document.activeElement instanceof HTMLElement && document.activeElement.closest('.workspace-project-tools, .studio-footer, .action-guidance')) toolTrigger.current = document.activeElement
+    previewTarget.current?.querySelectorAll<HTMLDetailsElement>('details.workspace-delivery-inspector[open]').forEach(details => { details.open = false })
     setDocuments(name === 'documents' ? !documents : false)
     setCollaboration(name === 'collaboration' ? !collaboration : false)
     setLocalPanel(name === 'versions' || name === 'materials' || name === 'records' ? localPanel === name ? null : name : null)
     if (name === 'versions') setTimelineExpanded(true)
   }
+  const panelOpen = documents || collaboration || Boolean(localPanel)
+  const wasPanelOpen = React.useRef(false)
+  React.useEffect(() => {
+    if (panelOpen && !wasPanelOpen.current && !toolTrigger.current?.isConnected) toolTrigger.current = document.activeElement as HTMLElement
+    if (!panelOpen && wasPanelOpen.current) toolTrigger.current?.focus()
+    wasPanelOpen.current = panelOpen
+  }, [panelOpen])
+  React.useEffect(() => {
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented || document.querySelector('[aria-modal="true"], .workspace-progress-popover')) return
+      if (panelOpen) {
+        event.preventDefault(); event.stopImmediatePropagation()
+        setDocuments(false); setCollaboration(false); setLocalPanel(null)
+      } else if (focused) {
+        event.preventDefault(); event.stopImmediatePropagation(); setFocused(false)
+        previewTarget.current?.querySelector<HTMLButtonElement>('.studio-control')?.focus()
+      }
+    }
+    document.addEventListener('keydown', escape)
+    return () => document.removeEventListener('keydown', escape)
+  }, [panelOpen, focused, setDocuments, setCollaboration])
   return (
-    <div className="workspace-theatre" data-ai-id="workspace-theatre" data-mode={project?.mode ?? 'quick'} data-focused={focused} data-has-preview={Boolean(props.deliveryPanel || props.previewUrl || scopePending)} data-view={mobileView} data-resizing-conversation={conversation.resizing} style={{ '--studio-conversation-width': `${conversation.width}px` } as React.CSSProperties}>
+    <div className="workspace-theatre" data-ai-id="workspace-theatre" data-mode={project?.mode ?? 'quick'} data-focused={focused} data-has-preview={Boolean(showDelivery || props.previewUrl || scopePending)} data-view={mobileView} data-resizing-conversation={conversation.resizing} style={{ ...workspaceThemeVariables(), '--studio-conversation-width': `${conversation.width}px` } as React.CSSProperties}>
       <div className="workspace-topbar">
         <WorkspaceHeader compact onAllProjects={props.onAllProjects} onOpenSettings={props.onOpenSettings} onUpgrade={props.onUpgrade} onHome={props.onHome} />
-        {project?.workflow_retirement&&<div role="status" style={{padding:'8px 16px',fontSize:'var(--font-size-sm)'}}>{project.workflow_retirement}</div>}
         <WorkspaceProgress steps={progress} liveDetail={liveDetail} onRecords={() => openTool('records')} />
         <nav className="workspace-project-tools" aria-label="项目资料">
-          <button type="button" className="theatre-tool" data-ai-id="docs-button" aria-label="文档" aria-pressed={documents} onClick={() => openTool('documents')}><FileText size={15} /></button>
-          <button type="button" className="theatre-tool" data-ai-id="materials-button" aria-label="材料" aria-pressed={localPanel === 'materials'} onClick={() => openTool('materials')}><Layers size={15} /></button>
-          <button type="button" className="theatre-tool" data-ai-id="versions-button" aria-label="版本" aria-pressed={localPanel === 'versions'} onClick={() => openTool('versions')}><History size={15} /></button>
-          <button type="button" className="theatre-tool" data-ai-id="collaboration-button" aria-label="协作" aria-pressed={collaboration} onClick={() => openTool('collaboration')}><Users size={15} /></button>
+          <button type="button" className="theatre-tool" data-ai-id="docs-button" aria-label="文档" title="文档" aria-pressed={documents} onClick={() => openTool('documents')}><FileText size={15} /><span>文档</span></button>
+          <button type="button" className="theatre-tool" data-ai-id="materials-button" aria-label="材料" title="材料" aria-pressed={localPanel === 'materials'} onClick={() => openTool('materials')}><Layers size={15} /><span>材料</span></button>
+          <button type="button" className="theatre-tool" data-ai-id="versions-button" aria-label="版本" title="版本" aria-pressed={localPanel === 'versions'} onClick={() => openTool('versions')}><History size={15} /><span>版本</span></button>
+          <button type="button" className="theatre-tool" data-ai-id="collaboration-button" aria-label="协作" title="协作" aria-pressed={collaboration} onClick={() => openTool('collaboration')}><Users size={15} /><span>协作</span></button>
         </nav>
       </div>
       <div className="studio-body" ref={conversation.containerRef}>
       <nav className="studio-view-switch" aria-label="工作区视图"><button type="button" aria-pressed={mobileView === 'conversation'} onClick={() => setMobileView('conversation')}>对话</button><button type="button" aria-pressed={mobileView === 'preview'} onClick={() => setMobileView('preview')}>草图与程序</button></nav>
       <main className="theatre-stage" ref={previewTarget}>
-        <div className="theatre-stage-heading"><div key={scene.title} className="studio-scene-heading"><p className="theatre-eyebrow">从想法到软件</p><h2>{scene.title}</h2></div><div className="studio-heading-actions"><span className="studio-scene-description">{scene.description}</span><button type="button" className="theatre-tool studio-control" title={focused ? '退出专注预览' : '专注预览'} aria-label={focused ? '退出专注预览' : '专注预览'} aria-pressed={focused} onClick={() => setFocused(value => !value)}>{focused ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button></div></div>
+        <div className="theatre-stage-heading" data-delivery={Boolean(props.deliveryPanel)}><div key={scene.title} className="studio-scene-heading" title={scene.description}><p className="theatre-eyebrow">从想法到软件</p><h2>{scopePending ? scene.title : project?.name ?? scene.title}</h2></div><div className="studio-heading-actions"><span className="studio-scene-description">{scene.description}</span><button type="button" className="theatre-tool studio-control" title={focused ? '退出专注预览' : '专注预览'} aria-label={focused ? '退出专注预览' : '专注预览'} aria-pressed={focused} onClick={() => setFocused(value => !value)}>{focused ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button></div></div>
         <div className="theatre-main" data-panel-open={documents || collaboration || Boolean(localPanel)}>
           <section className="theatre-product" aria-label="软件与当前结果">
         {scopePending ? <ScopeConfirmationPanel scope={props.decisionScope} summary={props.decisionBody} options={props.cardOptions!} onSelect={props.onCardOptionSelect!} busy={busy} />
-          : stage === 'generating_sketch' && busy && !props.previewUrl ? <div className="scope-preparing" role="status"><h3>正在准备界面草图</h3><p>需求已确认。草图会在这里展示，等你确认后才开始制作。</p></div> : props.deliveryPanel
-          ? <DeliveryPanel embedded />
+          : stage === 'generating_sketch' && busy && !props.previewUrl ? <div className="scope-preparing" role="status"><h3>正在准备界面草图</h3><p>需求已确认。草图会在这里展示，等你确认后才开始制作。</p></div> : showDelivery
+          ? <DeliveryPanel embedded acceptanceRequest={acceptanceRequest} onAcceptanceChanged={status.refresh} />
           : <PreviewPanel embedded
           status={props.previewStatus}
           previewUrl={props.previewUrl}
@@ -163,7 +196,7 @@ export const WorkspaceShell: React.FC<WorkspaceShellProps> = (props) => {
           onMarkComplete={props.onMarkComplete}
           />}
           </section>
-          {(documents || collaboration || localPanel) && <aside className="theatre-sidepanel" aria-label="项目资料面板">
+          {<aside hidden={!panelOpen} className="theatre-sidepanel" aria-label="项目资料面板">
             <DocumentPanel embedded />
             <CollaborationPanel embedded />
             {localPanel && <><div className="theatre-panel-heading"><h3>{localPanel === 'versions' ? '版本与回看' : localPanel === 'records' ? '工作记录' : '参考材料'}</h3><button type="button" className="theatre-tool" aria-label="关闭项目工具" onClick={() => setLocalPanel(null)}><X /></button></div>{localPanel === 'versions' ? <TimelinePanel onRollback={props.onRollback} /> : localPanel === 'records' ? <><DesktopStageBar /><WorkRecords />{artifacts.projectId === project?.project_id && <DesktopArtifactStrip />}</> : <HistoryAttachments onClose={() => setLocalPanel(null)} />}</>}
@@ -174,8 +207,32 @@ export const WorkspaceShell: React.FC<WorkspaceShellProps> = (props) => {
       <section className="theatre-conversation" aria-label="向导与下一步">
 
         <ChatPanel presentation="theatre"
-          actionSlot={<footer className="studio-footer"><button type="button" className="theatre-tool" aria-pressed={localPanel === 'records'} onClick={() => openTool('records')}><Activity />工作记录</button><div className="studio-status-slot"><MvpStatusBanner suppressBlocked /></div>{canConfirmSketch && <button type="button" data-ai-id="confirm-sketch-button" className="studio-primary" disabled={props.confirming} onClick={props.onConfirmSketch}>{props.confirming ? '正在开始制作…' : '开始制作'}<Play size={13} /></button>}{project?.desktop_blocked && <button type="button" className="studio-primary" disabled={busy} onClick={() => props.onSendMessage?.('继续')}>继续制作</button>}</footer>}
-          cardOptions={scopePending ? undefined : props.cardOptions}
+          guidanceSlot={<ActionGuidance view={status.view} loading={status.loading} failed={status.failed} busy={busy} onRefresh={status.refresh} onRecords={() => openTool('records')}
+            override={scopePending ? { headline: '请核对这次要做的功能，再确认制作范围。', detail: '确认后才会开始制作；不准确的地方可以继续调整。', actions: <button type="button" className="studio-primary" onClick={() => { setMobileView('preview'); previewTarget.current?.querySelector<HTMLElement>('button, h3')?.focus() }}>查看制作范围</button> }
+              : canConfirmSketch ? { headline: '请确认这个界面是否符合你的想法。', detail: '确认后，我会按这个方向制作程序。', actions: <><button type="button" data-ai-id="confirm-sketch-button" className="studio-primary" disabled={props.confirming || busy} onClick={props.onConfirmSketch}>{props.confirming ? '正在开始制作…' : '按这个界面制作'}<Play size={13} /></button>{props.cardOptions?.filter(option => option.id !== 'ux_confirm_go').map(option => <button type="button" key={option.id} className="theatre-tool" disabled={busy} onClick={() => props.onCardOptionSelect?.(option)}>{option.label}</button>)}</> }
+              : props.cardOptions?.length ? { headline: props.decisionTitle || '请选择接下来怎么做。', detail: '请在下方选择，或直接输入你的要求。' }
+              : requirementDialog || prdDialog || clarificationDialog ? { headline: '请先确认这次想做的功能。', detail: '请在当前确认框中核对要求；不会替你确认。' } : undefined}
+            onAction={async action => {
+              if (action === 'continue') { if (!props.onSendMessage) throw Error('SEND_UNAVAILABLE'); await props.onSendMessage('继续') }
+              else if (action === 'settings') props.onOpenSettings?.()
+              else if (action === 'inspect') openTool('records')
+              else if (action === 'assisted_acceptance') {
+                setDocuments(false)
+                setCollaboration(false)
+                setLocalPanel(null)
+                setMobileView('preview')
+                setAcceptanceRequest(request => request + 1)
+              }
+              else if (action === 'open') {
+                const api = window.electronAPI?.projectDeliverables
+                if (!project || !api) throw Error('LAUNCH_UNAVAILABLE')
+                const result = await api.launch({ request_id: crypto.randomUUID(), project_id: project.project_id })
+                setActionResult(result.ok ? result.data.detail ?? (result.data.started ? '程序已打开。' : '程序未启动，请查看交付面板中的处理说明。') : result.error.user_visible_message ?? '未能打开程序，请查看交付面板。')
+              }
+              status.refresh()
+            }} />}
+          actionSlot={actionResult ? <p className="studio-notice" role="status">{actionResult}</p> : undefined}
+          cardOptions={scopePending || canConfirmSketch ? undefined : props.cardOptions}
           decisionTitle={props.decisionTitle}
           decisionBody={props.decisionBody}
           onCardOptionSelect={props.onCardOptionSelect}
@@ -188,10 +245,12 @@ export const WorkspaceShell: React.FC<WorkspaceShellProps> = (props) => {
           onOpenSettings={props.onOpenSettings}
           onForkFromMessage={props.onForkFromMessage}
         />
+        {project?.workflow_retirement && <p className="studio-notice" role="status">{project.workflow_retirement}</p>}
         {props.notice && <p className="studio-notice" role="status">{props.notice}</p>}
       </section>
 
       </div>
+      <footer className="workspace-app-foot">Bloma · 作品工作室</footer>
     </div>
   )
 }
