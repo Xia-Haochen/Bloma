@@ -10,6 +10,8 @@
  * 依赖：DOC-4.1 api-spec.md、DOC-3.4 data-model.md
  */
 
+import { isAgentChannel, PROVIDER_PROTOCOL_DEFAULTS } from './channel-protocol'
+
 // =========================================================================
 // 1. IPC 通道常量（单一扁平对象）
 // =========================================================================
@@ -207,6 +209,8 @@ export const WORKFLOW_STAGES: readonly WorkflowStage[] = [
 ]
 
 export type SnapshotKind = 'sketch' | 'mvp' | 'iteration' | 'pre_risk' | 'upgrade' | 'rollback_guard' | 'restored'
+export type ChannelProtocol = 'anthropic-messages' | 'openai-chat-completions' | 'openai-responses' | 'google-generate-content'
+
 export type ProviderType =
   | 'anthropic'
   | 'anthropic-compatible'
@@ -242,8 +246,12 @@ export type HealthStatus = 'healthy' | 'unhealthy'
 // =========================================================================
 
 export interface ChannelModel {
+  /** 渠道内本地标识；历史手动模型可能不是 API 模型 ID。 */
   id: string
+  /** 实际发送给模型 API 的模型 ID（保持 Bloma 历史契约）。 */
   name: string
+  /** 仅用于界面展示，绝不参与模型路由或请求。 */
+  display_name?: string
   enabled: boolean
   /** 来源：manual=手填，fetched=从供应商 API 拉取（默认 manual） */
   source?: 'manual' | 'fetched'
@@ -279,6 +287,8 @@ export interface Channel {
   id: string
   name: string
   provider_type: ProviderType
+  /** Omitted for legacy channels: follow provider default. */
+  protocol?: ChannelProtocol
   base_url: string
   /** safeStorage.encryptString() 加密后的 hex 字符串 */
   api_key: string
@@ -291,6 +301,8 @@ export interface Channel {
 export interface ChannelCreateInput {
   name: string
   provider_type: ProviderType
+  /** Omitted for legacy channels: follow provider default. */
+  protocol?: ChannelProtocol
   base_url: string
   api_key: string
   models?: ChannelModel[]
@@ -304,6 +316,8 @@ export type ChannelCreateEnvelope = RequestEnvelope & ChannelCreateInput
 export interface ChannelUpdateInput {
   name?: string
   provider_type?: ProviderType
+  /** null resets to the provider default; undefined preserves the saved choice. */
+  protocol?: ChannelProtocol | null
   base_url?: string
   /** 明文 API Key；空字符串表示不更新 */
   api_key?: string
@@ -345,6 +359,8 @@ export interface ChannelTestResult {
 /** 保存前直接测试连接（无需已保存渠道，明文凭证） */
 export interface ChannelDirectTestInput {
   provider_type: ProviderType
+  /** Omitted for legacy channels: follow provider default. */
+  protocol?: ChannelProtocol
   base_url: string
   api_key: string
   model_id?: string
@@ -359,6 +375,8 @@ export interface ChannelTestDirectEnvelope extends RequestEnvelope {
 /** 拉取模型列表（无需已保存渠道，明文凭证） */
 export interface FetchModelsInput {
   provider_type: ProviderType
+  /** Omitted for legacy channels: follow provider default. */
+  protocol?: ChannelProtocol
   base_url: string
   api_key: string
   /** api_key 为空时回退到已保存渠道的密钥（编辑表单不改 Key 时使用） */
@@ -711,38 +729,20 @@ export const PROVIDER_LABELS: Record<ProviderType, string> = {
   'qwen-token-plan': '通义千问 Token Plan',
   xiaomi: '小米 MiMo (API)',
   'xiaomi-token-plan': '小米 MiMo Token Plan',
-  custom: 'OpenAI Chat Completions（自定义地址）',
+  custom: '自定义渠道（可选协议）',
 }
 
-/**
- * 走 Anthropic Messages 协议的 provider（M5 单一真相源，main 校验与 renderer 下拉共用）。
- * Bloma 运行时查询固定请求 `${baseUrl}/v1/messages`，OpenAI 协议渠道（zhipu/doubao/
- * qwen/openai/custom 等）会 404——类别路由与渠道下拉均须过滤。
- */
-export const ANTHROPIC_PROTOCOL_PROVIDERS: readonly ProviderType[] = [
-  'anthropic',
-  'anthropic-compatible',
-  'deepseek',
-  'minimax',
-  'xiaomi',
-  'xiaomi-token-plan',
-  'qwen-anthropic',
-  'qwen-token-plan',
-  'zhipu-coding',
-  'zhipu-coding-team',
-  'ark-coding-plan',
-  'kimi-api',
-  'kimi-coding',
-]
+/** Legacy preset view, derived from protocol defaults; not an Agent allowlist. */
+export const ANTHROPIC_PROTOCOL_PROVIDERS: readonly ProviderType[] = (Object.keys(PROVIDER_PROTOCOL_DEFAULTS) as ProviderType[])
+  .filter(provider => PROVIDER_PROTOCOL_DEFAULTS[provider] === 'anthropic-messages')
 
-/** 判定 provider 是否走 Anthropic Messages 协议（M5：路由保存校验/解析复核/下拉过滤）。 */
 export function isAnthropicProtocolProvider(provider: ProviderType): boolean {
   return ANTHROPIC_PROTOCOL_PROVIDERS.includes(provider)
 }
 
-/** Protocols implemented by the native tool-using agent loop. */
+/** Legacy preset-only helper. Channel consumers must use isAgentChannel(channel). */
 export function isAgentProtocolProvider(provider: ProviderType): boolean {
-  return isAnthropicProtocolProvider(provider) || provider === 'zhipu'
+  return isAgentChannel({ provider_type: provider })
 }
 
 // =========================================================================

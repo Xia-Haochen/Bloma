@@ -14,6 +14,17 @@ export function attachModelLimits(env: Record<string,string>, limits?: {context_
   if (limits.context_window !== undefined && !validModelLimit(limits.context_window) || limits.max_output_tokens !== undefined && !validModelLimit(limits.max_output_tokens)) throw Error('MODEL_LIMITS_INVALID')
   env[MODEL_LIMITS_ENV] = JSON.stringify({model:env.ANTHROPIC_MODEL,origin:new URL(env.ANTHROPIC_BASE_URL).origin,...limits})
 }
+/** Apply only an explicitly configured, identity-bound output cap at the shared transport. */
+export function capConfiguredOutputTokens(env: Record<string, string>, requestedOutput: number): number {
+  if (!env[MODEL_LIMITS_ENV]) return requestedOutput
+  const declared = JSON.parse(env[MODEL_LIMITS_ENV])
+  let origin: string
+  try { origin = new URL(env.ANTHROPIC_BASE_URL).origin } catch { return requestedOutput }
+  if (declared.model !== env.ANTHROPIC_MODEL || declared.origin !== origin || declared.max_output_tokens === undefined) return requestedOutput
+  if (!validModelLimit(declared.max_output_tokens)) throw new Error('MODEL_LIMITS_INVALID')
+  return Math.min(requestedOutput, declared.max_output_tokens)
+}
+
 export async function resolveModelContext(env: Record<string,string>, requestedOutput: number): Promise<ModelContextPolicy> {
   const model=env.ANTHROPIC_MODEL
   let origin:string|undefined

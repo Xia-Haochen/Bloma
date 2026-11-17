@@ -1,3 +1,4 @@
+import { isAgentChannel, channelProtocolUnavailableReason } from '../../../shared/channel-protocol'
 import { existsSync } from 'node:fs'
 import type {
   AgentRoutingRole,
@@ -12,7 +13,7 @@ import type {
 import { AGENT_ROLE_CATEGORIES, AGENT_ROUTING_ROLES } from '../../../shared/types'
 import { getCategoryRoutingPath } from '../../../storage/config-paths'
 import { readJsonFile, writeJsonFile } from '../../../storage/json-store'
-import { getChannelByIdRaw, getFirstEnabledChannel, isAgentProtocolProvider } from './channel-manager'
+import { getChannelByIdRaw, getFirstEnabledChannel } from './channel-manager'
 import { resolveCategoryModel } from './model-resolution'
 import { FLOW_ROUTING_COPY } from '../../../shared/routing-display'
 
@@ -96,7 +97,7 @@ export function resolveRoutedChannelId(category: DocumentCategory): string | und
     return undefined
   }
   if (!channel.enabled) return undefined
-  if (!isAgentProtocolProvider(channel.provider_type)) {
+  if (!isAgentChannel(channel)) {
     console.warn(`[categoryRouting] ${category} 类别路由指向的渠道「${channel.name}」未支持的 Agent 协议（${channel.provider_type}），运行时无法执行工具调用，回退全局默认渠道`)
     return undefined
   }
@@ -133,8 +134,8 @@ function resolvedRoleView(role: AgentRoutingRole, routing: CategoryRoutingConfig
   let channel = globalDefault
   if (configuredId) {
     const configured = getChannelByIdRaw(configuredId)
-    if (!configured) effective = 'dangling'
-    else if (configured.enabled && isAgentProtocolProvider(configured.provider_type)) {
+    if (!configured || !configured.enabled || !isAgentChannel(configured) || !configured.models.some(model => model.enabled)) effective = 'dangling'
+    else {
       effective = 'routed'
       channel = configured
     }
@@ -179,7 +180,7 @@ export function buildCategoryRoutingViews(): CategoryRoutingListResult {
     if (configuredId) {
       const configured = getChannelByIdRaw(configuredId)
       if (!configured) effective = 'dangling'
-      else if (configured.enabled && isAgentProtocolProvider(configured.provider_type)) {
+      else if (configured.enabled && isAgentChannel(configured)) {
         effective = 'routed'
         channel = configured
       }
@@ -212,34 +213,40 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function keepChannelReference(scope: string, field: string, channelId: unknown): string | undefined {
+function keepChannelReference(scope: string, field: string, channelId: unknown, strict = false): string | undefined {
   if (typeof channelId !== 'string' || !channelId) {
     throw new Error(`CATEGORY_ROUTING_INVALID: routing.${scope}.${field} 必须是非空字符串`)
   }
   const channel = getChannelByIdRaw(channelId)
+  const selectionLabel = field === 'channel_id' ? '主渠道' : '备用渠道'
   if (!channel) {
+    if (strict) throw new Error(`CATEGORY_ROUTING_INVALID: 所选${selectionLabel}「${channelId}」不存在，请移除失效引用或重新选择`)
     console.warn(`[categoryRouting] 保存时剥离 ${scope}.${field}：渠道 ${channelId} 不存在或非本项目渠道`)
     return undefined
   }
-  if (!isAgentProtocolProvider(channel.provider_type)) {
-    console.warn(`[categoryRouting] 保存时剥离 ${scope}.${field}：渠道「${channel.name}」（${channel.provider_type}）未支持的 Agent 协议，运行时固定请求 /v1/messages 会 404`)
+  if (strict && (!channel.enabled || !channel.models.some(model => model.enabled))) {
+    throw new Error(`CATEGORY_ROUTING_INVALID: ${selectionLabel}「${channel.name}」已禁用或没有启用的模型，请先配置渠道或移除该引用`)
+  }
+  if (!isAgentChannel(channel)) {
+    if (strict) throw new Error(`CATEGORY_ROUTING_INVALID: 当前 Agent 尚不支持${selectionLabel}「${channel.name}」的协议：${channelProtocolUnavailableReason(channel)}`)
+    console.warn(`[categoryRouting] 保存时剥离 ${scope}.${field}：渠道「${channel.name}」（${channel.provider_type}）未支持的 Agent 协议`)
     return undefined
   }
   return channelId
 }
 
-function cleanRoutingEntry(scope: string, entry: unknown): CategoryRoutingEntry | undefined {
+function cleanRoutingEntry(scope: string, entry: unknown, strict = false): CategoryRoutingEntry | undefined {
   if (entry === undefined || entry === null) return undefined
   if (!isRecord(entry) || Object.keys(entry).some(key=>!['channel_id','fallback_channel_ids'].includes(key))) throw new Error(`CATEGORY_ROUTING_INVALID: routing.${scope} 只接受渠道和备用顺序`)
   const cleaned: CategoryRoutingEntry = {}
   if (entry.channel_id !== undefined) {
-    const kept = keepChannelReference(scope, 'channel_id', entry.channel_id)
+    const kept = keepChannelReference(scope, 'channel_id', entry.channel_id, strict)
     if (kept) cleaned.channel_id = kept
   }
   if (entry.fallback_channel_ids !== undefined) {
     if (!Array.isArray(entry.fallback_channel_ids)) throw new Error(`CATEGORY_ROUTING_INVALID: routing.${scope}.fallback_channel_ids 必须是字符串数组`)
     const kept = entry.fallback_channel_ids
-      .map((id, index) => keepChannelReference(scope, `fallback_channel_ids[${index}]`, id))
+      .map((id, index) => keepChannelReference(scope, `fallback_channel_ids[${index}]`, id, strict))
       .filter((id): id is string => id !== undefined)
     if (kept.length) cleaned.fallback_channel_ids = kept
   }
@@ -267,7 +274,7 @@ export function updateCategoryRoutingRoles(routing: unknown): CategoryRoutingRol
   const cleaned = loadCategoryRouting()
   for (const [key,entry] of Object.entries(routing)) {
     if (!KNOWN_ROLES.has(key)) throw new Error('CATEGORY_ROUTING_INVALID: 不存在的流程分组')
-    const role=key as AgentRoutingRole,value=cleanRoutingEntry(key,entry)
+    const role=key as AgentRoutingRole,value=cleanRoutingEntry(key,entry,true)
     for (const category of ROLE_CATEGORIES[role]) { delete cleaned[category]; if(value)cleaned[category]={...value,...(value.fallback_channel_ids?{fallback_channel_ids:[...value.fallback_channel_ids]}:{})} }
   }
   saveCategoryRouting(cleaned)

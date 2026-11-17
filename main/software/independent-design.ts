@@ -1,3 +1,4 @@
+import { isAgentChannel } from '../../shared/channel-protocol'
 import { independentBatches } from './independent-batches'
 import { createHash, randomUUID } from 'node:crypto'
 import { COUNTEREXAMPLE_GUIDANCE } from './acceptance-counterexamples'
@@ -224,7 +225,7 @@ export async function prepareIndependentDesign(input:{projectId:string;sessionId
 }
 export function resolveIndependentRoute(policy:IndependentDesignPolicy){
   const channel=getChannelByIdRaw(policy.channel_id)
-  if(!channel?.enabled||!channel.models.some(model=>model.name===policy.model&&model.enabled))throw Error('INDEPENDENT_CAPABILITY_MISSING')
+  if(!channel?.enabled||!isAgentChannel(channel)||!channel.models.some(model=>model.name===policy.model&&model.enabled))throw Error('INDEPENDENT_CAPABILITY_MISSING')
   // No fallback metadata is attached. A different route is an explicit block.
-  return{channel_id:channel.id,model:policy.model,env:buildSdkEnv(decryptApiKey(channel.api_key),channel.base_url,policy.model,channel.provider_type,channel.models.find(row=>row.name===policy.model))}
+  return{channel_id:channel.id,model:policy.model,env:buildSdkEnv(decryptApiKey(channel.api_key),channel.base_url,policy.model,channel.provider_type,channel.models.find(row=>row.name===policy.model),channel.protocol)}
 }

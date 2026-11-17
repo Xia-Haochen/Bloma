@@ -476,3 +476,21 @@ describe('思考增量透出（2026-10-04）', () => {
     expect(sawText).toBe(true)
   })
 })
+
+describe('channel model output limit at the common transport boundary', () => {
+  it('caps direct queries with model+origin-bound channel metadata', async () => {
+    mockStreamOk()
+    const input = opts({ maxTokens: 16384 })
+    input.env.BLOMA_MODEL_LIMITS = JSON.stringify({ model: 'test-model', origin: 'https://api.anthropic.com', max_output_tokens: 2048 })
+    for await (const _ of anthropicMessagesQueryViaProviders('question', input)) void _
+    expect(parsedBody().max_tokens).toBe(2048)
+    expect(input.maxTokens).toBe(16384)
+  })
+  it.each([{ model: 'different', origin: 'https://api.anthropic.com' }, { model: 'test-model', origin: 'https://other.example' }])('does not apply stale overrides: %o', async identity => {
+    mockStreamOk()
+    const input = opts({ maxTokens: 16384 })
+    input.env.BLOMA_MODEL_LIMITS = JSON.stringify({ ...identity, max_output_tokens: 2048 })
+    for await (const _ of anthropicMessagesQueryViaProviders('question', input)) void _
+    expect(parsedBody().max_tokens).toBe(16384)
+  })
+})

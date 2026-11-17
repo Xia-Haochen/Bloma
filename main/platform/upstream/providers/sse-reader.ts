@@ -266,7 +266,7 @@ async function runReservedStreamAttempt(options: StreamSSEOptions): Promise<Stre
   let response: Response
   try {
     response = await fetchFn(request.url, {
-      method: 'POST', headers: request.headers, body: request.body, signal: effectiveSignal,
+      method: 'POST', headers: request.headers, body: request.body, signal: effectiveSignal, redirect: 'manual',
     })
   } finally { clearTimeout(timer) }
 
@@ -275,6 +275,9 @@ async function runReservedStreamAttempt(options: StreamSSEOptions): Promise<Stre
     try { options.onResponse?.({ status: response.status, content_type: contentType, ...fields }) } catch { /* telemetry only */ }
   }
   receipt()
+  if (response.status >= 300 && response.status < 400) {
+    throw new HTTPError('MODEL_REQUEST_REDIRECT_BLOCKED: 模型请求不自动跟随重定向，请使用最终服务地址。', response.status, undefined, true)
+  }
   if (response.ok && /application\/json/i.test(contentType)) {
     const text = await response.text()
     let code: unknown

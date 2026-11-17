@@ -4,7 +4,7 @@ import { acceptMessage, existingReceipt, updateReceipt, recoveryRecord, reserveR
 import { findProject } from '../../project/project-service'
 import { recordSessionActivity, listSessions } from '../../platform/sessions/session-service'
 import { resolveChannelEnv } from '../../platform/llm/runtime-fallback'
-import { categoryForStage } from '../../platform/llm/model-resolution'
+import { categoryForExecution } from '../../platform/llm/execution-routing'
 import { enqueueSteer, registerSteer, steerConfirmEnabled } from '../../agent/loop/steer-queue'
 import { runAgent } from './agent-dispatch'
 import { hasRunForProject, sessionMessageQueue } from './run-registry'
@@ -21,7 +21,7 @@ export function submitChat(input: ChatSubmitInput): SendReceipt {
   if (previous) return previous
   const attachments = resolveAttachments(input, input.attachment_refs)
   if (!input.content.trim() && attachments.length === 0) throw new Error('MESSAGE_EMPTY')
-  const resolution = resolveChannelEnv({ channelId: input.channel_id, category: categoryForStage(project.current_stage), projectId: input.project_id, sessionId: input.session_id })
+  const resolution = resolveChannelEnv({ channelId: input.channel_id, category: categoryForExecution(project), projectId: input.project_id, sessionId: input.session_id })
   if (!resolution.env) throw new Error('NO_USABLE_CHANNEL: 请先在设置中连接可用渠道，草稿已保留')
   recordSessionActivity(input.session_id, input.project_id)
   const queued = hasRunForProject(input.project_id)
@@ -53,7 +53,7 @@ export function resolveMessageReceipt(input: MessageRecoveryInput): SendReceipt 
   }
   if (input.action !== 'resume') throw new Error('RECOVERY_ACTION_INVALID')
   const attachments = resolveAttachments(record.input, record.input.attachment_refs)
-  const resolution = resolveChannelEnv({ channelId: record.input.channel_id, category: categoryForStage(project.current_stage), projectId: input.project_id, sessionId: input.session_id })
+  const resolution = resolveChannelEnv({ channelId: record.input.channel_id, category: categoryForExecution(project), projectId: input.project_id, sessionId: input.session_id })
   if (!resolution.env) throw new Error('NO_USABLE_CHANNEL: 请先连接可用渠道，材料与消息记录已保留')
   const reserved = reserveRecovery(input.client_message_id, input.project_id, input.session_id, input.operation_id, hasRunForProject(input.project_id))
   if (!reserved.dispatch) return reserved.record.receipt

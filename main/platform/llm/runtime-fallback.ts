@@ -1,4 +1,5 @@
 import type { Channel } from '../../../shared/types'
+import { isAgentChannel } from '../../../shared/channel-protocol'
 
 
 import { appendSessionMessage } from '../sessions/session-tree'
@@ -86,7 +87,7 @@ export function readFallbackContext(env: Record<string, string> | undefined): Ru
 // 构建期：渠道 + 类别 → env（主渠道基础设施故障时切第一个可用备用渠道）
 // ---------------------------------------------------------------------------
 
-export type ChannelUnusableReason = 'no_channel' | 'decrypt_failed' | 'model_not_found' | 'tools_unsupported'
+export type ChannelUnusableReason = 'no_channel' | 'decrypt_failed' | 'model_not_found' | 'tools_unsupported' | 'unsupported_protocol' | 'channel_disabled'
 
 export interface ChannelEnvResolution {
   env?: Record<string, string>
@@ -102,7 +103,7 @@ export interface ChannelEnvResolution {
 
 type ChannelEnvAttempt =
   | { status: 'ok'; env: Record<string, string>; model: string; supportsTools: boolean | undefined }
-  | { status: 'failed'; reason: 'decrypt_failed' | 'model_not_found' | 'tools_unsupported' }
+  | { status: 'failed'; reason: Exclude<ChannelUnusableReason, 'no_channel'> }
 
 /** 解析出的模型在渠道 models[] 上的 tool use 能力位（`supports_tools` 在 ChannelModel 上，不在 Channel 上）。 */
 function readSupportsTools(channel: Channel, model: string): boolean | undefined {
@@ -110,6 +111,8 @@ function readSupportsTools(channel: Channel, model: string): boolean | undefined
 }
 
 function tryBuildChannelEnv(channel: Channel, category: DocumentCategory, requireTools?: boolean): ChannelEnvAttempt {
+  if (!channel.enabled) return { status: 'failed', reason: 'channel_disabled' }
+  if (!isAgentChannel(channel)) return { status: 'failed', reason: 'unsupported_protocol' }
   let apiKey: string
   try {
     apiKey = decryptApiKey(channel.api_key)
@@ -126,7 +129,7 @@ function tryBuildChannelEnv(channel: Channel, category: DocumentCategory, requir
   // 路由层过滤（废旧管道方案 D2）：调用方要求 tool use 时，显式标记为不支持的模型直接
   // 判不可用交由备用链接手；undefined（未标注）放行——能力未知者由调用方探测。
   if (requireTools === true && supportsTools === false) return { status: 'failed', reason: 'tools_unsupported' }
-  return { status: 'ok', env: buildSdkEnv(apiKey, channel.base_url, model, channel.provider_type, channel.models.find(row=>row.name===model)), model, supportsTools }
+  return { status: 'ok', env: buildSdkEnv(apiKey, channel.base_url, model, channel.provider_type, channel.models.find(row=>row.name===model), channel.protocol), model, supportsTools }
 }
 
 // ---------------------------------------------------------------------------
@@ -250,22 +253,9 @@ export function pickBackupChannelEnv(
   for (const channel of candidates) {
     if (!channel || seen.has(channel.id)) continue
     seen.add(channel.id)
-    let apiKey: string
-    try {
-      apiKey = decryptApiKey(channel.api_key)
-    } catch {
-      continue
-    }
-    let model: string
-    try {
-      model = resolveCategoryModel(channel, context.category).model
-    } catch {
-      continue
-    }
-    const supportsTools = readSupportsTools(channel, model)
-    // 与主渠道同一口径：显式 false 跳过，undefined（未标注）放行留给调用方探测
-    if (requireTools === true && supportsTools === false) continue
-    return { channel, model, env: buildSdkEnv(apiKey, channel.base_url, model, channel.provider_type, channel.models.find(row=>row.name===model)), supportsTools }
+    const attempt = tryBuildChannelEnv(channel, context.category, requireTools)
+    if (attempt.status === 'failed') continue
+    return { channel, model: attempt.model, env: attempt.env, supportsTools: attempt.supportsTools }
   }
   return undefined
 }
@@ -343,6 +333,8 @@ function describeTrigger(record: { reason: string; statusCode?: number }): strin
   if (record.reason === 'decrypt_failed') return 'api_key 无法解密'
   if (record.reason === 'model_not_found') return '没有启用的模型'
   if (record.reason === 'tools_unsupported') return '模型不支持工具调用'
+  if (record.reason === 'unsupported_protocol') return '当前 Agent 尚不支持该渠道协议'
+  if (record.reason === 'channel_disabled') return '渠道已禁用'
   if (record.reason === 'network_error') return '网络错误'
   return `请求失败（${record.reason}）`
 }

@@ -1,3 +1,4 @@
+import { channelProtocol, channelProtocolUnavailableReason, CHANNEL_PROTOCOL_LABELS, PROVIDER_PROTOCOL_DEFAULTS } from '../../shared/channel-protocol'
 /**
  * ChannelSettingsPage — 渠道管理设置页
  *
@@ -21,6 +22,7 @@
  */
 
 import { FLOW_ROUTING_COPY } from '../../shared/routing-display'
+import { canReuseChannelCredential, CHANNEL_CREDENTIAL_TARGET_CHANGED } from '../../shared/channel-config'
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useAtom } from 'jotai'
 import type {
@@ -30,6 +32,7 @@ import type {
   Channel,
   ChannelCreateInput,
   ChannelModel,
+  ChannelProtocol,
   ChannelUpdateInput,
   DocumentCategory,
   PromaPermissionMode,
@@ -38,7 +41,6 @@ import type {
 import {
   PROVIDER_DEFAULT_URLS,
   PROVIDER_LABELS,
-  isAgentProtocolProvider,
 } from '../../shared/types'
 import {
   categoryRoutingRoleViewsAtom,
@@ -153,6 +155,7 @@ interface ChannelFormProps {
   initial?: {
     name: string
     provider: ProviderType
+    protocol?: ChannelProtocol
     baseUrl: string
     models: ChannelModel[]
   }
@@ -199,6 +202,7 @@ function mergeFetchedModels(existing: ChannelModel[], provider: ProviderType, fe
     const name = (m.name || m.id || '').trim()
     if (!name || byName.has(name)) continue
     const candidate: ChannelModel = {
+      ...m,
       id: m.id || `${provider}-${name}-f${appended.length}`,
       name,
       enabled: m.enabled !== false,
@@ -218,6 +222,7 @@ function mergeFetchedModels(existing: ChannelModel[], provider: ProviderType, fe
 const ChannelForm: React.FC<ChannelFormProps> = ({ mode, channelId, initial, onSave, onUpdate, onCancel, saving }) => {
   const [name, setName] = useState(initial?.name ?? '')
   const [provider, setProvider] = useState<ProviderType>(initial?.provider ?? 'deepseek')
+  const [protocol, setProtocol] = useState<ChannelProtocol | ''>(initial?.protocol ?? '')
   const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? '')
   const [apiKey, setApiKey] = useState('')
   // 模型点选列表状态（用户 2026-08-30 点名：逗号文本框在阿里云 245 模型下不可用）
@@ -228,41 +233,64 @@ const ChannelForm: React.FC<ChannelFormProps> = ({ mode, channelId, initial, onS
   const [testMsg, setTestMsg] = useState<{ ok: boolean; message: string } | null>(null)
   const [fetching, setFetching] = useState(false)
   const [fetchMsg, setFetchMsg] = useState<{ ok: boolean; message: string } | null>(null)
+  const probeVersion = useRef(0)
+  useEffect(() => () => { probeVersion.current += 1 }, [])
 
-  // provider 变化时：编辑模式不清空已填 baseUrl；新增模式若未手填则自动带默认 URL
+  const invalidateProbes = () => {
+    probeVersion.current += 1
+    setTesting(false)
+    setFetching(false)
+    setTestMsg(null)
+    setFetchMsg(null)
+  }
+
   const resolvedBaseUrl = baseUrl.trim() || PROVIDER_DEFAULT_URLS[provider] || ''
+  const needsReplacementKey = mode === 'edit' && Boolean(initial) && !canReuseChannelCredential(
+    { provider_type: initial!.provider, base_url: initial!.baseUrl },
+    { provider_type: provider, base_url: resolvedBaseUrl },
+  )
+  const hasCredential = apiKey.trim().length > 0 || (mode === 'edit' && !needsReplacementKey)
 
   // create 模式必须填 API Key；edit 模式留空表示不更新密钥
   const canSave =
     name.trim().length > 0 &&
     resolvedBaseUrl.length > 0 &&
-    (mode === 'create' ? apiKey.trim().length > 0 : true) &&
-    !saving
+    hasCredential &&
+    !saving && !testing && !fetching
 
   // 测试连接 / 拉取模型：
   // create 模式必须填明文 API Key；edit 模式留空时回退到已保存渠道密钥（main 进程解密）。
   const canProbe =
     resolvedBaseUrl.length > 0 &&
-    (mode === 'create' ? apiKey.trim().length > 0 : true) &&
-    !testing && !fetching
+    hasCredential &&
+    !saving && !testing && !fetching
 
   const handleProviderChange = (value: ProviderType) => {
+    if (value === provider) return
+    invalidateProbes()
     setProvider(value)
-    // 未手填 baseUrl 时跟随默认值
-    if (!baseUrl.trim()) setBaseUrl(PROVIDER_DEFAULT_URLS[value] || '')
+    setProtocol('')
+    setBaseUrl(PROVIDER_DEFAULT_URLS[value] || '')
+    setApiKey('')
+    setModelList([])
+    setModelFilter('')
+    setNewModelName('')
   }
 
   const handleTest = useCallback(() => {
     const api = window.electronAPI
     // 仅支持真实 Electron 链路，无主进程时静默跳过（取消 demo 演示）
     if (!api?.channels?.testDirect) return
+    const version = probeVersion.current
     setTesting(true)
     setTestMsg(null)
+    setFetchMsg(null)
     void api.channels
       .testDirect({
         request_id: crypto.randomUUID(),
         input: {
           provider_type: provider,
+          protocol: protocol || undefined,
           base_url: resolvedBaseUrl,
           // 编辑模式 Key 留空时由 main 进程回退到已保存渠道密钥
           api_key: apiKey.trim(),
@@ -271,24 +299,28 @@ const ChannelForm: React.FC<ChannelFormProps> = ({ mode, channelId, initial, onS
         },
       })
       .then((result) => {
+        if (version !== probeVersion.current) return
         if (result.ok) setTestMsg({ ok: result.data.ok, message: result.data.message })
         else setTestMsg({ ok: false, message: result.error?.user_visible_message ?? '测试失败，请重试。' })
       })
-      .catch(() => setTestMsg({ ok: false, message: '测试失败，请重试。' }))
-      .finally(() => setTesting(false))
-  }, [mode, channelId, provider, resolvedBaseUrl, apiKey, modelList])
+      .catch(() => { if (version === probeVersion.current) setTestMsg({ ok: false, message: '测试失败，请重试。' }) })
+      .finally(() => { if (version === probeVersion.current) setTesting(false) })
+  }, [mode, channelId, provider, protocol, resolvedBaseUrl, apiKey, modelList])
 
   const handleFetchModels = useCallback(() => {
     const api = window.electronAPI
     // 仅支持真实 Electron 链路，无主进程时静默跳过（取消 demo 演示）
     if (!api?.channels?.fetchModels) return
+    const version = probeVersion.current
     setFetching(true)
     setFetchMsg(null)
+    setTestMsg(null)
     void api.channels
       .fetchModels({
         request_id: crypto.randomUUID(),
         input: {
           provider_type: provider,
+          protocol: protocol || undefined,
           base_url: resolvedBaseUrl,
           // 编辑模式 Key 留空时由 main 进程回退到已保存渠道密钥
           api_key: apiKey.trim(),
@@ -296,7 +328,12 @@ const ChannelForm: React.FC<ChannelFormProps> = ({ mode, channelId, initial, onS
         },
       })
       .then((result) => {
+        if (version !== probeVersion.current) return
         if (result.ok) {
+          if (result.data.success === false) {
+            setFetchMsg({ ok: false, message: result.data.message || '拉取失败，请重试。' })
+            return
+          }
           const models = result.data.models
           if (models.length === 0) {
             setFetchMsg({ ok: false, message: '没有拉取到模型，可手动填写' })
@@ -309,27 +346,30 @@ const ChannelForm: React.FC<ChannelFormProps> = ({ mode, channelId, initial, onS
           setFetchMsg({ ok: false, message: result.error?.user_visible_message ?? '拉取失败，请重试。' })
         }
       })
-      .catch(() => setFetchMsg({ ok: false, message: '拉取失败，请重试。' }))
-      .finally(() => setFetching(false))
-  }, [mode, channelId, provider, resolvedBaseUrl, apiKey])
+      .catch(() => { if (version === probeVersion.current) setFetchMsg({ ok: false, message: '拉取失败，请重试。' }) })
+      .finally(() => { if (version === probeVersion.current) setFetching(false) })
+  }, [mode, channelId, provider, protocol, resolvedBaseUrl, apiKey])
 
   // ===== 模型勾选列表：过滤 / 开关 / 全选清空 / 手动添加 / 移除 =====
   const keyword = modelFilter.trim().toLowerCase()
   const filteredModels = keyword
-    ? modelList.filter((m) => `${m.name} ${m.id}`.toLowerCase().includes(keyword))
+    ? modelList.filter((m) => `${m.name} ${m.id} ${m.display_name ?? ''}`.toLowerCase().includes(keyword))
     : modelList
   const enabledCount = modelList.filter((m) => m.enabled).length
 
   const handleToggleModel = (id: string) => {
+    invalidateProbes()
     setModelList((prev) => prev.map((m) => (m.id === id ? { ...m, enabled: !m.enabled } : m)))
   }
 
   const handleRemoveModel = (id: string) => {
+    invalidateProbes()
     setModelList((prev) => prev.filter((m) => m.id !== id))
   }
 
   /** 全选/清空只作用于当前筛选结果（避免搜「qwen」时误动其余 200+ 模型） */
   const applyEnabledToFiltered = (enabled: boolean) => {
+    invalidateProbes()
     const ids = new Set(filteredModels.map((m) => m.id))
     setModelList((prev) => prev.map((m) => (ids.has(m.id) ? { ...m, enabled } : m)))
   }
@@ -338,6 +378,7 @@ const ChannelForm: React.FC<ChannelFormProps> = ({ mode, channelId, initial, onS
   const handleAddModel = () => {
     const names = textToModels(provider, newModelName)
     if (names.length === 0) return
+    invalidateProbes()
     setModelList((prev) => {
       const known = new Set(prev.map((m) => m.name))
       const reEnabled = new Set(names.filter((m) => known.has(m.name)).map((m) => m.name))
@@ -364,6 +405,7 @@ const ChannelForm: React.FC<ChannelFormProps> = ({ mode, channelId, initial, onS
       onSave({
         name: name.trim(),
         provider_type: provider,
+        protocol: protocol || undefined,
         base_url: resolvedBaseUrl,
         api_key: apiKey.trim(),
         models: models.length > 0 ? models : undefined,
@@ -372,6 +414,7 @@ const ChannelForm: React.FC<ChannelFormProps> = ({ mode, channelId, initial, onS
       onUpdate(channelId, {
         name: name.trim(),
         provider_type: provider,
+        protocol: protocol || null,
         base_url: resolvedBaseUrl,
         models: models.length > 0 ? models : [],
         // 留空表示不更新密钥
@@ -436,6 +479,7 @@ const ChannelForm: React.FC<ChannelFormProps> = ({ mode, channelId, initial, onS
         <label style={labelStyle}>模型提供商 *</label>
         <select
           style={inputStyle}
+          aria-label="模型提供商"
           value={provider}
           onChange={(e) => handleProviderChange(e.target.value as ProviderType)}
         >
@@ -445,13 +489,25 @@ const ChannelForm: React.FC<ChannelFormProps> = ({ mode, channelId, initial, onS
         </select>
       </div>
 
+      <div>
+        <label style={labelStyle}>请求协议</label>
+        <select aria-label="请求协议" data-ai-id="channel-protocol" style={inputStyle} value={protocol}
+          onChange={event => { invalidateProbes(); setProtocol(event.target.value as ChannelProtocol | '') }}>
+          <option value="">跟随提供商默认（{CHANNEL_PROTOCOL_LABELS[PROVIDER_PROTOCOL_DEFAULTS[provider]]}）</option>
+          {Object.entries(CHANNEL_PROTOCOL_LABELS).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+        </select>
+        <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>协议必须与服务端一致。自定义兼容网关可选择协议，不受提供商品牌或模型名称限制。</p>
+        {channelProtocolUnavailableReason({ provider_type: provider, protocol: protocol || undefined }) && <p role="alert">{channelProtocolUnavailableReason({ provider_type: provider, protocol: protocol || undefined })}</p>}
+      </div>
+
       {/* Base URL（QW#5：去技术黑话） */}
       <div>
         <label style={labelStyle}>服务地址（一般不用改）</label>
         <input
           style={inputStyle}
+          aria-label="服务地址"
           value={baseUrl}
-          onChange={(e) => setBaseUrl(e.target.value)}
+          onChange={(e) => { invalidateProbes(); setBaseUrl(e.target.value) }}
           placeholder={PROVIDER_DEFAULT_URLS[provider] ? `留空使用 ${PROVIDER_DEFAULT_URLS[provider]}` : '自定义提供商请填写服务地址'}
         />
       </div>
@@ -463,12 +519,17 @@ const ChannelForm: React.FC<ChannelFormProps> = ({ mode, channelId, initial, onS
           style={{ ...inputStyle, fontFamily: 'monospace' }}
           type="password"
           value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
+          onChange={(e) => { invalidateProbes(); setApiKey(e.target.value) }}
           placeholder={mode === 'edit' ? '留空则不更新密钥' : 'sk-…'}
         />
         <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', marginTop: 4 }}>
-          Key 将使用系统安全存储加密，不会明文保存
+          Key 将使用系统安全存储加密，不会明文保存。切换提供商会清空当前模型列表与已输入密钥。
         </p>
+        {needsReplacementKey && !apiKey.trim() && (
+          <p role="alert" style={{ fontSize: 'var(--font-size-xs)', color: '#991B1B', marginTop: 4 }}>
+            {CHANNEL_CREDENTIAL_TARGET_CHANGED}
+          </p>
+        )}
       </div>
 
       {/* 模型点选列表（对齐 proma ChannelModel 勾选列表：每项 enabled 开关 + 搜索过滤 + 全选/清空） */}
@@ -551,7 +612,7 @@ const ChannelForm: React.FC<ChannelFormProps> = ({ mode, channelId, initial, onS
                     style={{ width: 14, height: 14, accentColor: 'var(--color-quick)', cursor: 'pointer', flexShrink: 0 }}
                   />
                   <span style={{ flex: 1, fontSize: 'var(--font-size-sm)', color: 'var(--color-text)', wordBreak: 'break-all' }}>
-                    {m.name}
+                    {m.display_name && m.display_name !== m.name ? <><span>{m.display_name}</span><br /><small>{m.name}</small></> : m.name}
                   </span>
                   <button
                     type="button"
@@ -562,10 +623,22 @@ const ChannelForm: React.FC<ChannelFormProps> = ({ mode, channelId, initial, onS
                   >
                     移除
                   </button>
-                  <input type="number" aria-label={`${m.name} 上下文窗口`} title="留空按模型目录自动识别；代理渠道可填写实际支持的上限，如1000000"
-                    min={1024} max={16777216} step={1} placeholder="窗口：自动" value={m.context_window??''} disabled={saving}
-                    onChange={e=>{const value=e.target.value;setModelList(rows=>rows.map(row=>row.id===m.id?{...row,context_window:value===''?undefined:Number(value)}:row))}}
-                    style={{...inputStyle,width:130,flexShrink:0}} />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0 }}>
+                    <label style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>
+                      上下文窗口
+                      <input type="number" aria-label={`${m.name} 上下文窗口`} title="留空按模型目录自动识别；代理渠道填写实际支持的上限"
+                        min={1024} max={16777216} step={1} placeholder="窗口：自动" value={m.context_window ?? ''} disabled={saving}
+                        onChange={e => { const value = e.target.value; setModelList(rows => rows.map(row => row.id === m.id ? { ...row, context_window: value === '' ? undefined : Number(value) } : row)) }}
+                        style={{ ...inputStyle, width: 130, height: 30, display: 'block' }} />
+                    </label>
+                    <label style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>
+                      最大输出
+                      <input type="number" aria-label={`${m.name} 最大输出`} title="模型单次响应上限；不是消费预算。留空按模型目录自动识别"
+                        min={1024} max={16777216} step={1} placeholder="输出：自动" value={m.max_output_tokens ?? ''} disabled={saving}
+                        onChange={e => { const value = e.target.value; setModelList(rows => rows.map(row => row.id === m.id ? { ...row, max_output_tokens: value === '' ? undefined : Number(value) } : row)) }}
+                        style={{ ...inputStyle, width: 130, height: 30, display: 'block' }} />
+                    </label>
+                  </div>
                 </div>
               ))}
             </div>
@@ -753,8 +826,18 @@ function modelsSummary(channel: Channel | undefined): string {
   return `已启用 ${enabled.length}/${models.length}：${head}${enabled.length > 3 ? ' 等' : ''}`
 }
 
+function routingUnavailableReason(channel: Channel): string | undefined {
+  if (!channel.enabled) return '渠道已禁用'
+  const protocolReason = channelProtocolUnavailableReason(channel)
+  if (protocolReason) return protocolReason
+  if (!modelsOf(channel).some(model => model.enabled)) return '未启用任何模型'
+}
+function protocolLabel(channel: Channel): string {
+  try { return CHANNEL_PROTOCOL_LABELS[channelProtocol(channel)] } catch { return '未知协议' }
+}
+
 function routingSelectableChannels(channels: Channel[]): Channel[] {
-  return channels.filter((channel) => isAgentProtocolProvider(channel.provider_type))
+  return channels.filter(channel => !routingUnavailableReason(channel))
 }
 
 /**
@@ -773,7 +856,10 @@ const RoleRoutingSection: React.FC<{
   channels: Channel[]
   views: CategoryRoutingRoleView[] | null
   onViewsSaved: (views: CategoryRoutingRoleView[]) => void
-}> = ({ channels, views, onViewsSaved }) => {
+  loadError: string | null
+  loading: boolean
+  onReload: () => void
+}> = ({ channels, views, onViewsSaved, loadError, loading, onReload }) => {
   const [draft, setDraft] = useState<RoleRoutingDraft>({})
   const [touchedRoles, setTouchedRoles] = useState<Set<AgentRoutingRole>>(new Set())
   const [feedback, setFeedback] = useState<{error:boolean; text:string} | null>(null)
@@ -791,8 +877,10 @@ const RoleRoutingSection: React.FC<{
         fallbackIds: [...(view.fallback_channel_ids ?? [])],
       }
     }
-    setDraft(next)
-    setTouchedRoles(new Set())
+    // Channel CRUD refreshes available choices; do not discard unsaved role edits.
+    setDraft(previous => Object.fromEntries(Object.entries(next).map(([role, row]) =>
+      [role, touchedRoles.has(role as AgentRoutingRole) && previous[role as AgentRoutingRole] ? previous[role as AgentRoutingRole] : row],
+    )))
     setDraftReady(true)
   }, [views])
 
@@ -844,8 +932,10 @@ const RoleRoutingSection: React.FC<{
     setSaving(true); setFeedback(null)
     try {
       const result = await api.channels.categoryRoutingRoleUpdate({ request_id: crypto.randomUUID(), routing })
-      if (result.ok) { onViewsSaved(result.data.views); setFeedback({error:false,text:'流程默认值已保存；未调用模型，未编辑的现役分组保持原配置。'}) }
-      else setFeedback({error:true,text:result.error.user_visible_message || result.error.message})
+      if (result.ok) { setTouchedRoles(new Set()); onViewsSaved(result.data.views); setFeedback({error:false,text:'流程默认值已保存；未调用模型，未编辑的现役分组保持原配置。'}) }
+      else setFeedback({error:true,text:result.error.message.startsWith('CATEGORY_ROUTING_INVALID:')
+        ? result.error.message.replace(/^CATEGORY_ROUTING_INVALID:\s*/, '')
+        : result.error.user_visible_message || result.error.message})
     } catch { setFeedback({error:true,text:'保存未确认，请重新载入核对，避免覆盖其他修改。'}) }
     finally { setSaving(false) }
   }
@@ -924,7 +1014,9 @@ const RoleRoutingSection: React.FC<{
         const selected = row.channelId ? channels.find((channel) => channel.id === row.channelId) : undefined
         const dangling = view.effective === 'dangling' && row.channelId === view.channel_id
         const mixed = view.effective === 'mixed'
-        const preview = selected ? previewModelName(selected) : view.model_name
+        const unresolvedMixed = mixed && !touchedRoles.has(view.role)
+        const unavailableFallbacks = row.fallbackIds.filter(id => !selectable.some(channel => channel.id === id))
+        const preview = row.channelId ? previewModelName(selectable.find(channel => channel.id === row.channelId)) : view.model_name
         const expanded = expandedRole === view.role
         return (
           <div key={view.role} data-ai-id={`role-routing-row-${view.role}`} style={{
@@ -952,7 +1044,13 @@ const RoleRoutingSection: React.FC<{
                 onChange={(event) => patchRow(view.role, { channelId: event.target.value || undefined })}
               >
                 <option value="">{mixed ? '多个渠道（选择一个渠道统一）' : `自动 / 全局默认${view.channel_name && view.effective === 'auto' ? `（${view.channel_name}）` : ''}`}</option>
-                {selectable.map((channel) => <option key={channel.id} value={channel.id}>{channel.name}（{PROVIDER_LABELS[channel.provider_type] ?? channel.provider_type}）</option>)}
+                {row.channelId && !channels.some(channel => channel.id === row.channelId) && (
+                  <option value={row.channelId} disabled>已保存渠道不可用（{selected?.name ?? row.channelId}）</option>
+                )}
+                {channels.map(channel => {
+                  const reason = routingUnavailableReason(channel)
+                  return <option key={channel.id} value={channel.id} disabled={Boolean(reason)}>{channel.name}（{reason ?? protocolLabel(channel)}）</option>
+                })}
               </select>
               <button type="button" onClick={() => setExpandedRole(expanded ? null : view.role)} style={smallButtonStyle('default')} aria-expanded={expanded} disabled={saving}>
                 备用顺序{row.fallbackIds.length > 0 ? `（${row.fallbackIds.length}）` : ''}
@@ -969,28 +1067,39 @@ const RoleRoutingSection: React.FC<{
             {dangling && (
               <div role="alert" data-ai-id={`role-routing-dangling-${view.role}`} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 'var(--font-size-xs)', color: '#92400E' }}>
                 <IconAlertTriangle size={14} />
-                <span>保存的渠道引用已失效；未明确选择会话渠道时回退默认</span>
+                <span>保存的渠道引用已失效；未明确选择会话渠道时回退默认。请检查渠道是否已删除、禁用、未启用模型或协议不支持。</span>
                 <button type="button" onClick={() => patchRow(view.role, { channelId: undefined })} style={smallButtonStyle('default')}>恢复自动</button>
               </div>
             )}
 
+            {unavailableFallbacks.length > 0 && <p role="alert">有 {unavailableFallbacks.length} 个不可用备用渠道，请展开「备用顺序」移除后保存；不会自动清空其他分组。</p>}
             {expanded && (
               <div data-ai-id={`role-routing-fallback-${view.role}`} style={{ padding: 'var(--space-3)', background: 'var(--glass-bg-soft)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-                <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', margin: 0 }}>该分组渠道故障时依次尝试的备用顺序（勾选加入，↑↓ 调整顺序）。</p>
+                <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', margin: 0 }}>{unresolvedMixed ? '旧分项配置不同，请先选择统一主渠道，或点击「统一为自动」，再编辑备用顺序，以免覆盖旧配置。' : '该分组渠道故障时依次尝试的备用顺序（勾选加入，↑↓ 调整顺序）。'}</p>
+                {unavailableFallbacks.map(id => {
+                  const channel = channels.find(candidate => candidate.id === id)
+                  const reason = !channel ? '已删除' : routingUnavailableReason(channel) ?? '不可用'
+                  const label = channel?.name ?? id
+                  return <div key={id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span>不可用备用渠道：{label}（{reason}）</span>
+                    <button type="button" aria-label={`${copy.label} 移除不可用备用 ${label}`} disabled={saving || unresolvedMixed}
+                      onClick={() => toggleFallback(view.role, id)} style={smallButtonStyle('danger')}>移除</button>
+                  </div>
+                })}
                 {selectable.map((channel) => {
                   const index = row.fallbackIds.indexOf(channel.id)
                   const checked = index >= 0
                   return (
                     <div key={channel.id} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
                       <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 'var(--font-size-xs)', flex: 1, cursor: 'pointer' }}>
-                        <input type="checkbox" checked={checked} disabled={saving} onChange={() => toggleFallback(view.role, channel.id)} />
+                        <input type="checkbox" checked={checked} disabled={saving || unresolvedMixed} onChange={() => toggleFallback(view.role, channel.id)} />
                         {channel.name}
                       </label>
                       {checked && (
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                           <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>#{index + 1}</span>
-                          <button type="button" aria-label="上移" disabled={index === 0 || saving} onClick={() => moveFallback(view.role, index, -1)} style={smallButtonStyle('default')}>↑</button>
-                          <button type="button" aria-label="下移" disabled={index === row.fallbackIds.length - 1 || saving} onClick={() => moveFallback(view.role, index, 1)} style={smallButtonStyle('default')}>↓</button>
+                          <button type="button" aria-label="上移" disabled={index === 0 || saving || unresolvedMixed} onClick={() => moveFallback(view.role, index, -1)} style={smallButtonStyle('default')}>↑</button>
+                          <button type="button" aria-label="下移" disabled={index === row.fallbackIds.length - 1 || saving || unresolvedMixed} onClick={() => moveFallback(view.role, index, 1)} style={smallButtonStyle('default')}>↓</button>
                         </span>
                       )}
                     </div>
@@ -1002,8 +1111,6 @@ const RoleRoutingSection: React.FC<{
         )
   }
 
-  if (!views && !draftReady) return null
-
   return (
     <section aria-label="流程模型路由" data-ai-id="role-routing-section" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 'var(--space-3)' }}>
@@ -1013,17 +1120,25 @@ const RoleRoutingSection: React.FC<{
             按流程环节选择默认模型；保存不会启动 Agent 或增加并行任务。
           </p>
         </div>
-        <button type="button" onClick={handleResetAll} disabled={saving} data-ai-id="role-routing-reset-all" style={smallButtonStyle('danger')}>恢复当前流程默认</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button type="button" onClick={onReload} disabled={saving || loading} data-ai-id="role-routing-reload" style={smallButtonStyle('default')}>{loading ? '读取中…' : '重新载入'}</button>
+          <button type="button" onClick={handleResetAll} disabled={saving || loading || !draftReady || Boolean(loadError)} data-ai-id="role-routing-reset-all" style={smallButtonStyle('danger')}>恢复当前流程默认</button>
+        </div>
       </div>
 
+      {loadError && <p role="alert">{loadError}</p>}
+      {!loadError && !views && <p role="status">正在读取流程模型配置…</p>}
+      {channels.length > 0 && selectable.length === 0 && (
+        <p role="alert">没有可用于角色 Agent 的渠道。请先启用渠道及至少一个模型，并选择当前 Agent 支持的协议；仅能查询模型列表不代表可执行 Agent。</p>
+      )}
       {views?.map(renderRoutingRow)}
 
-      <p style={{fontSize:'var(--font-size-xs)',color:'var(--color-text-muted)',margin:0}}>选路顺序：会话明确选择的渠道 → 此处流程默认值 → 全局默认。上方候选值不代表当前会话实际使用的模型。</p>
+      <p style={{fontSize:'var(--font-size-xs)',color:'var(--color-text-muted)',margin:0}}>选路顺序：会话明确选择的渠道 → 此处流程默认值 → 全局默认。上方候选值不代表当前会话实际使用的模型。各分组使用所选渠道中首个启用模型。保存对下一次新执行或进入阶段生效，不会热切换正在运行的任务。</p>
       <p style={{fontSize:'var(--font-size-xs)',color:'var(--color-text-muted)',margin:0}}>协作子任务由制作负责人按需安排；B 的案例设计与预算请到“验收设计”中单独配置，平台依据实际检查裁决交付。</p>
       {feedback && <p role={feedback.error ? 'alert' : 'status'}>{feedback.text}</p>}
       {views && (
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-          <button type="button" onClick={handleSave} disabled={!dirty || saving} data-ai-id="role-routing-save" style={{
+          <button type="button" onClick={handleSave} disabled={!dirty || saving || loading || Boolean(loadError)} data-ai-id="role-routing-save" style={{
             height: 32,
             padding: '0 var(--space-4)',
             fontSize: 'var(--font-size-xs)',
@@ -1066,6 +1181,9 @@ export const ChannelSettingsPage: React.FC = () => {
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
   const [permissionMode, setPermissionModeAtom] = useAtom(permissionModeAtom)
   const [routingRoleViews, setRoutingRoleViews] = useAtom(categoryRoutingRoleViewsAtom)
+  const [routingLoadError, setRoutingLoadError] = useState<string | null>(null)
+  const [routingLoading, setRoutingLoading] = useState(true)
+  const routingRequestVersion = useRef(0)
 
   // ==================== 权限模式切换 ====================
 
@@ -1089,18 +1207,30 @@ export const ChannelSettingsPage: React.FC = () => {
 
   // ==================== M5：加载三角色渠道配置视图 ====================
 
-  useEffect(() => {
+  const reloadRouting = useCallback(() => {
+    const version = ++routingRequestVersion.current
     const api = window.electronAPI
-    if (!api?.channels?.categoryRoutingRoleList) return
-    void api.channels
-      .categoryRoutingRoleList({ request_id: crypto.randomUUID() })
-      .then((result) => {
-        if(result.ok)setRoutingRoleViews(result.data.views)
+    if (!api?.channels?.categoryRoutingRoleList) {
+      setRoutingLoading(false)
+      setRoutingLoadError('角色配置接口不可用，请正常重启应用后重试。')
+      return
+    }
+    setRoutingLoading(true)
+    setRoutingLoadError(null)
+    void api.channels.categoryRoutingRoleList({ request_id: crypto.randomUUID() })
+      .then(result => {
+        if (version !== routingRequestVersion.current) return
+        if (result.ok) setRoutingRoleViews(result.data.views)
+        else setRoutingLoadError(result.error.user_visible_message || result.error.message || '角色配置读取失败，请重新载入。')
       })
-      .catch(() => {
-        // 角色配置区不可用不阻塞普通渠道管理
-      })
+      .catch(() => { if (version === routingRequestVersion.current) setRoutingLoadError('角色配置读取失败，请重新载入；原配置尚未更改。') })
+      .finally(() => { if (version === routingRequestVersion.current) setRoutingLoading(false) })
   }, [setRoutingRoleViews])
+
+  useEffect(() => {
+    reloadRouting()
+    return () => { routingRequestVersion.current += 1 }
+  }, [reloadRouting, channels])
 
   // ==================== 新增渠道 ====================
 
@@ -1327,7 +1457,9 @@ export const ChannelSettingsPage: React.FC = () => {
         </section>
 
         {/* ── M5 三角色渠道配置（向导 / 编程 / 裁判）── */}
-        <RoleRoutingSection channels={channels} views={routingRoleViews} onViewsSaved={(views) => setRoutingRoleViews(views)} />
+        <RoleRoutingSection channels={channels} views={routingRoleViews}
+          loadError={routingLoadError} loading={routingLoading} onReload={reloadRouting}
+          onViewsSaved={(views) => { routingRequestVersion.current += 1; setRoutingLoading(false); setRoutingLoadError(null); setRoutingRoleViews(views) }} />
 
         {/* ── 测试结果提示 ── */}
         {testResult && (
@@ -1493,11 +1625,12 @@ export const ChannelSettingsPage: React.FC = () => {
                     </span>
                   </div>
                   <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', margin: 0 }}>
-                    {modelsSummary(channel)}
+                    {protocolLabel(channel)} · {modelsSummary(channel)}
                     {channel.base_url && ` · ${channel.base_url}`}
                   </p>
                 </div>
 
+                {channelProtocolUnavailableReason(channel) && <p role="status" style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>{channelProtocolUnavailableReason(channel)}</p>}
                 {/* 操作按钮 */}
                 <div style={{ display: 'flex', gap: 'var(--space-2)', flexShrink: 0 }}>
                   <button
@@ -1714,6 +1847,7 @@ export const ChannelSettingsPage: React.FC = () => {
               initial={editingChannel ? {
                 name: editingChannel.name,
                 provider: editingChannel.provider_type,
+                protocol: editingChannel.protocol,
                 baseUrl: editingChannel.base_url,
                 models: editingChannel.models,
               } : undefined}

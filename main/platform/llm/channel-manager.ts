@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import type {
   Channel,
+  ChannelProtocol,
   ChannelCreateInput,
   ChannelModel,
   ChannelTestResult,
@@ -11,20 +12,19 @@ import type {
   FetchModelsResult,
   ProviderType,
 } from '../../../shared/types'
-import { ANTHROPIC_PROTOCOL_PROVIDERS, isAnthropicProtocolProvider } from '../../../shared/types'
+import { channelProtocol, isAgentChannel, CHANNEL_PROTOCOL_ENV, CHANNEL_PROTOCOL_SOURCE_ENV, PROVIDER_PROTOCOL_DEFAULTS } from '../../../shared/channel-protocol'
+import { resolveChatModelsUrl, resolveAgentAnthropicUrl, resolveAgentAnthropicModelsUrl } from './protocol-url'
+import { canReuseChannelCredential, CHANNEL_CREDENTIAL_TARGET_CHANGED } from '../../../shared/channel-config'
+import { buildAnthropicHeaders } from '../upstream/providers/anthropic-sse-adapter'
 import { getBlomaChannelsPath, getChannelsPath } from '../../../storage/config-paths'
 import { readJsonFile, writeJsonFile } from '../../../storage/json-store'
 import { decryptSecret, encryptSecret } from '../storage/safe-storage'
 import {
-  normalizeAnthropicBaseUrlForSdk,
-  resolveAnthropicMessagesUrl,
-  resolveAnthropicModelsUrl,
-  resolveOpenAIModelsUrl,
   normalizeBaseUrl,
 } from './channel-url-utils'
 import { normalizeHttpResponse, normalizeRequestError } from './channel-test-error'
 import { attachModelLimits, validModelLimit } from './model-context'
-import { ARK_CODING_PLAN_MODELS, ARK_CODING_PLAN_TEST_MODEL, PROVIDER_TEST_MODEL_PRESETS, QWEN_TOKEN_PLAN_PRESET_MODELS, XIAOMI_PRESET_MODELS, cloneModels, createPresetModelsResult, extractZhipuCodingTeamApiToken, parseZhipuTeamCredentials, resolveFirstTestModelId } from './channel-presets';
+import { ARK_CODING_PLAN_MODELS, ARK_CODING_PLAN_TEST_MODEL, PROVIDER_TEST_MODEL_PRESETS, QWEN_TOKEN_PLAN_PRESET_MODELS, XIAOMI_PRESET_MODELS, cloneModels, createPresetModelsResult, extractZhipuCodingTeamApiToken, resolveFirstTestModelId } from './channel-presets';
 
 /** SDK 子进程环境白名单：仅透传运行 SDK 所需的基础环境，避免宿主机 ANTHROPIC_/CLAUDE_ 历史配置污染 Agent 渠道。 */
 const SDK_ENV_ALLOWLIST = [
@@ -47,44 +47,30 @@ const SDK_ENV_ALLOWLIST = [
   'no_proxy',
 ] as const
 
-/**
- * 走 Anthropic Messages 协议（x-api-key 认证）的 provider 集合（消费 shared 的
- * ANTHROPIC_PROTOCOL_PROVIDERS 单一真相源；renderer 渠道下拉与 M5 路由校验共用）。
- * Bloma 运行时消费点（anthropicMessagesQuery）只拼接 `${baseUrl}/v1/messages`，
- * 因此这些 provider 的 base_url 需规范化为协议根（剥掉 /v1、/v1/messages 等后缀）。
- */
-const ANTHROPIC_PROTOCOL_SET = new Set<ProviderType>(ANTHROPIC_PROTOCOL_PROVIDERS)
+/** Legacy exports retained for callers outside this module. */
+export { isAnthropicProtocolProvider, isAgentProtocolProvider } from '../../../shared/types'
 
-// M5：从 shared re-export（保持 §5#10「channel-manager 导出判定」的既有消费口径）
-export { isAnthropicProtocolProvider }
-export { isAgentProtocolProvider } from '../../../shared/types'
-
-/**
- * 由解密后的渠道密钥构建 SDK 子进程环境（ANTHROPIC_AUTH_TOKEN/BASE_URL/MODEL + 白名单宿主环境）。
- *
- * providerType 可选：仅对 Anthropic 协议 provider 把 base_url 规范化为协议根
- * （normalizeAnthropicBaseUrlForSdk），修复 deepseek/minimax 等渠道当前
- * `base_url + /v1/messages` 拼错路径导致运行失败的问题；其他 provider 保持原样。
- */
+/** Keep legacy env keys, but carry explicit protocol and preserve the gateway base path. */
 export function buildSdkEnv(
   apiKey: string,
   baseUrl: string,
   model: string,
   providerType?: ProviderType,
   limits?: Pick<ChannelModel, 'context_window'|'max_output_tokens'>,
+  protocol?: ChannelProtocol,
 ): Record<string, string> {
   const env: Record<string, string> = {}
   for (const key of SDK_ENV_ALLOWLIST) {
     const value = (process.env as Record<string, string>)[key]
     if (value !== undefined) env[key] = value
   }
-  const effectiveBaseUrl =
-    providerType && ANTHROPIC_PROTOCOL_SET.has(providerType)
-      ? normalizeAnthropicBaseUrlForSdk(baseUrl)
-      : baseUrl
+  const resolvedProtocol = channelProtocol({ provider_type: providerType ?? 'anthropic', protocol })
+  const effectiveBaseUrl = baseUrl.trim()
   env.ANTHROPIC_AUTH_TOKEN = apiKey
   env.ANTHROPIC_BASE_URL = effectiveBaseUrl
   env.ANTHROPIC_MODEL = model
+  env[CHANNEL_PROTOCOL_ENV] = resolvedProtocol
+  env[CHANNEL_PROTOCOL_SOURCE_ENV] = protocol === undefined ? 'preset' : 'explicit'
   // provider 类型随 env 下发（2026-10-04）：主路调用方均不传 options.providerType，
   // 传输层拿不到就无法按渠道夹紧 max_tokens（zhipu 131072 硬校验，e99e6319 二次事故
   // 实锤：夹紧锁在不存在的信号上）。仅作传输层派生用途，不进请求头/子进程白名单。
@@ -104,7 +90,13 @@ interface ChannelsConfig {
  * 迭代 #3 先在渲染层加 `?? []` 防御（当时用真缺字段数据实测崩），本轮从读取源头补齐。
  */
 function normalizeChannelModels(raw: Channel): Channel {
-  return Array.isArray(raw.models) ? raw : { ...raw, models: [] }
+  if (!Array.isArray(raw.models)) return { ...raw, models: [] }
+  // Old Google fetches put displayName in `name`; repair only known fetched rows.
+  // Manual/legacy local IDs retain their existing request-name semantics.
+  if (raw.provider_type !== 'google' || raw.protocol && raw.protocol !== 'google-generate-content') return raw
+  return { ...raw, models: raw.models.map(model => model.source === 'fetched' && model.id && model.name !== model.id
+    ? { ...model, name: model.id, display_name: model.display_name ?? model.name }
+    : model) }
 }
 
 /** 整体读取归一化：`channels` 本身不是数组（手改坏文件）时降级为空列表而不是让 main 抛错。 */
@@ -177,7 +169,7 @@ export function getChannelById(id: string): Channel | undefined {
 export function getFirstEnabledChannel(): Channel | undefined {
   const channels = loadChannels().channels
   for (const channel of channels) {
-    if (!isOursChannel(channel) || !channel.enabled) continue
+    if (!isOursChannel(channel) || !channel.enabled || !isAgentChannel(channel)) continue
     try {
       decryptSecret(channel.api_key)
       return channel
@@ -206,11 +198,13 @@ function validateModelLimits(models?: ChannelModel[]): void {
 }
 export function createChannel(input: ChannelCreateInput): Channel {
   validateModelLimits(input.models)
+  channelProtocol(input)
   const config = loadChannels()
   const channel: Channel = {
     id: randomUUID(),
     name: input.name,
     provider_type: input.provider_type,
+    ...(input.protocol === undefined ? {} : { protocol: input.protocol }),
     base_url: input.base_url,
     api_key: encryptSecret(input.api_key),
     models: input.models ?? [],
@@ -232,8 +226,15 @@ export function updateChannel(channelId: string, input: ChannelUpdateInput): Cha
   if (index === -1) return undefined
 
   const existing = config.channels[index]!
+  const protocol = input.protocol === null ? undefined : input.protocol ?? existing.protocol
+  const target = { provider_type: input.provider_type ?? existing.provider_type, base_url: input.base_url ?? existing.base_url, protocol }
+  channelProtocol(target)
+  if (!input.api_key?.trim() && !canReuseChannelCredential(existing, target)) {
+    throw new Error(`VALIDATION_ERROR: ${CHANNEL_CREDENTIAL_TARGET_CHANGED}`)
+  }
   const updated: Channel = {
     ...existing,
+    protocol,
     name: input.name ?? existing.name,
     provider_type: input.provider_type ?? existing.provider_type,
     base_url: input.base_url ?? existing.base_url,
@@ -242,6 +243,7 @@ export function updateChannel(channelId: string, input: ChannelUpdateInput): Cha
     enabled: input.enabled ?? existing.enabled,
     max_tokens: input.max_tokens ?? existing.max_tokens,
   }
+  if (protocol === undefined) delete updated.protocol
   config.channels[index] = updated
   saveChannels(config)
   return redact(updated)
@@ -267,7 +269,7 @@ export function deleteChannel(channelId: string): boolean {
 const CHANNEL_TEST_TIMEOUT_MS = 15_000
 
 function withTimeout(init: RequestInit, timeoutMs = CHANNEL_TEST_TIMEOUT_MS): RequestInit {
-  return { ...init, signal: AbortSignal.timeout(timeoutMs) }
+  return { ...init, redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) }
 }
 
 function resolveTestModelId(provider: ProviderType, modelId: string | undefined, models?: ChannelModel[]): string {
@@ -291,7 +293,7 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
   }
 
   try {
-    return await testProvider(channel.provider_type, channel.base_url, apiKey, resolveTestModelId(channel.provider_type, undefined, channel.models))
+    return await testProvider(channel.provider_type, channel.base_url, apiKey, resolveTestModelId(channel.provider_type, undefined, channel.models), channel.protocol)
   } catch (error) {
     return normalizeRequestError(error)
   }
@@ -301,12 +303,13 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
  * 解析 API Key：优先用传入明文；为空时回退到已保存渠道的密钥（编辑表单不改 Key）。
  * 在 main 进程解密，明文不进入 renderer。解密失败返回 undefined（不抛错）。
  */
-function resolveApiKey(apiKey: string, channelId?: string): string | undefined {
+function resolveApiKey(apiKey: string, channelId: string | undefined, target: Pick<Channel, 'provider_type' | 'base_url'>): string | undefined {
   const trimmed = apiKey?.trim()
   if (trimmed) return trimmed
   if (!channelId) return undefined
   const channel = getChannelByIdRaw(channelId)
   if (!channel) return undefined
+  if (!canReuseChannelCredential(channel, target)) throw new Error(CHANNEL_CREDENTIAL_TARGET_CHANGED)
   try {
     return decryptSecret(channel.api_key)
   } catch {
@@ -319,29 +322,13 @@ function resolveApiKey(apiKey: string, channelId?: string): string | undefined {
  * api_key 为空时通过 channel_id 回退到已保存渠道密钥。
  */
 export async function testChannelDirect(input: ChannelDirectTestInput): Promise<ChannelTestResult> {
-  const apiKey = resolveApiKey(input.api_key, input.channel_id)
-  if (!apiKey) {
-    return { ok: false, message: '请填写 API Key 后再测试' }
-  }
   try {
-    return await testProvider(input.provider_type, input.base_url, apiKey, input.model_id)
+    const apiKey = resolveApiKey(input.api_key, input.channel_id, input)
+    if (!apiKey) return { ok: false, message: '请填写 API Key 后再测试' }
+    return await testProvider(input.provider_type, input.base_url, apiKey, input.model_id, input.protocol)
   } catch (error) {
     return normalizeRequestError(error)
   }
-}
-
-function isAnthropicProtocol(provider: ProviderType): boolean {
-  return isAnthropicProtocolProvider(provider)
-}
-
-function isOpenAIProtocol(provider: ProviderType): boolean {
-  return provider === 'openai'
-    || provider === 'openai-responses'
-    || provider === 'opencode-go-openai'
-    || provider === 'zhipu'
-    || provider === 'doubao'
-    || provider === 'qwen'
-    || provider === 'custom'
 }
 
 async function testProvider(
@@ -349,8 +336,11 @@ async function testProvider(
   baseUrl: string,
   apiKey: string,
   modelId?: string,
+  protocol?: ChannelProtocol,
 ): Promise<ChannelTestResult> {
-  if (isAnthropicProtocol(provider)) {
+  const effectiveProtocol = channelProtocol({ provider_type: provider, protocol })
+  if (effectiveProtocol === 'anthropic-messages') {
+    if (protocol !== undefined) return testAnthropicCompatible(baseUrl, apiKey, PROVIDER_PROTOCOL_DEFAULTS[provider] === effectiveProtocol ? provider : 'anthropic-compatible', 'anthropic-compatible')
     if (provider === 'deepseek') return testAnthropicMessages(baseUrl, apiKey, resolveTestModelId(provider, modelId), 'deepseek')
     if (provider === 'kimi-api') return testAnthropicMessages(baseUrl, apiKey, resolveTestModelId(provider, modelId), 'kimi-api')
     if (provider === 'xiaomi') return testXiaomiMessages(baseUrl, apiKey, resolveTestModelId(provider, modelId), 'xiaomi')
@@ -360,37 +350,26 @@ async function testProvider(
     if (provider === 'zhipu-coding-team') return testZhipuCodingTeam(apiKey, baseUrl)
     return testAnthropicCompatible(baseUrl, apiKey, provider)
   }
-  if (isOpenAIProtocol(provider)) {
+  if (effectiveProtocol === 'openai-chat-completions' || effectiveProtocol === 'openai-responses') {
     return testOpenAICompatible(baseUrl, apiKey, provider)
   }
-  if (provider === 'google') {
+  if (effectiveProtocol === 'google-generate-content') {
     return testGoogle(baseUrl, apiKey)
   }
   return { ok: false, message: `不支持的供应商: ${provider}` }
 }
 
 /**
- * Anthropic 兼容连接测试（Anthropic / DeepSeek / Kimi API / MiniMax 等）。
- * 发送极小 messages 请求，更贴近真实使用路径。
+ * Anthropic 兼容连接测试：验证目录端点认证，不声称验证了所有模型生成权限。
  */
 async function testAnthropicCompatible(
   baseUrl: string,
   apiKey: string,
   provider: ProviderType = 'anthropic',
+  urlProvider: ProviderType = provider,
 ): Promise<ChannelTestResult> {
-  const url = resolveAnthropicModelsUrl(baseUrl, provider)
-  const headers: Record<string, string> = {
-    'anthropic-version': '2023-06-01',
-  }
-  if (provider === 'kimi-coding' || provider === 'zhipu-coding') {
-    headers.Authorization = `Bearer ${extractZhipuCodingTeamApiToken(apiKey)}`
-  } else if (provider === 'minimax' || provider === 'qwen-anthropic') {
-    headers.Authorization = `Bearer ${apiKey}`
-  } else {
-    headers['x-api-key'] = apiKey
-    headers.Authorization = `Bearer ${apiKey}`
-  }
-
+  const url = resolveAgentAnthropicModelsUrl(baseUrl, urlProvider)
+  const headers = buildAnthropicHeaders(apiKey, provider)
   const response = await fetch(url, withTimeout({ method: 'GET', headers }))
   return normalizeHttpResponse(response)
 }
@@ -405,7 +384,7 @@ async function testAnthropicMessages(
   modelId: string,
   provider: 'deepseek' | 'kimi-api' | 'qwen-token-plan',
 ): Promise<ChannelTestResult> {
-  const url = resolveAnthropicMessagesUrl(baseUrl, provider)
+  const url = resolveAgentAnthropicUrl(baseUrl, provider)
   const headers: Record<string, string> = {
     'anthropic-version': '2023-06-01',
     'content-type': 'application/json',
@@ -439,7 +418,7 @@ async function testXiaomiMessages(
   modelId: string,
   provider: 'xiaomi' | 'xiaomi-token-plan',
 ): Promise<ChannelTestResult> {
-  const url = resolveAnthropicMessagesUrl(baseUrl, provider)
+  const url = resolveAgentAnthropicUrl(baseUrl, provider)
   const headers: Record<string, string> = {
     'anthropic-version': '2023-06-01',
     'content-type': 'application/json',
@@ -467,7 +446,7 @@ async function testXiaomiMessages(
  * 火山方舟 Coding Plan 没有可用的模型列表端点，改用极小 messages 请求。
  */
 async function testArkCodingPlan(baseUrl: string, apiKey: string): Promise<ChannelTestResult> {
-  const url = resolveAnthropicMessagesUrl(baseUrl, 'ark-coding-plan')
+  const url = resolveAgentAnthropicUrl(baseUrl, 'ark-coding-plan')
   const response = await fetch(url, withTimeout({
     method: 'POST',
     headers: {
@@ -487,15 +466,11 @@ async function testArkCodingPlan(baseUrl: string, apiKey: string): Promise<Chann
 }
 
 /**
- * 智谱 Coding Plan 团队版：凭据可能是三段式 secret（apiKey/organization/project），
- * 需要走额度端点验证；普通 API Token 走 Anthropic 兼容测试。
+ * 智谱 Coding Plan 团队版：复合凭据提取 Token 后实际验证目录认证。
+ * 目录连通不代表套餐额度或所有模型生成权限已经验证。
  */
 async function testZhipuCodingTeam(apiKey: string, baseUrl: string): Promise<ChannelTestResult> {
-  const teamCredentials = parseZhipuTeamCredentials(apiKey)
-  if (teamCredentials) {
-    return { ok: true, message: '智谱 Coding Plan 团队版凭据有效' }
-  }
-
+  // Parsing a structured secret proves its shape, not that the service accepts it.
   const authToken = extractZhipuCodingTeamApiToken(apiKey)
   if (!authToken) {
     return { ok: false, message: '请填写 API Token；组织 ID 和项目 ID 可选' }
@@ -512,7 +487,7 @@ async function testOpenAICompatible(
   apiKey: string,
   _provider: ProviderType = 'openai',
 ): Promise<ChannelTestResult> {
-  const url = resolveOpenAIModelsUrl(baseUrl)
+  const url = resolveChatModelsUrl(baseUrl)
   const response = await fetch(url, withTimeout({
     method: 'GET',
     headers: {
@@ -542,13 +517,12 @@ async function testGoogle(baseUrl: string, apiKey: string): Promise<ChannelTestR
  */
 export async function fetchModels(input: FetchModelsInput): Promise<FetchModelsResult> {
   const { provider_type, base_url } = input
-  const apiKey = resolveApiKey(input.api_key, input.channel_id)
-  if (!apiKey) {
-    return { success: false, message: '请填写 API Key 后再拉取模型', models: [] }
-  }
-
   try {
-    if (isAnthropicProtocol(provider_type)) {
+    const apiKey = resolveApiKey(input.api_key, input.channel_id, input)
+    if (!apiKey) return { success: false, message: '请填写 API Key 后再拉取模型', models: [] }
+    const effectiveProtocol = channelProtocol(input)
+    if (effectiveProtocol === 'anthropic-messages') {
+      if (input.protocol !== undefined) return fetchAnthropicCompatibleModels(base_url, apiKey, PROVIDER_PROTOCOL_DEFAULTS[provider_type] === effectiveProtocol ? provider_type : 'anthropic-compatible', 'anthropic-compatible')
       if (provider_type === 'deepseek') return fetchDeepSeekModels(base_url, apiKey)
       if (provider_type === 'kimi-api') return fetchKimiModels(base_url, apiKey)
       if (provider_type === 'xiaomi' || provider_type === 'xiaomi-token-plan') {
@@ -566,10 +540,10 @@ export async function fetchModels(input: FetchModelsInput): Promise<FetchModelsR
       }
       return fetchAnthropicCompatibleModels(base_url, apiKey, provider_type)
     }
-    if (isOpenAIProtocol(provider_type)) {
+    if (effectiveProtocol === 'openai-chat-completions' || effectiveProtocol === 'openai-responses') {
       return fetchOpenAICompatibleModels(base_url, apiKey, provider_type)
     }
-    if (provider_type === 'google') {
+    if (effectiveProtocol === 'google-generate-content') {
       return fetchGoogleModels(base_url, apiKey)
     }
     return { success: false, message: `不支持的供应商: ${provider_type}`, models: [] }
@@ -596,6 +570,8 @@ interface GoogleModelItem {
   displayName?: string
   description?: string
   supportedGenerationMethods?: string[]
+  inputTokenLimit?: number
+  outputTokenLimit?: number
 }
 
 /**
@@ -662,23 +638,10 @@ async function fetchAnthropicCompatibleModels(
   baseUrl: string,
   apiKey: string,
   provider: ProviderType = 'anthropic',
+  urlProvider: ProviderType = provider,
 ): Promise<FetchModelsResult> {
-  const url = resolveAnthropicModelsUrl(baseUrl, provider)
-  const headers: Record<string, string> = {
-    'anthropic-version': '2023-06-01',
-  }
-  if (provider === 'kimi-coding' || provider === 'zhipu-coding' || provider === 'zhipu-coding-team') {
-    const authToken = provider === 'zhipu-coding-team' ? extractZhipuCodingTeamApiToken(apiKey) : apiKey
-    headers.Authorization = `Bearer ${authToken}`
-  } else if (provider === 'xiaomi-token-plan') {
-    headers.Authorization = `Bearer ${apiKey}`
-  } else if (provider === 'minimax' || provider === 'qwen-anthropic') {
-    headers.Authorization = `Bearer ${apiKey}`
-  } else {
-    headers['x-api-key'] = apiKey
-    headers.Authorization = `Bearer ${apiKey}`
-  }
-
+  const url = resolveAgentAnthropicModelsUrl(baseUrl, urlProvider)
+  const headers = buildAnthropicHeaders(apiKey, provider)
   const response = await fetch(url, withTimeout({ method: 'GET', headers }))
 
   if (!response.ok) {
@@ -691,6 +654,7 @@ async function fetchAnthropicCompatibleModels(
     // name 必须是真实模型 ID（API 调用用）：display_name 是显示名，不能被当作模型名传给 API
     id: item.id,
     name: item.id,
+    ...(item.display_name ? { display_name: item.display_name } : {}),
     enabled: true,
     source: 'fetched' as const,
   }))
@@ -706,7 +670,7 @@ async function fetchOpenAICompatibleModels(
   apiKey: string,
   _provider: ProviderType = 'openai',
 ): Promise<FetchModelsResult> {
-  const url = resolveOpenAIModelsUrl(baseUrl)
+  const url = resolveChatModelsUrl(baseUrl)
   const response = await fetch(url, withTimeout({
     method: 'GET',
     headers: { Authorization: `Bearer ${apiKey}` },
@@ -744,7 +708,13 @@ async function fetchGoogleModels(baseUrl: string, apiKey: string): Promise<Fetch
 
   const models: ChannelModel[] = chatModels.map((item) => {
     const id = item.name.replace(/^models\//, '')
-    return { id, name: item.displayName || id, enabled: true, source: 'fetched' as const }
+    return {
+      id, name: id,
+      ...(item.displayName ? { display_name: item.displayName } : {}),
+      ...(validModelLimit(item.inputTokenLimit) ? { context_window: item.inputTokenLimit } : {}),
+      ...(validModelLimit(item.outputTokenLimit) ? { max_output_tokens: item.outputTokenLimit } : {}),
+      enabled: true, source: 'fetched' as const,
+    }
   })
 
   return { success: true, message: `成功获取 ${models.length} 个模型`, models }

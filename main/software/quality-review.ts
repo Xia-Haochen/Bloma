@@ -68,7 +68,7 @@ export function createQualityReview(projectId: string, parent: string, policy: R
     const execution_failed=snapshot?.state==='failed'
     return {source,digest:hash([source,ui,steps,logs,image_hash,engineering_failures,execution_failed]),image_hash,ui,steps,logs,engineering_failures,execution_failed}
   }
-  const routeIdentity=(env:Record<string,string>,providerType?:string)=>hash([env.ANTHROPIC_BASE_URL,env.ANTHROPIC_MODEL,env.ANTHROPIC_PROVIDER_TYPE,providerType])
+  const routeIdentity=(env:Record<string,string>,providerType?:string)=>hash([env.ANTHROPIC_BASE_URL,env.ANTHROPIC_MODEL,env.ANTHROPIC_PROVIDER_TYPE,env.BLOMA_CHANNEL_PROTOCOL,providerType])
   let activeRoute: string | undefined = initialEnv ? routeIdentity(initialEnv) : undefined
   let busy = false
   const exclusive = async <T>(work: () => Promise<T>): Promise<T> => {
