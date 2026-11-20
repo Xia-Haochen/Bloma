@@ -133,6 +133,8 @@ dialog::backdrop { background: #121b3466; }
 .audit-panel table { white-space: normal; }
 .audit-feedback { display: inline-flex; align-items: center; gap: 8px; color: var(--blue); font-weight: 600; }
 .audit-spinner { flex: 0 0 16px; width: 16px; height: 16px; border: 2px solid #d7e2f8; border-top-color: currentColor; border-radius: 50%; animation: audit-spin 800ms linear infinite; }
+.audit-plan, #audit-timings { margin: 8px 0; color: var(--muted); font-size: 13px; }
+#audit-session { max-width: min(42ch, 65vw); text-overflow: ellipsis; }
 @keyframes audit-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .audit-spinner { animation: none; } }
 #failure-details { margin-top: 14px; }

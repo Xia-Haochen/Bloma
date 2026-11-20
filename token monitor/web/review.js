@@ -48,6 +48,21 @@ export function needsAudit(row) {
   return category === "unknown" || outcome === "unknown";
 }
 
+export function needsSummary(row) {
+  return !failureSummary(row) && (Boolean(row.evidence.failure) || row.evidence.tools.some(tool => tool.state === "failed"));
+}
+
+export function auditDisposition(row, mode) {
+  if (row.status === "running") return "running";
+  if (row.finding && !needsSummary(row)) return "cached";
+  if (mode === "retry" && !row.auditError) return "excluded";
+  if (mode !== "retry" && row.auditError && mode !== "all") return "unknown";
+  if (mode === "pending" && !needsSummary(row) && !needsAudit(row)) return "rule";
+  const evidence = Boolean(row.evidence.text.trim()) || row.evidence.tools.some(tool =>
+    tool.target.trim() || tool.result.trim() || tool.diagnostic?.trim() || (tool.name && tool.name !== "工具调用"));
+  return evidence ? "queued" : "noEvidence";
+}
+
 export function hasFailure(row) {
   return Boolean(row.evidence.failure || row.evidence.tools.some(tool => tool.state === "failed") || row.retries?.length);
 }

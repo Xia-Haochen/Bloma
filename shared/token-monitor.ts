@@ -48,6 +48,7 @@ export interface UsageRow {
   retries: { index: number; status: string; http?: number }[]
   evidence: AuditEvidence
   finding?: AuditFinding
+  auditError?: string
 }
 export interface UsageSnapshot {
   projects: Record<string, string>
@@ -85,11 +86,28 @@ export interface AuditFinding {
   summaryModel?: string
 }
 export interface ExchangeRate { rate: number; date: string }
+export interface AuditBatch {
+  project: string
+  session: string
+  title?: string
+  index: number
+  total: number
+  requests: number
+  inputBytes: number
+  startedAt: number
+  retry: boolean
+}
 export interface AuditProgress {
   state: 'running' | 'stopping' | 'stopped' | 'completed' | 'error'
   model: string
   processed: number
   remaining: number
+  skippedNoEvidence?: number
+  unknownErrors?: number
+  skippedUnknownErrors?: number
+  lastAuditError?: string
+  activeBatch?: AuditBatch
+  batchHistory?: Array<AuditBatch & { elapsedMs: number; unresolved: number; error?: string }>
   error?: string
 }
-export interface AuditFilter { project?: string; start?: number; end?: number; model?: string; mode?: 'pending' | 'all' }
+export interface AuditFilter { project?: string; session?: string; start?: number; end?: number; model?: string; mode?: 'pending' | 'all' | 'retry' }

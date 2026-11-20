@@ -1,4 +1,4 @@
-import { categories, outcomes, review, hasFailure, hasUnreadableFailure, browserFailure, failureSummary, observedFailure, readableOutput, readableSummary } from './review.js';
+import { auditDisposition, categories, outcomes, review, hasFailure, hasUnreadableFailure, browserFailure, failureSummary, observedFailure, readableOutput, readableSummary } from './review.js';
 
 const labels = {uncached: "非缓存输入", read: "缓存读取", write: "缓存写入", output: "输出"};
 const keys = Object.keys(labels);
@@ -8,6 +8,25 @@ const number = new Intl.NumberFormat("zh-CN");
 const clock = new Intl.DateTimeFormat("zh-CN", {hour: "2-digit", minute: "2-digit", second: "2-digit"});
 const datetime = new Intl.DateTimeFormat("zh-CN", {year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"});
 const yuan = new Intl.NumberFormat("zh-CN", {style: "currency", currency: "CNY", minimumFractionDigits: 2, maximumFractionDigits: 3});
+const deepSeekTieredPricingSince = Date.parse("2026-08-16T16:00:00Z");
+// Published mainland China holiday periods, encoded as inclusive MMDD pairs.
+const chinaHolidays = {
+  2026: [[101, 103], [215, 223], [404, 406], [501, 505], [619, 621], [925, 927], [1001, 1007]],
+  2027: [[101, 103], [205, 213], [403, 405], [501, 505], [609, 609], [915, 915], [1001, 1007]],
+};
+
+function deepSeekRateTier(at) {
+  if (!Number.isFinite(at) || at < deepSeekTieredPricingSince) return undefined;
+  const date = new Date(at);
+  const day = date.getUTCDay();
+  const hour = date.getUTCHours();
+  if (day === 0 || day === 6 || !((hour >= 1 && hour < 4) || (hour >= 6 && hour < 10))) return "offPeak";
+  const holidays = chinaHolidays[date.getUTCFullYear()];
+  if (!holidays) return undefined;
+  // Both peak windows fall on the same calendar date in UTC and Beijing time.
+  const monthDay = (date.getUTCMonth() + 1) * 100 + date.getUTCDate();
+  return holidays.some(([first, last]) => monthDay >= first && monthDay <= last) ? "offPeak" : "peak";
+}
 
 function element(tag, className, value) {
   const node = document.createElement(tag);
@@ -43,6 +62,7 @@ export function mountTokenMonitor(root, transport) {
   let auditStatus = null;
   let auditCommand = null;
   let auditRevision = 0;
+  let auditSessionOptions = "";
   let moduleDrilldown = false;
   const state = {data: null, raw: "", query: {project: "", start: -Infinity, end: Infinity}, page: 0};
   const idFor = value => JSON.stringify(value);
@@ -75,8 +95,14 @@ export function mountTokenMonitor(root, transport) {
     const keysUsed = keys.filter(key => row.counts[key] > 0);
     const calc = rates => keysUsed.some(key => rates[key] == null) ? null :
       keysUsed.reduce((total, key) => total + rates[key] * row.counts[key], 0) / 1_000_000;
-    const low = calc(found.rate);
-    const high = calc(found.rate.peak ?? found.rate);
+    const {rate} = found;
+    const tier = row.provider === "DeepSeek" && rate.peak ? deepSeekRateTier(row.at) : undefined;
+    if (tier) {
+      const amount = calc(tier === "peak" ? rate.peak : rate);
+      return amount == null ? null : [amount, amount];
+    }
+    const low = calc(rate);
+    const high = calc(rate.peak ?? rate);
     return low == null || high == null ? null : [low, high];
   }
 
@@ -99,7 +125,8 @@ export function mountTokenMonitor(root, transport) {
     $("output").textContent = count(counts.output);
     $("calls").textContent = count(rows.length) + " 次模型请求";
     $("cost").textContent = priced.length ? costLabel(...amount) : "—";
-    $("cost-sub").textContent = rows.length ? "可估价 " + priced.length + " / " + rows.length + " 次请求" : "人民币 · 公开文本费率";
+    const rangeNote = amount[0] !== amount[1] ? "部分时段未确定 · " : "";
+    $("cost-sub").textContent = rows.length ? rangeNote + "可估价 " + priced.length + " / " + rows.length + " 次请求" : "人民币 · 公开文本费率";
   }
 
   function localDay(at) {
@@ -178,7 +205,9 @@ export function mountTokenMonitor(root, transport) {
   function requestReview(row) {
     const data = review(row);
     const detail = element("details", "request-audit");
-    detail.append(element("summary", "", categories[data.category] + " · " + outcomes[data.outcome]));
+    detail.append(element("summary", "", categories[data.category] + " · " + outcomes[data.outcome] +
+      (row.auditError ? " · 审查未知错误" : "")));
+    if (row.auditError) detail.append(element("p", "", "审查错误 · " + row.auditError));
     const failed = hasFailure(row);
     const summary = failed && !hasUnreadableFailure(row) ? failureSummary(row) : "";
     detail.append(element("p", "", "目的 · " + (failed ? readableSummary(row.finding?.purpose) || "详见技术详情" : data.purpose)));
@@ -384,6 +413,8 @@ export function mountTokenMonitor(root, transport) {
     renderMetrics(rows);
     renderChart();
     renderAudit(rows);
+    renderAuditSessions();
+    renderAuditPlan(rows);
     renderTurns(rows);
     if ($("prices").open) renderPrices(rows);
   }
@@ -401,16 +432,16 @@ export function mountTokenMonitor(root, transport) {
       const revision = auditRevision;
       const [data, job] = await Promise.all([transport.read(), transport.auditStatus()]);
       if (stopped) return;
-      if (!auditCommand && revision === auditRevision) {
-        auditStatus = job;
-        renderAuditStatus();
-      }
       const raw = JSON.stringify(data);
       if (raw !== state.raw) {
         state.data = data;
         setProjects();
         render();
         state.raw = raw;
+      }
+      if (!auditCommand && revision === auditRevision) {
+        auditStatus = job;
+        renderAuditStatus();
       }
       $("live").dataset.state = "ready";
       $("live").textContent = "已同步 " + clock.format(Date.now());
@@ -497,6 +528,69 @@ export function mountTokenMonitor(root, transport) {
     } catch { $("audit-model-status").textContent = "无法连接 Ollama，请启动本机服务（127.0.0.1:11434）"; }
     finally { button.disabled = false; }
   });
+
+  function renderAuditSessions() {
+    const select = $("audit-session");
+    const selected = select.value;
+    const projectFilter = state.query.project;
+    const sessions = new Map();
+    for (const row of state.data.rows) {
+      if (projectFilter && row.project !== projectFilter) continue;
+      const key = idFor(row.turn.slice(0, 2));
+      const session = sessions.get(key);
+      if (session) session.last = Math.max(session.last, row.at);
+      else sessions.set(key, {project: row.project, id: row.turn[1], last: row.at});
+    }
+    for (const turn of state.data.turns) {
+      if (turn.unlinked) continue;
+      const session = sessions.get(idFor([turn.project, turn.session]));
+      if (session && (!session.first || turn.at < session.first.at)) session.first = turn;
+    }
+    const options = [...sessions].sort(([, a], [, b]) => b.last - a.last).map(([key, session]) => {
+      const project = state.data.projects[session.project] || session.project;
+      const subject = session.first?.request.slice(0, 45) || `会话 ${session.id.slice(0, 8)}`;
+      return [key, `${project} · ${dateLabel(session.first?.at ?? session.last)} · ${subject}`];
+    });
+    if (selected && !sessions.has(selected) && (!projectFilter || JSON.parse(selected)[0] === projectFilter)) {
+      const id = JSON.parse(selected)[1];
+      options.push([selected, `会话 ${id.slice(0, 8)}（暂无记录）`]);
+    }
+    const signature = idFor(options);
+    if (signature === auditSessionOptions) return;
+    auditSessionOptions = signature;
+    select.replaceChildren(new Option("全部会话", ""), ...options.map(([key, label]) => new Option(label, key)));
+    select.value = options.some(([key]) => key === selected) ? selected : "";
+  }
+
+  function renderAuditPlan(rows) {
+    const mode = $("audit-mode").value;
+    const selected = $("audit-session").value;
+    $("audit-run").textContent = selected ? "审查选定会话" : "审查当前筛选";
+    const totals = {rule: 0, cached: 0, noEvidence: 0, queued: 0, unknown: 0, running: 0, excluded: 0};
+    for (const row of rows) {
+      if (!selected || selected === idFor(row.turn.slice(0, 2))) totals[auditDisposition(row, mode)]++;
+    }
+    const labels = [["rule", "规则已判定"], ["cached", "已有缓存"], ["noEvidence", "证据不足，跳过"], ["queued", "待模型审查"]];
+    if (totals.unknown) labels.push(["unknown", "跳过既有未知错误"]);
+    if (totals.running) labels.push(["running", "请求仍在进行"]);
+    if (totals.excluded) labels.push(["excluded", "其余调用，跳过"]);
+    $("audit-plan").textContent = labels.map(([key, label]) => label + " " + count(totals[key]) + " 条").join(" · ");
+  }
+  for (const id of ["audit-mode", "audit-session"]) {
+    $(id).addEventListener("change", () => {
+      if (state.data) renderAuditPlan(state.data.rows.filter(inRange));
+    });
+  }
+
+  const batchName = batch => [state.data?.projects[batch.project] || batch.project,
+    batch.title || batch.session.slice(0, 8), `第 ${batch.index}/${batch.total} 批`, batch.retry && "重试"].filter(Boolean).join(" · ");
+  const elapsed = milliseconds => (Math.max(0, milliseconds) / 1000).toFixed(1) + " 秒";
+  function renderBatchProgress() {
+    const batch = auditStatus?.activeBatch;
+    $("audit-batch-progress").hidden = !batch;
+    if (batch) $("audit-batch-progress").textContent = `${batchName(batch)} · 本批 ${batch.requests} 条 · 已等待 ${elapsed(Date.now() - batch.startedAt)}`;
+  }
+
   function renderAuditStatus() {
     const job = auditStatus;
     const busy = job?.state === "running" || job?.state === "stopping";
@@ -504,6 +598,12 @@ export function mountTokenMonitor(root, transport) {
     $("audit-stop").hidden = !busy;
     $("audit-stop").disabled = Boolean(auditCommand) || job?.state === "stopping";
     $("audit-spinner").hidden = !busy && !auditCommand;
+    renderBatchProgress();
+    const history = job?.batchHistory ?? [];
+    $("audit-timings").hidden = !history.length;
+    $("audit-timing-list").replaceChildren(...[...history].reverse().map(batch => element("li", "",
+      `${batchName(batch)} · ${batch.requests} 条 · 输入 ${count(batch.inputBytes)} 字节 · 耗时 ${elapsed(batch.elapsedMs)}` +
+      (batch.unresolved ? ` · ${batch.unresolved} 条未完成 · ${batch.error}` : ""))));
     if (auditCommand === "start") {
       $("audit-status").textContent = "正在启动审查…";
       return;
@@ -516,10 +616,16 @@ export function mountTokenMonitor(root, transport) {
       $("audit-status").textContent = "";
       return;
     }
+    const finished = job.unknownErrors ? "审查结束，有未知错误" :
+      job.processed || job.skippedNoEvidence || job.skippedUnknownErrors ? "审查完成" : "当前范围没有待审查的请求";
     const title = {running: "正在审查", stopping: "正在审查，将在本批结束后停止", stopped: "已停止",
-      completed: job.processed ? "审查完成" : "当前范围没有待审查的请求", error: "审查失败"};
+      completed: finished, error: "审查失败"};
     $("audit-status").textContent = [title[job.state], job.model,
-      "已处理 " + count(job.processed) + " 条", job.remaining ? "剩余 " + count(job.remaining) + " 条" : "", job.error].filter(Boolean).join(" · ");
+      "已处理 " + count(job.processed) + " 条", job.remaining ? "剩余 " + count(job.remaining) + " 条" : "",
+      job.skippedNoEvidence ? "证据不足，跳过 " + count(job.skippedNoEvidence) + " 条" : "",
+      job.unknownErrors ? "未知错误 " + count(job.unknownErrors) + " 条" : "",
+      job.skippedUnknownErrors ? "跳过既有未知错误 " + count(job.skippedUnknownErrors) + " 条" : "",
+      job.lastAuditError ? "最近错误：" + job.lastAuditError : "", job.error].filter(Boolean).join(" · ");
   }
 
   async function sendAuditCommand(action, command) {
@@ -544,7 +650,9 @@ export function mountTokenMonitor(root, transport) {
   $("audit-run").addEventListener("click", () => {
     if (auditCommand || !state.data) return;
     const {project, start, end} = state.query;
-    const filter = {project, model: $("audit-model").value, mode: $("audit-mode").value,
+    const selected = $("audit-session").value;
+    const [auditProject, session] = selected ? JSON.parse(selected) : [project];
+    const filter = {project: auditProject, ...(session ? {session} : {}), model: $("audit-model").value, mode: $("audit-mode").value,
       ...(Number.isFinite(start) ? {start} : {}), ...(Number.isFinite(end) ? {end} : {})};
     return sendAuditCommand("start", () => transport.auditStart(filter));
   });
@@ -566,9 +674,11 @@ export function mountTokenMonitor(root, transport) {
     }
   });
   load();
+  const batchClock = setInterval(renderBatchProgress, 1000);
   return () => {
     stopped = true;
     clearTimeout(timer);
+    clearInterval(batchClock);
     $("prices").close();
   };
 }
