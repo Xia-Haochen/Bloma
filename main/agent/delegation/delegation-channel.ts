@@ -5,6 +5,7 @@
  * 依赖纪律：只依赖 platform/llm（agent → platform 向下合法）；不 import agent-loop。
  */
 
+import { channelProtocolUnavailableReason } from '../../../shared/channel-protocol'
 import {
   buildSdkEnv,
   decryptApiKey,
@@ -62,6 +63,8 @@ export function resolveDelegationChannelOverride(args: {
     )
   }
 
+  const protocolError = channelProtocolUnavailableReason(channel)
+  if (protocolError) throw new DelegationChannelError(`委派渠道不可用：${protocolError}`)
   const enabledModels = listEnabledModels(channel)
   const requestedModel = args.modelId?.trim()
   const model = requestedModel
@@ -94,7 +97,7 @@ export function resolveDelegationChannelOverride(args: {
     )
   }
 
-  const env = buildSdkEnv(apiKey, channel.base_url, model.name, channel.provider_type, model)
+  const env = buildSdkEnv(apiKey, channel.base_url, model.name, channel.provider_type, model, channel.protocol)
   return {
     env,
     channelId: channel.id,

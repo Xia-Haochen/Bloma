@@ -30,9 +30,9 @@ const textOf = (value: unknown): string => typeof value === 'string' ? value : A
   ? value.map(block => block.text ?? '').join('') : JSON.stringify(value ?? '')
 
 /** Input is the fully hydrated Anthropic-shaped body used by the native agent loop. */
-export function openAiLoopBody(body: Record<string, unknown>): Record<string, unknown> {
+export function openAiLoopBody(body: Record<string, unknown>, options: { vendorThinking?: boolean } = { vendorThinking: true }): Record<string, unknown> {
   const model = String(body.model).toLowerCase()
-  if ((model === 'glm-5.3' || model === 'glm-5.3-flash') && (body.thinking as { type?: string } | undefined)?.type === 'disabled') {
+  if (options.vendorThinking && (model === 'glm-5.3' || model === 'glm-5.3-flash') && (body.thinking as { type?: string } | undefined)?.type === 'disabled') {
     // Regular API returned HTTP 400/1210: this model always thinks. Fail locally
     // rather than paying for a retry or silently changing the requested setting.
     throw new Error(`MODEL_THINKING_OFF_UNSUPPORTED: ${model} 不支持关闭思考，请选择 low、high 或 max。`)
@@ -49,7 +49,8 @@ export function openAiLoopBody(body: Record<string, unknown>): Record<string, un
     const images = blocks.filter(block => block.type === 'image').map(block => ({ type: 'image_url', image_url: {
       url: `data:${block.source?.media_type};base64,${block.source?.data}` } }))
     if (turn.role === 'assistant') {
-      messages.push({ role: 'assistant', content: text || null, ...(thinking ? { reasoning_content: thinking } : {}),
+      if (!text && !calls.length && !options.vendorThinking) continue
+      messages.push({ role: 'assistant', content: text || null, ...(options.vendorThinking && thinking ? { reasoning_content: thinking } : {}),
         ...(calls.length ? { tool_calls: calls.map(block => ({ id: block.id, type: 'function', function: { name: block.name, arguments: JSON.stringify(block.input ?? {}) } })) } : {}) })
     } else {
       // Tool results must precede any following user text.
@@ -57,8 +58,9 @@ export function openAiLoopBody(body: Record<string, unknown>): Record<string, un
       if (text || images.length) messages.push({ role: turn.role, content: images.length ? [{ type: 'text', text }, ...images] : text })
     }
   }
-  const thinking = body.thinking as { type?: string } | undefined
-  const effort = (body.output_config as { effort?: string } | undefined)?.effort
+  // Standard Chat Completions must not inherit Anthropic/vendor-only fields.
+  const thinking = options.vendorThinking ? body.thinking as { type?: string } | undefined : undefined
+  const effort = options.vendorThinking ? (body.output_config as { effort?: string } | undefined)?.effort : undefined
   return { model: body.model, max_tokens: body.max_tokens, stream: true, stream_options: { include_usage: true }, messages,
     ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
     ...(thinking ? { thinking: { type: thinking.type === 'disabled' ? 'disabled' : 'enabled' } } : {}),

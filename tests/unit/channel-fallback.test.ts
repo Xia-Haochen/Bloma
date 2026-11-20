@@ -275,3 +275,35 @@ describe('category routing × resolveChannelEnv（M5）', () => {
     expect(readDecisionLines('s-auto').filter((line) => line.includes('category_route'))).toEqual([])
   })
 })
+
+describe('Agent channel protocol consistency', () => {
+  const originalHome = process.env.PROMA_HOME
+  beforeEach(() => {
+    process.env.PROMA_HOME = mkdtempSync(join(tmpdir(), 'bloma-agent-protocol-'))
+    workingSafeStorage(); resetCategoryRoutingForTests()
+  })
+  afterEach(() => { restorePromaHome(originalHome); resetCategoryRoutingForTests() })
+
+  it('skips unsupported protocols for the global Agent default', () => {
+    createChannel({ name: 'Responses directory only', provider_type: 'openai-responses', base_url: 'https://openai.example', api_key: 'fake', models: [{ id: 'a', name: 'a', enabled: true }] })
+    const supported = seed('supported', 'deepseek')
+    expect(getFirstEnabledChannel()?.id).toBe(supported.id)
+    expect(resolveChannelEnv({ category: 'guide' }).channel?.id).toBe(supported.id)
+  })
+
+  it('does not build Agent env for an explicit unsupported or disabled channel', () => {
+    const unsupported = createChannel({ name: 'OpenAI', provider_type: 'openai-responses', base_url: 'https://openai.example', api_key: 'fake', models: [{ id: 'a', name: 'a', enabled: true }] })
+    expect(resolveChannelEnv({ channelId: unsupported.id, category: 'guide' }).unusableReason).toBe('unsupported_protocol')
+    const disabled = seed('disabled', 'deepseek')
+    updateChannel(disabled.id, { enabled: false })
+    expect(resolveChannelEnv({ channelId: disabled.id, category: 'guide' }).env).toBeUndefined()
+  })
+
+  it('skips unsupported protocols in the automatic backup chain', () => {
+    const primary = seed('primary', 'deepseek')
+    updateChannel(primary.id, { models: [] })
+    createChannel({ name: 'OpenAI', provider_type: 'openai-responses', base_url: 'https://openai.example', api_key: 'fake', models: [{ id: 'a', name: 'a', enabled: true }] })
+    const supported = seed('supported', 'kimi-api')
+    expect(resolveChannelEnv({ channelId: primary.id, category: 'guide' }).channel?.id).toBe(supported.id)
+  })
+})

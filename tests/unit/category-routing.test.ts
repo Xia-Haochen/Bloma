@@ -79,10 +79,16 @@ describe('current flow routing',()=>{
  it('rejects malformed entries without writing',()=>{
   for(const input of [{guide:'bad'},{guide:{channel_id:42}},{programming:{fallback_channel_ids:'bad'}}])expect(()=>updateCategoryRoutingRoles(input)).toThrow('CATEGORY_ROUTING_INVALID')
  })
- it('removes unavailable references and preserves disabled current choices as inactive',()=>{
-  const a=seedChannel('a');vi.spyOn(console,'warn').mockImplementation(()=>{});updateCategoryRoutingRoles({guide:{channel_id:'missing'}});expect(resolveRoutedChannelId('guide')).toBeUndefined();updateCategoryRoutingRoles({guide:{channel_id:a.id}});updateChannel(a.id,{enabled:false});expect(resolveRoutedChannelId('guide')).toBeUndefined();expect(loadCategoryRouting().guide?.channel_id).toBe(a.id)
+ it('rejects missing choices without claiming success, and preserves already-saved disabled choices as inactive',()=>{
+  const a=seedChannel('a');expect(()=>updateCategoryRoutingRoles({guide:{channel_id:'missing'}})).toThrow('CATEGORY_ROUTING_INVALID');expect(resolveRoutedChannelId('guide')).toBeUndefined();updateCategoryRoutingRoles({guide:{channel_id:a.id}});updateChannel(a.id,{enabled:false});expect(resolveRoutedChannelId('guide')).toBeUndefined();expect(loadCategoryRouting().guide?.channel_id).toBe(a.id);expect(buildCategoryRoutingRoleViews().views.find(row=>row.role==='guide')?.effective).toBe('dangling')
  })
- it('refuses unsupported provider references',()=>{vi.spyOn(console,'warn').mockImplementation(()=>{});const a=seedChannel('unsupported','openai');updateCategoryRoutingRoles({guide:{channel_id:a.id}});expect(loadCategoryRouting()).toEqual({})})
+ it('permits repairing an unavailable backup without clearing other roles',()=>{
+  const a=seedChannel('a'),b=seedChannel('b'),c=seedChannel('c');updateCategoryRoutingRoles({guide:{channel_id:a.id,fallback_channel_ids:[b.id]},programming:{channel_id:a.id}});updateChannel(b.id,{enabled:false});expect(()=>updateCategoryRoutingRoles({guide:{channel_id:c.id,fallback_channel_ids:[b.id]}})).toThrow('备用渠道');expect(loadCategoryRouting().guide?.channel_id).toBe(a.id);updateCategoryRoutingRoles({guide:{channel_id:c.id}});expect(loadCategoryRouting()).toEqual({guide:{channel_id:c.id},sketch:{channel_id:a.id},mvp:{channel_id:a.id}})
+ })
+ it('refuses unsupported provider references without silently stripping the selection',()=>{const a=seedChannel('unsupported','openai-responses');expect(()=>updateCategoryRoutingRoles({guide:{channel_id:a.id}})).toThrow('当前 Agent 尚不支持');expect(loadCategoryRouting()).toEqual({})})
+ it('validates every selected role and backup atomically before persisting',()=>{
+  const a=seedChannel('a'),b=seedChannel('b');updateCategoryRoutingRoles({guide:{channel_id:a.id}});updateChannel(b.id,{models:[]});expect(()=>updateCategoryRoutingRoles({guide:{channel_id:b.id},programming:{channel_id:a.id}})).toThrow('没有启用的模型');expect(loadCategoryRouting()).toEqual({guide:{channel_id:a.id}});expect(()=>updateCategoryRoutingRoles({guide:{fallback_channel_ids:['missing']}})).toThrow('CATEGORY_ROUTING_INVALID')
+ })
  it('persists and reloads current route values',()=>{
   const a=seedChannel('a');updateCategoryRoutingRoles({programming:{channel_id:a.id}});resetCategoryRoutingForTests();expect(resolveRoutedChannelId('sketch')).toBe(a.id);expect(buildCategoryRoutingRoleViews().version).toBe(3)
  })

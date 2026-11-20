@@ -20,30 +20,16 @@ import { isThinkingLogEnabled, logThinking } from '../../../agent/loop/thinking-
 import { extractErrorMessage } from '../../llm/channel-test-error'
 import { buildThinkingFragment } from '../../../../shared/reasoning-profile'
 import type { ConversationTurn, SDKQueryOptions } from '../../../orchestration/orchestrator'
-import type { MessageContentBlock, ProviderType, SDKMessage } from '../../../../shared/types'
-import { ANTHROPIC_SSE_ADAPTER, buildAnthropicHeaders } from './anthropic-sse-adapter';
-import { normalizeAnthropicBaseUrl, resolveAnthropicMessagesUrl } from './url-utils'
+import type { MessageContentBlock, ProviderType, ChannelProtocol, SDKMessage } from '../../../../shared/types'
+import { agentProtocolTransport, CHANNEL_PROTOCOL_ENV } from './agent-protocol-registry'
+import { CHANNEL_PROTOCOL_SOURCE_ENV } from '../../../../shared/channel-protocol'
 import { streamSSE, HTTPError } from './sse-reader'
 import { capMaxTokensForProvider } from '../../llm/model-resolution'
 import { accountSdkQuery } from '../../llm/request-ledger'
-import { OPENAI_LOOP_ADAPTER, openAiLoopBody } from './openai-loop-protocol'
 import { experimentOutputTokens } from '../../llm/experiment-output-limit'
+import { capConfiguredOutputTokens } from '../../llm/model-context'
 
 /** 开关已删除（2026-10-01 开关面收敛批）：providers 传输路径为唯一实现。 */
-/**
- * Bloma 语义的 Messages URL：env 的 base 是协议根（SDK 根语义，channel-manager 已
- * 规范化）。上游 resolveAnthropicMessagesUrl 对 anthropic-compatible「原样使用」是
- * 聊天侧「用户填完整端点」语义——对 SDK 根语义的 base 会丢 /v1/messages。此处对
- * 兼容类回退 normalizeAnthropicBaseUrl + '/messages'，与旧路径拼接语义一致；其余
- * provider 走上游差异化解析（deepseek/kimi/zhipu 等版本化协议根 → /v1/messages）。
- */
-function resolveLoopMessagesUrl(baseUrl: string, providerType: ProviderType): string {
-  if (providerType === 'anthropic-compatible' || providerType === 'custom') {
-    return `${normalizeAnthropicBaseUrl(baseUrl)}/messages`
-  }
-  return resolveAnthropicMessagesUrl(baseUrl, providerType)
-}
-
 /** 旧路径 extractText 的镜像（orchestrator 私有函数，此处内联避免循环依赖）。 */
 function extractText(blocks: MessageContentBlock[]): string {
   const texts: string[] = []
@@ -54,8 +40,9 @@ function extractText(blocks: MessageContentBlock[]): string {
 }
 
 export async function* anthropicMessagesQueryViaProviders(prompt: string, options: SDKQueryOptions): AsyncGenerator<SDKMessage> {
-  yield* accountSdkQuery(anthropicMessagesQueryViaProvidersInner, prompt,
-    { ...options, maxTokens: experimentOutputTokens(options.maxTokens) })
+  // Clamp before request accounting, so admission sees the same limit sent on the wire.
+  const maxTokens = capConfiguredOutputTokens(options.env, experimentOutputTokens(options.maxTokens) ?? 640000)
+  yield* accountSdkQuery(anthropicMessagesQueryViaProvidersInner, prompt, { ...options, maxTokens })
 }
 async function* anthropicMessagesQueryViaProvidersInner(prompt: string, options: SDKQueryOptions): AsyncGenerator<SDKMessage> {
   if (!options.env.PATH && !options.env.Path) throw new Error('SDK env missing PATH')
@@ -65,14 +52,10 @@ async function* anthropicMessagesQueryViaProvidersInner(prompt: string, options:
     throw new Error('CHANNEL_NOT_FOUND: configure a model channel before using the SDK')
   }
   const baseUrl = (options.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/+$/, '')
-  // provider 信号（2026-10-04 双事故修正）：主路调用方均不传 options.providerType，缺省
-  // 'anthropic' 会让带路径 base（如 open.bigmodel.cn/api/anthropic）漏拼 /v1 ——命中
-  // zhipu 网关「200 包 404」空响应（60~150ms 零事件，e99e6319/48a48b1d 两晚事故真因）。
-  // 改以 env 携带的 ANTHROPIC_PROVIDER_TYPE 兑底（buildSdkEnv 单一工厂下发）：URL/头部/
-  // thinking/max_tokens 夹紧四项全部拿到真实渠道类型。三渠道均已探针实测。
-  const providerType = (options.providerType as ProviderType | undefined)
-    ?? (options.env.ANTHROPIC_PROVIDER_TYPE as ProviderType | undefined)
-    ?? 'anthropic'
+  // An explicit channel env is authoritative, including across runtime fallback.
+  // Old direct callers without protocol retain the historical options-provider override.
+  const envProvider = options.env.ANTHROPIC_PROVIDER_TYPE as ProviderType | undefined
+  const providerType = (options.env[CHANNEL_PROTOCOL_ENV] ? envProvider ?? options.providerType : options.providerType ?? envProvider) as ProviderType | undefined ?? 'anthropic'
 
   // ---- 请求体构建（旧路径镜像：system 提取 / 图片水合 / thinking fragment） ----
   const history = options.messages ?? options.history ?? []
@@ -117,40 +100,34 @@ async function* anthropicMessagesQueryViaProvidersInner(prompt: string, options:
   if (options.temperature !== undefined) body.temperature = options.temperature
   if (systemText) body.system = systemText
   if (options.tools?.length) body.tools = options.tools
-  // Flash requires thinking: keep its effort protocol even when debug logging is on.
-  const thinkingRequired = model.toLowerCase() === 'glm-5.3-flash'
+  const hasImages = JSON.stringify(messages).includes('"type":"image"')
+  const transport = agentProtocolTransport({ provider: providerType, protocol: options.env[CHANNEL_PROTOCOL_ENV] as ChannelProtocol | undefined,
+    protocolSource: options.env[CHANNEL_PROTOCOL_SOURCE_ENV], baseUrl, apiKey, hasImages })
+  // Vendor reasoning rules must never reject a standard Chat gateway by model name.
+  const thinkingRequired = transport.thinkingControls && model.toLowerCase() === 'glm-5.3-flash'
   const experimentThinking = process.env.BLOMA_EXPERIMENT_THINKING === 'high' ? 'high' : undefined
-  if (showThinking && !thinkingRequired && !experimentThinking) {
-    const devFragment = buildThinkingFragment(model, providerType, 'off')
-    if (devFragment.omit) {
-      console.warn('[providers-query] omit 渠道忽略 BLOMA_SHOW_THINKING（thinking 字段会 400）')
+  if (transport.thinkingControls) {
+    if (showThinking && !thinkingRequired && !experimentThinking) {
+      const devFragment = buildThinkingFragment(model, providerType, 'off')
+      if (devFragment.omit) {
+        console.warn('[providers-query] omit 渠道忽略 BLOMA_SHOW_THINKING（thinking 字段会 400）')
+      } else {
+        const maxTokens = options.maxTokens ?? 640000
+        const budget = Math.min(1024, Math.floor(maxTokens / 2))
+        body.thinking = { type: 'enabled', budget_tokens: Math.max(256, budget) }
+      }
     } else {
-      const maxTokens = options.maxTokens ?? 640000
-      const budget = Math.min(1024, Math.floor(maxTokens / 2))
-      body.thinking = { type: 'enabled', budget_tokens: Math.max(256, budget) }
-    }
-  } else {
-    const fragment = buildThinkingFragment(model, providerType, experimentThinking ?? options.thinkingLevel ?? (thinkingRequired ? 'high' : 'off'))
-    if (!fragment.omit) {
-      if (fragment.thinking) body.thinking = fragment.thinking
-      if (fragment.output_config) body.output_config = fragment.output_config
+      const fragment = buildThinkingFragment(model, providerType, experimentThinking ?? options.thinkingLevel ?? (thinkingRequired ? 'high' : 'off'))
+      if (!fragment.omit) {
+        if (fragment.thinking) body.thinking = fragment.thinking
+        if (fragment.output_config) body.output_config = fragment.output_config
+      }
     }
   }
-
-  const hasImages = JSON.stringify(body.messages).includes('"type":"image"')
-  // DeepSeek documents image input on its OpenAI endpoint. Keep text requests unchanged.
-  const deepseekVision = providerType === 'deepseek' && hasImages
-  const openai = providerType === 'zhipu' || deepseekVision
-  const openaiBase = deepseekVision ? baseUrl.replace(/\/anthropic(?:\/v1)?$/, '') : baseUrl
-  const url = openai ? `${openaiBase.replace(/\/chat\/completions$/, '')}/chat/completions` : resolveLoopMessagesUrl(baseUrl, providerType)
   const makeRequest = (): { url: string; headers: Record<string, string>; body: string } => {
     // 服务端硬上限夹紧（2026-10-03 zhipu 实测 131072，超限 400 code 1210）：唯一夹紧点在出口
     body.max_tokens = capMaxTokensForProvider(options.maxTokens ?? 640000, providerType, model)
-    return {
-      url,
-      headers: openai ? { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' } : buildAnthropicHeaders(apiKey, providerType),
-      body: JSON.stringify(openai ? openAiLoopBody(body) : body),
-    }
+    return transport.request(body)
   }
 
   // ---- 事件桥：streamSSE 回调 → AsyncGenerator 实时增量（UI 流式依赖逐段 yield） ----
@@ -175,7 +152,7 @@ async function* anthropicMessagesQueryViaProvidersInner(prompt: string, options:
         requestGuard: options.requestGuard,
         monetaryPolicyPath: options.monetaryPolicyPath,
         request: makeRequest(),
-        adapter: openai ? OPENAI_LOOP_ADAPTER : ANTHROPIC_SSE_ADAPTER,
+        adapter: transport.stream,
         signal: options.signal,
         timeoutMs: options.responseHeaderTimeoutMs,
         onAttempt: options.onTransportAttempt,
@@ -215,7 +192,7 @@ async function* anthropicMessagesQueryViaProvidersInner(prompt: string, options:
       // （HTTP 层失败先于流），重试无双发风险。
       if (error instanceof HTTPError && error.status === 400) {
         const detail = extractErrorMessage(error.message)
-      const thinkingRejected = !experimentThinking && !thinkingRequired && (body.thinking as { type?: string } | undefined) !== undefined
+        const thinkingRejected = transport.thinkingControls && !experimentThinking && !thinkingRequired && (body.thinking as { type?: string } | undefined) !== undefined
           && /thinking|reasoning|effort|output_config/i.test(detail)
         const imageRejected = JSON.stringify(body.messages ?? []).includes('"type":"image"')
           && /image|multimodal|vision|多模态/i.test(detail)

@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SoftwareModelSettings, SoftwareModelSettingsSave } from '../../shared/types'
-import { isAgentProtocolProvider } from '../../shared/types'
+import { isAgentChannel } from '../../shared/channel-protocol'
 import { getPromaHome } from '../../storage/config-paths'
 import { writeTextFileAtomic } from '../../storage/json-store'
 import { listChannels, getChannelByIdRaw } from '../platform/llm/channel-manager'
@@ -17,7 +17,7 @@ export function softwareModelSettings(projectId: string): SoftwareModelSettings 
   const project = findProject(projectId), policy = readIndependentPolicy(projectId)
   let lock_reason: string | undefined
   try { assertIndependentPolicyMutable(projectId) } catch (error) { lock_reason = String(error) }
-  const channels = listChannels().filter(channel => channel.enabled && isAgentProtocolProvider(channel.provider_type)).map(channel => ({ id: channel.id, name: channel.name,
+  const channels = listChannels().filter(channel => channel.enabled && isAgentChannel(channel)).map(channel => ({ id: channel.id, name: channel.name,
     models: channel.models.filter(model => model.enabled).map(model => model.name) }))
   const result: SoftwareModelSettings = { project_id: projectId, variant: policy?.enabled ? 'independent' : 'single',
     revision: digest([project.lean_operation_id, independentPolicyDigest(projectId), lock_reason, channels]),
@@ -56,7 +56,7 @@ export function saveSoftwareModelSettings(input: SoftwareModelSettingsSave): Sof
   }
   if (input.variant !== 'independent' || input.authorize_budget !== true) throw Error('请明确确认本项目 B 模型的预算授权。')
   const channel = typeof input.channel_id === 'string' && getChannelByIdRaw(input.channel_id)
-  if (!channel || !channel.enabled || !isAgentProtocolProvider(channel.provider_type) || !channel.models.some(model => model.enabled && model.name === input.model)) throw Error('请选择已启用且支持当前协议的渠道和模型。')
+  if (!channel || !channel.enabled || !isAgentChannel(channel) || !channel.models.some(model => model.enabled && model.name === input.model)) throw Error('请选择已启用且支持当前协议的渠道和模型。')
   const rate = input.budget
   if (!rate || !Number.isFinite(rate.cap_rmb) || rate.cap_rmb <= 0 || rate.cap_rmb > 10000
     || !Number.isSafeInteger(rate.context_tokens) || rate.context_tokens < 1 || rate.context_tokens > 2_000_000

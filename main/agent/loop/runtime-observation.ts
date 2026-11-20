@@ -1,3 +1,5 @@
+import { channelProtocol } from '../../../shared/channel-protocol'
+import type { ChannelProtocol, ProviderType } from '../../../shared/types'
 import { loopThinking } from './loop-thinking'
 import { createHash } from 'node:crypto'
 import { readFileSync, existsSync } from 'node:fs'
@@ -15,7 +17,7 @@ export interface RuntimeObservation {
   request_id: string
   role: string
   runtime: { engine: 'pi'; packages: Record<string, string>; adapter_sha256: string; node: string; electron: string; platform: string; arch: string }
-  route: { model: string; provider: string; endpoint_origin: string; endpoint_path_sha256: string }
+  route: { model: string; provider: string; protocol?: string; endpoint_origin: string; endpoint_path_sha256: string }
   settings: { contextWindow: number; reserveTokens: number; keepRecentTokens: number; maxTokens: number; maxTurns: number; thinking: string; temperature: number | null; tool_execution: 'sequential'; permission_mode: string; retry: typeof PI_RETRY_POLICY }
   tools_sha256: string
   prompt_sha256: string
@@ -59,8 +61,10 @@ const runtime = { engine: 'pi' as const, packages: Object.fromEntries(['pi-codin
 export function observePiRuntime(input: AgentLoopInput, skills: { names: string[]; content: string; available?:string[];catalogHash?:string }, memory: string, contextPolicy: typeof PI_CONTEXT_POLICY | import('../../platform/llm/model-context').ModelContextPolicy = PI_CONTEXT_POLICY): RuntimeObservation {
   let origin = 'unknown', endpointPath = 'unknown'
   try { const url = new URL(input.env.ANTHROPIC_BASE_URL); origin = url.origin; endpointPath = runtimeHash(url.pathname) } catch { /* unknown is never comparable */ }
+  let protocol = 'unknown'
+  try { protocol = channelProtocol({ provider_type: (input.env.ANTHROPIC_PROVIDER_TYPE ?? input.providerType ?? 'anthropic') as ProviderType, protocol: input.env.BLOMA_CHANNEL_PROTOCOL as ChannelProtocol | undefined }) } catch { /* fail closed in transport */ }
   return { version: 1, session_id: input.sessionId, request_id: input.requestId, role: input.accountingRole ?? 'orchestrator', runtime,
-    route: { model: input.env.ANTHROPIC_MODEL || 'unknown', provider: input.providerType ?? input.env.ANTHROPIC_PROVIDER_TYPE ?? 'unknown', endpoint_origin: origin, endpoint_path_sha256: endpointPath },
+    route: { protocol, model: input.env.ANTHROPIC_MODEL || 'unknown', provider: input.providerType ?? input.env.ANTHROPIC_PROVIDER_TYPE ?? 'unknown', endpoint_origin: origin, endpoint_path_sha256: endpointPath },
     settings: { ...contextPolicy, maxTokens: input.maxTokens, maxTurns: input.maxTurns,
       thinking: loopThinking(input), temperature: input.temperature ?? null, tool_execution: 'sequential',permission_mode:input.permissionMode,retry:PI_RETRY_POLICY },
     tools_sha256: runtimeHash(input.tools.map(tool => ({ name: tool.name, description: tool.description, schema: tool.input_schema }))),

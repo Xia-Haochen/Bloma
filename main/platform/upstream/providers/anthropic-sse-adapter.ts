@@ -8,13 +8,14 @@
  *    agent 形态消息由 loop-provider-query 自行构建请求体；
  * 2. parseSSELine 增补 usage 提取（message_start / message_delta）——上游聊天层
  *    不消费流内 usage，Bloma 用量核算（压缩触发/埋点）依赖。
- * 3. 认证头裁剪 zhipu-coding-team 的团队凭据拆包（Bloma 渠道无该凭据形态，直发 Bearer）。
+ * 3. 团队凭据复用 Bloma 的结构化 secret 解析器，仅发送实际 API Token。
  */
 
 import type { ProviderType } from '../../../../shared/types'
 import type { StreamAdapter, StreamEvent } from './types'
 import { resolveAnthropicMessagesUrl } from './url-utils'
 import { getPromaUserAgent } from './user-agent'
+import { extractZhipuCodingTeamApiToken } from '../../llm/channel-presets'
 
 /** Anthropic SSE 事件（上游原样） */
 interface AnthropicSSEEvent {
@@ -44,7 +45,7 @@ interface AnthropicSSEEvent {
 }
 
 /**
- * 构造请求头（上游 buildHeaders 原样，差异见文件头注释③）。
+ * 构造请求头，供真实推理与渠道测试/目录查询共用。
  *
  * Kimi Coding Plan 要求：只使用 Bearer（服务端校验 User-Agent 白名单）。
  */
@@ -54,7 +55,8 @@ export function buildAnthropicHeaders(apiKey: string, providerType: ProviderType
     'content-type': 'application/json',
   }
   if (providerType === 'kimi-coding' || providerType === 'zhipu-coding' || providerType === 'zhipu-coding-team') {
-    base['Authorization'] = `Bearer ${apiKey}`
+    const token = providerType === 'zhipu-coding-team' ? extractZhipuCodingTeamApiToken(apiKey) : apiKey
+    base['Authorization'] = `Bearer ${token}`
     base['User-Agent'] = getPromaUserAgent()
     return base
   }

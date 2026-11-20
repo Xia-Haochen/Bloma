@@ -7,9 +7,10 @@
 
 import React from 'react'
 import { createStore, Provider } from 'jotai'
-import { cleanup, configure, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, configure, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChannelSettingsPage } from '../../renderer/components/ChannelSettingsPage'
+import { resetChannelsFetchFlagForTests } from '../../renderer/components/atoms-sprint2'
 
 configure({ testIdAttribute: 'data-ai-id' })
 
@@ -28,6 +29,7 @@ let store: ReturnType<typeof createStore>
 function mountWithChannels(existing: unknown[] = []): void {
   // 每用例一 个 fresh Jotai store：channelsListAtom 是全局原子，不隔离会把上一例创建的渠道泄漏进下一例
   store = createStore()
+  resetChannelsFetchFlagForTests()
   api = {
     list: vi.fn().mockResolvedValue({ ok: true, data: existing }),
     create: vi.fn().mockImplementation((input: Record<string, unknown>) =>
@@ -201,5 +203,121 @@ describe('渠道模型点选列表（勾选 / 过滤 / 全选清空 / 持久化 
     const models = api.create.mock.calls[0][0].models as Array<{ name: string; enabled: boolean }>
     expect(models.map((m) => m.name)).toEqual(['a', 'b'])
     expect(models.find((m) => m.name === 'b')?.enabled).toBe(false)
+  })
+})
+
+// Upstream alignment regressions use fake IPC only: no credentials or paid calls.
+describe('model configuration consistency', () => {
+  afterEach(() => {
+    delete (window as unknown as { electronAPI?: unknown }).electronAPI
+    cleanup()
+  })
+
+  it('saves maximum output separately from context and keeps fetched metadata', async () => {
+    mountWithChannels(); await openCreateForm(); fillRequired()
+    api.fetchModels.mockResolvedValue({ ok: true, data: { success: true, models: [{ id: 'api-model', name: 'api-model', display_name: 'Friendly Model', context_window: 1048576, max_output_tokens: 8192, supports_tools: false, enabled: true }] } })
+    fireEvent.click(screen.getByRole('button', { name: /拉取模型/ }))
+    await screen.findByTestId('channel-model-api-model')
+    expect((screen.getByLabelText('api-model 上下文窗口') as HTMLInputElement).value).toBe('1048576')
+    expect(screen.getByText('Friendly Model')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('api-model 最大输出'), { target: { value: '4096' } })
+    fireEvent.click(screen.getByRole('button', { name: /保存渠道/ }))
+    await waitFor(() => expect(api.create).toHaveBeenCalled())
+    expect(api.create.mock.calls[0][0].models[0]).toMatchObject({ name: 'api-model', display_name: 'Friendly Model', context_window: 1048576, max_output_tokens: 4096, supports_tools: false })
+  })
+
+  it('shows inner fetch failure instead of replacing it with a generic empty-list message', async () => {
+    mountWithChannels(); await openCreateForm(); fillRequired(); await addModels('keep-me')
+    api.fetchModels.mockResolvedValue({ ok: true, data: { success: false, message: '供应商拒绝访问，请检查权限', models: [] } })
+    fireEvent.click(screen.getByRole('button', { name: /拉取模型/ }))
+    expect(await screen.findByText('供应商拒绝访问，请检查权限')).toBeTruthy()
+    expect(screen.getByTestId('channel-model-keep-me')).toBeTruthy()
+  })
+
+  it('switches default URL and clears old models and results when provider changes', async () => {
+    mountWithChannels(); await openCreateForm(); fillRequired(); await addModels('old-model')
+    // First switch sets a default URL. Second switch must not retain that old default.
+    const provider = screen.getAllByRole('combobox')[0]!
+    fireEvent.change(provider, { target: { value: 'openai' } })
+    fireEvent.change(provider, { target: { value: 'google' } })
+    const url = screen.getByDisplayValue('https://generativelanguage.googleapis.com')
+    expect(url).toBeTruthy()
+    expect(screen.queryByTestId('channel-model-old-model')).toBeNull()
+    expect((screen.getByPlaceholderText('sk-…') as HTMLInputElement).value).toBe('')
+  })
+
+  it('discards stale directory responses after changing the service URL', async () => {
+    mountWithChannels(); await openCreateForm(); fillRequired()
+    let resolve!: (value: unknown) => void
+    api.fetchModels.mockReturnValue(new Promise(r => { resolve = r }))
+    fireEvent.click(screen.getByRole('button', { name: /拉取模型/ }))
+    const url = screen.getByPlaceholderText(/留空使用/)
+    fireEvent.change(url, { target: { value: 'https://new.example' } })
+    resolve({ ok: true, data: { success: true, models: [{ id: 'stale', name: 'stale', enabled: true }] } })
+    await waitFor(() => expect(screen.getByRole('button', { name: /拉取模型/ }).textContent).toContain('拉取模型'))
+    expect(screen.queryByTestId('channel-model-stale')).toBeNull()
+  })
+
+  it('does not allow blank saved credentials to be used on a changed host', async () => {
+    mountWithChannels([{ id: 'saved', name: 'Saved', provider_type: 'anthropic', base_url: 'https://saved.example', api_key: '***', enabled: true, models: [] }])
+    fireEvent.click(await screen.findByTitle('编辑渠道'))
+    fireEvent.change(screen.getByDisplayValue('https://saved.example'), { target: { value: 'https://new.example' } })
+    const save = screen.getByRole('button', { name: /保存修改/ }) as HTMLButtonElement
+    expect((within(save.closest('form')!).getByRole('button', { name: '测试连接' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(save.disabled).toBe(true)
+    expect(screen.getByText(/重新填写 API Key/)).toBeTruthy()
+  })
+})
+
+describe('explicit protocol editor', () => {
+  afterEach(() => { cleanup(); delete (window as unknown as { electronAPI?: unknown }).electronAPI })
+  it('passes the same explicit protocol to test, directory and create requests', async () => {
+    mountWithChannels(); await openCreateForm()
+    fireEvent.change(screen.getByLabelText('模型提供商'), { target: { value: 'custom' } }); fillRequired(); await addModels('free-form-model')
+    fireEvent.change(screen.getByLabelText('服务地址'), { target: { value: 'https://gateway.example/v2' } })
+    fireEvent.change(screen.getByLabelText('请求协议'), { target: { value: 'anthropic-messages' } })
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+    await waitFor(() => expect(api.testDirect).toHaveBeenCalledOnce())
+    fireEvent.click(screen.getByRole('button', { name: '拉取模型' }))
+    await waitFor(() => expect(api.fetchModels).toHaveBeenCalledOnce())
+    fireEvent.click(screen.getByRole('button', { name: '保存渠道' }))
+    await waitFor(() => expect(api.create).toHaveBeenCalledOnce())
+    expect(api.testDirect.mock.calls[0]![0].input.protocol).toBe('anthropic-messages')
+    expect(api.fetchModels.mock.calls[0]![0].input.protocol).toBe('anthropic-messages')
+    expect(api.create.mock.calls[0]![0].protocol).toBe('anthropic-messages')
+  })
+  it('reads a saved override and can clear it back to provider default', async () => {
+    mountWithChannels([{ id: 'saved', name: 'Saved', provider_type: 'custom', protocol: 'anthropic-messages', base_url: 'https://saved.example', api_key: '***', enabled: true, models: [] }])
+    fireEvent.click(await screen.findByTitle('编辑渠道'))
+    expect((screen.getByLabelText('请求协议') as HTMLSelectElement).value).toBe('anthropic-messages')
+    fireEvent.change(screen.getByLabelText('请求协议'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存修改' }))
+    await waitFor(() => expect(api.update).toHaveBeenCalledOnce())
+    expect(api.update.mock.calls[0]![0].input.protocol).toBe(null)
+  })
+  it('invalidates an in-flight directory response when the protocol changes', async () => {
+    mountWithChannels(); await openCreateForm(); fillRequired()
+    let resolve!: (value: unknown) => void
+    api.fetchModels.mockReturnValue(new Promise(done => { resolve = done }))
+    fireEvent.click(screen.getByRole('button', { name: '拉取模型' }))
+    fireEvent.change(screen.getByLabelText('请求协议'), { target: { value: 'openai-chat-completions' } })
+    resolve({ ok: true, data: { success: true, models: [{ id: 'stale', name: 'stale', enabled: true }] } })
+    await waitFor(() => expect(screen.getByRole('button', { name: '拉取模型' }).textContent).toContain('拉取模型'))
+    expect(screen.queryByTestId('channel-model-stale')).toBeNull()
+  })
+})
+
+describe('connection test model identity', () => {
+  afterEach(() => { cleanup(); delete (window as unknown as { electronAPI?: unknown }).electronAPI })
+  it('discards a model-specific probe result after the enabled model changes', async () => {
+    mountWithChannels(); await openCreateForm(); fillRequired(); await addModels('model-a,model-b')
+    let resolve!: (value: unknown) => void
+    api.testDirect.mockReturnValue(new Promise(done => { resolve = done }))
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+    expect(api.testDirect.mock.calls[0]![0].input.model_id).toBe('model-a')
+    fireEvent.click(screen.getByTestId('channel-model-model-a'))
+    resolve({ ok: true, data: { ok: true, message: 'stale-model-a-success' } })
+    await waitFor(() => expect((screen.getByRole('button', { name: '测试连接' }) as HTMLButtonElement).disabled).toBe(false))
+    expect(screen.queryByText('stale-model-a-success')).toBeNull()
   })
 })

@@ -17,6 +17,7 @@ import type { AgentEvent, AgentSendMessageInput, AgentSendMessageResult, SDKMess
 
 export { buildSdkEnv } from '../../platform/llm/channel-manager'
 import { resolveChannelEnv } from '../../platform/llm/runtime-fallback';
+import { categoryForExecution } from '../../platform/llm/execution-routing'
 import { categoryForStage, categoryTemperature } from '../../platform/llm/model-resolution'
 import { handleGuideMessage } from '../../guide/guide-agent-service'
 import { handleDesktopDispatchMessage, isDesktopLineActive } from '../../desktop/desktop-route';
@@ -100,8 +101,11 @@ export async function runAgent(input: AgentSendMessageInput): Promise<AgentSendM
     // 权威项目阶段（工作项 1）：以项目存储为准，渲染端上报阶段仅为回退。
     // 前移到渠道解析之前——类别路由（§6.4）需要按阶段选文档类别。
     let authoritativeStage: WorkflowStage = input.current_stage
+    let executionCategory = categoryForStage(authoritativeStage)
     try {
-      authoritativeStage = findProject(input.project_id).current_stage
+      const project = findProject(input.project_id)
+      authoritativeStage = project.current_stage
+      executionCategory = categoryForExecution(project)
     } catch {
       // 项目索引缺失（如测试环境）时退回渲染端上报的阶段
     }
@@ -111,14 +115,14 @@ export async function runAgent(input: AgentSendMessageInput): Promise<AgentSendM
     // 渠道（切换已落决策日志），无备用才降级。env 携带回退上下文供请求期被动切换。
     const resolution = resolveChannelEnv({
       channelId: input.channel_id,
-      category: categoryForStage(authoritativeStage),
+      category: executionCategory,
       projectId: input.project_id,
       sessionId: input.session_id,
     })
     const channel = resolution.channel
     const env = resolution.env
     if (env) {
-      console.debug?.(`[runAgent] channel ${channel?.id} (${channel?.name}) 解析成功（类别 ${categoryForStage(authoritativeStage)}）`)
+      console.debug?.(`[runAgent] channel ${channel?.id} (${channel?.name}) 解析成功（类别 ${executionCategory}）`)
     } else if (resolution.unusableReason === 'no_channel') {
       // 无可用渠道（无启用渠道 / 密钥均不可解密且无备用）：引导回规则路由、草图落模板，
       // 全链路静默降级。必须留日志——2026-08-15 赛车模拟器案例正是这一支无声
